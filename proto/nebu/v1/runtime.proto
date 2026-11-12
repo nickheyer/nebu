@@ -43,12 +43,13 @@ enum InstallKind {
 message Param {
   string name = 1;
   ParamType type = 2;
+  // What holds while the parameter is unset, the runtime's own value, which no launch passes
   string default = 3;
   string description = 4;
   repeated string choices = 5;
   string flag = 6;
   string env = 7;
-  // The planner chooses the value at launch when set to auto.
+  // Unset, the plan works the value out, as the runtime will pick it or as the model calls for
   bool solved = 8;
   // Display label.
   string label = 9;
@@ -62,7 +63,7 @@ message Param {
   string group = 14;
   // Hidden until the form is expanded
   bool advanced = 15;
-  // Description of the automatic value.
+  // What an unset solved parameter comes to
   string rule = 16;
   // Stored component architecture, such as vae or t5. Use model to accept any weights.
   string picks = 17;
@@ -72,6 +73,21 @@ message Param {
   bool directory = 19;
   // How a STRING parameter of comma separated files writes each one, a single value when unset
   ParamList list = 20;
+  // What makes a form offer the parameter, any one enough, always offered when empty or once set
+  repeated ParamWhen when = 21;
+  // The parameter that takes the files of this list given a scale other than one, so one control fills both
+  string scaled_in = 22;
+  // Unset, a launch passes what the plan worked out, a fact of the model the runtime cannot find
+  bool supplied = 23;
+}
+
+// A value another parameter holds
+message ParamWhen {
+  string param = 1;
+  // Any of these values, an empty one standing for unset
+  repeated string values = 2;
+  // Any value at all
+  bool set = 3;
 }
 
 // What rides with each file of a parameter listing several

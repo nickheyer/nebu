@@ -8,9 +8,9 @@ import (
 	"io"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 
+	"github.com/nickheyer/nebu/pkg/chattemplate/source"
 	"github.com/nickheyer/nebu/pkg/formats/gguf"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -27,28 +27,16 @@ var fileNames = []string{"chat_template.jinja", "chat_template.json", "tokenizer
 // The largest template file read
 const maxFile = 16 << 20
 
-// A template with where it was read from
-type Template struct {
-	Text   string
-	Source string
-	// The variant a GGUF names for requests carrying tools, empty when it names none
-	ToolUse string
-}
+// A template with where it was read from, kept in a package the renderer imports without this reader
+type Template = source.Template
 
-// Jinja string literals and comments, which never read a variable
-var literals = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\{#[\s\S]*?#\}`)
-
-// A read of the tools variable, not an attribute or a longer name
-var toolsVariable = regexp.MustCompile(`(?:^|[^\w.])tools\b`)
-
-// Whether the template renders tool definitions
-func (t *Template) Tools() bool {
-	return t.ToolUse != "" || toolsVariable.MatchString(literals.ReplaceAllString(t.Text, ""))
-}
-
-// What the gateway records for an instance of the model
+// What the gateway records for an instance of the model, its tools and how it takes reasoning settings
 func Inspect(stored *v1.StoredModel) *v1.ChatTemplate {
-	t, err := Read(stored)
+	return Describe(Read(stored))
+}
+
+// What the gateway records of a template a launch runs, or of the failure to read one
+func Describe(t *Template, err error) *v1.ChatTemplate {
 	if err != nil {
 		return &v1.ChatTemplate{Error: err.Error()}
 	}
@@ -56,7 +44,23 @@ func Inspect(stored *v1.StoredModel) *v1.ChatTemplate {
 	if t.Tools() {
 		out.Tools = v1.ToolSupport_TOOL_SUPPORT_NATIVE
 	}
+	Probe(t, out)
 	return out
+}
+
+// The template a launch's params name over the model's own, a jinja file or jinja text and nothing else
+func Override(text, file string) (*Template, error) {
+	if file != "" {
+		raw, err := readCapped(file)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path.Base(file), err)
+		}
+		return &Template{Text: string(raw), Source: file}, nil
+	}
+	if !strings.Contains(text, "{{") && !strings.Contains(text, "{%") {
+		return nil, fmt.Errorf("the launch runs %s in place of the model's template, which is no jinja text to read", text)
+	}
+	return &Template{Text: text, Source: "chat_template"}, nil
 }
 
 // Reads the template from the GGUF header or the files transformers keeps beside the weights

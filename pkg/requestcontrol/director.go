@@ -217,7 +217,7 @@ func (d *director) Decide(ctx context.Context, in *Inbound) (dec *Decision, err 
 	if err != nil {
 		return nil, err
 	}
-	pool, err := d.resolve(ctx, in, clientModel, req)
+	pool, scope, err := d.resolve(ctx, in, clientModel, req)
 	if err != nil {
 		return nil, err
 	}
@@ -230,15 +230,13 @@ func (d *director) Decide(ctx context.Context, in *Inbound) (dec *Decision, err 
 	if in.Body, err = mutate(in.Body, req.TargetModel); err != nil {
 		return nil, err
 	}
-	if err := d.awaitWake(ctx, pool.ID); err != nil {
+	if err := d.awaitWake(ctx, pool.ID, scope); err != nil {
 		return nil, err
 	}
-	if !d.anyReady(pool.ID) {
-		return nil, fmt.Errorf("%w: pool %s has no ready endpoint", ErrNoReadyEndpoints, pool.ID)
+	if !d.anyReady(pool.ID, scope) {
+		return nil, fmt.Errorf("%w: pool %s has no ready endpoint serving %s", ErrNoReadyEndpoints, pool.ID, req.TargetModel)
 	}
-	sampled := d.sampler.Deciding(ctx, d.readyIDs(pool.ID))
-	permit, result, failedOpen, err := d.dispatch(ctx, in, pool, req)
-	sampled()
+	permit, result, failedOpen, err := d.dispatch(ctx, in, pool, scope, req)
 	if err != nil {
 		return nil, err
 	}
@@ -316,49 +314,49 @@ func (d *director) buildRequest(in *Inbound) (*framework.Request, string, error)
 	return req, model, nil
 }
 
-// Sets the target model and adapter and returns the pool, the rewrite header naming the target directly
-func (d *director) resolve(ctx context.Context, in *Inbound, clientModel string, req *framework.Request) (datalayer.Pool, error) {
+// Sets the target model and adapter and returns the pool and its scope, the rewrite header naming the target
+func (d *director) resolve(ctx context.Context, in *Inbound, clientModel string, req *framework.Request) (datalayer.Pool, Scope, error) {
 	if target := strings.TrimSpace(in.Headers.Get(HeaderModelRewrite)); target != "" {
 		pool, adapter, err := d.resolver.Lookup(ctx, target)
 		if err != nil {
-			return datalayer.Pool{}, err
+			return datalayer.Pool{}, Scope{}, err
 		}
 		req.TargetModel, req.Adapter = target, adapter
-		return pool, nil
+		return pool, d.resolver.Scope("", pool.ID, target), nil
 	}
 	pool, target, err := d.resolver.Resolve(ctx, clientModel)
 	if clientModel == "" && errors.Is(err, ErrNoModel) {
 		pool, model, ok := d.resolver.Default(ctx)
 		if !ok {
-			return datalayer.Pool{}, ErrNoModel
+			return datalayer.Pool{}, Scope{}, ErrNoModel
 		}
 		req.TargetModel = model
-		return pool, nil
+		return pool, d.resolver.Scope("", pool.ID, model), nil
 	}
 	if err != nil {
-		return datalayer.Pool{}, err
+		return datalayer.Pool{}, Scope{}, err
 	}
-	req.TargetModel, req.Adapter = target, d.adapterOf(ctx, pool, target)
-	return pool, nil
+	scope := d.resolver.Scope(clientModel, pool.ID, target)
+	req.TargetModel, req.Adapter = target, scope.Adapter
+	return pool, scope, nil
 }
 
-// The adapter a target name selects inside the resolved pool, empty when the pool knows no such adapter
-func (d *director) adapterOf(ctx context.Context, pool datalayer.Pool, target string) string {
-	known, adapter, err := d.resolver.Lookup(ctx, target)
-	if err != nil || known.ID != pool.ID {
-		return ""
-	}
-	return adapter
+// The endpoints of the pool the scope takes, those failing keep left out
+func (d *director) scoped(pool datalayer.PoolID, scope Scope, keep func(datalayer.Endpoint) bool) []datalayer.Endpoint {
+	return d.store.Endpoints(pool, func(ep datalayer.Endpoint) bool { return keep(ep) && scope.serves(ep) })
 }
 
-// Whether any endpoint of the pool is ready and healthy, a pool without one refused before admission
-func (d *director) anyReady(pool datalayer.PoolID) bool {
-	return len(d.store.Endpoints(pool, datalayer.ReadyAndHealthy)) > 0
+// Every endpoint, ready or not
+func anyEndpoint(datalayer.Endpoint) bool { return true }
+
+// Whether an endpoint of the scope is ready and healthy, a request without one refused before admission
+func (d *director) anyReady(pool datalayer.PoolID, scope Scope) bool {
+	return len(d.scoped(pool, scope, datalayer.ReadyAndHealthy)) > 0
 }
 
-// The ready and healthy endpoints of the pool, the ones a pending decision keeps sampled
-func (d *director) readyIDs(pool datalayer.PoolID) []datalayer.EndpointID {
-	eps := d.store.Endpoints(pool, datalayer.ReadyAndHealthy)
+// The ready and healthy endpoints of the scope, the ones a pending decision keeps sampled
+func (d *director) readyIDs(pool datalayer.PoolID, scope Scope) []datalayer.EndpointID {
+	eps := d.scoped(pool, scope, datalayer.ReadyAndHealthy)
 	ids := make([]datalayer.EndpointID, len(eps))
 	for i, ep := range eps {
 		ids[i] = ep.ID()
@@ -369,10 +367,9 @@ func (d *director) readyIDs(pool datalayer.PoolID) []datalayer.EndpointID {
 // How often a held request looks at its pool between store changes
 const wakePoll = 100 * time.Millisecond
 
-// Holds a request whose resolve woke the pool's owner until a ready healthy endpoint joins, ending when the pool goes, the wake lapses with no endpoint, or ctx ends
-func (d *director) awaitWake(ctx context.Context, pool datalayer.PoolID) error {
-	w, ok := d.resolver.(WakeReporter)
-	if !ok || !w.Waking(pool) || d.anyReady(pool) {
+// Holds a woken request until its scope gains a ready endpoint, the pool goes, the wake lapses, or ctx ends
+func (d *director) awaitWake(ctx context.Context, pool datalayer.PoolID, scope Scope) error {
+	if !scope.waking() || d.anyReady(pool, scope) {
 		return nil
 	}
 	wctx, cancel := context.WithCancel(ctx)
@@ -382,7 +379,7 @@ func (d *director) awaitWake(ctx context.Context, pool datalayer.PoolID) error {
 	defer tick.Stop()
 	for {
 		switch {
-		case d.anyReady(pool):
+		case d.anyReady(pool, scope):
 			return nil
 		case ctx.Err() != nil:
 			return fmt.Errorf("%w: pool %s gained no ready endpoint before the request timeout: %w", ErrNoReadyEndpoints, pool, ctx.Err())
@@ -390,7 +387,7 @@ func (d *director) awaitWake(ctx context.Context, pool datalayer.PoolID) error {
 		if _, ok := d.store.Pool(pool); !ok {
 			return fmt.Errorf("%w: pool %s went away while its owner was waking", ErrNoReadyEndpoints, pool)
 		}
-		if !w.Waking(pool) && len(d.store.Endpoints(pool, nil)) == 0 {
+		if !scope.waking() && len(d.scoped(pool, scope, anyEndpoint)) == 0 {
 			return fmt.Errorf("%w: pool %s woke nothing", ErrNoReadyEndpoints, pool)
 		}
 		select {
@@ -401,26 +398,45 @@ func (d *director) awaitWake(ctx context.Context, pool datalayer.PoolID) error {
 	}
 }
 
-// Admits the request and schedules it, requeueing in flow control while every endpoint is saturated for it
-func (d *director) dispatch(ctx context.Context, in *Inbound, pool datalayer.Pool, req *framework.Request) (flowcontrol.Permit, *framework.Result, bool, error) {
+// Admits the request with scheduling as its placement, the permit granted by the pick that reserved its endpoint
+func (d *director) dispatch(ctx context.Context, in *Inbound, pool datalayer.Pool, scope Scope, req *framework.Request) (flowcontrol.Permit, *framework.Result, bool, error) {
+	var (
+		result     *framework.Result
+		failedOpen bool
+	)
+	// A sample no older than the working pace is waited for once, a queued request then following the paced ones
+	d.sampler.Deciding(ctx, d.readyIDs(pool.ID, scope))()
 	item := d.item(in, pool, req)
+	item.Place = func() error {
+		res, open, err := d.schedule(ctx, pool, scope, req)
+		switch {
+		case err == nil:
+			result, failedOpen = res, open
+			return nil
+		case !errors.Is(err, framework.ErrSaturated):
+			return err
+		case d.full(pool.ID, scope):
+			return fmt.Errorf("%w: %w", flowcontrol.ErrPoolFull, err)
+		}
+		return fmt.Errorf("%w: %w", flowcontrol.ErrNoRoom, err)
+	}
 	permit, err := d.flow.Admit(ctx, item)
 	if err != nil {
 		return nil, nil, false, admitError(err)
 	}
-	for {
-		result, failedOpen, err := d.schedule(ctx, pool, req)
-		if err == nil {
-			return permit, result, failedOpen, nil
-		}
-		if !errors.Is(err, framework.ErrSaturated) {
-			permit.Release()
-			return nil, nil, false, err
-		}
-		if permit, err = d.flow.Requeue(ctx, permit, item); err != nil {
-			return nil, nil, false, admitError(err)
+	return permit, result, failedOpen, nil
+}
+
+// Whether every ready endpoint of the scope holds as many requests as it runs at once
+func (d *director) full(pool datalayer.PoolID, scope Scope) bool {
+	eps := d.scoped(pool, scope, datalayer.ReadyAndHealthy)
+	for _, ep := range eps {
+		n, _ := datalayer.Attribute[int](ep, datalayer.CollectorAssumed)
+		if capacity, _ := datalayer.Attribute[int](ep, datalayer.CollectorCapacity); capacity <= 0 || n < capacity {
+			return false
 		}
 	}
+	return len(eps) > 0
 }
 
 func (d *director) item(in *Inbound, pool datalayer.Pool, req *framework.Request) *flowcontrol.Item {
@@ -428,12 +444,8 @@ func (d *director) item(in *Inbound, pool datalayer.Pool, req *framework.Request
 		ID:         req.ID,
 		Flow:       flowcontrol.FlowKey{FairnessID: req.FairnessID, Priority: req.Objective.Priority},
 		Pool:       pool.ID,
-		Model:      req.TargetModel,
-		Adapter:    req.Adapter,
 		Priority:   req.Objective.Priority,
 		Cost:       req.PromptTokens + req.ExpectedOutputTokens,
-		TTFT:       req.Objective.TTFT,
-		TPOT:       req.Objective.TPOT,
 		EnqueuedAt: d.clock.Now(),
 		Route:      in.Route,
 		RouteLimit: in.MaxInFlight,
@@ -448,11 +460,11 @@ func admitError(err error) error {
 	return err
 }
 
-// Schedules over the pool's endpoints inside any requested subset, applying the failure mode when a scheduler errors
-func (d *director) schedule(ctx context.Context, pool datalayer.Pool, req *framework.Request) (*framework.Result, bool, error) {
-	candidates := d.store.Endpoints(pool.ID, func(datalayer.Endpoint) bool { return true })
+// Schedules over the scope's endpoints inside any requested subset, applying the failure mode when a scheduler errors
+func (d *director) schedule(ctx context.Context, pool datalayer.Pool, scope Scope, req *framework.Request) (*framework.Result, bool, error) {
+	candidates := d.scoped(pool.ID, scope, anyEndpoint)
 	if len(candidates) == 0 {
-		return nil, false, fmt.Errorf("%w: pool %s has no endpoints", ErrNoReadyEndpoints, pool.ID)
+		return nil, false, fmt.Errorf("%w: pool %s has no endpoints serving %s", ErrNoReadyEndpoints, pool.ID, req.TargetModel)
 	}
 	if req.SubsetSet {
 		if candidates = inSubset(req, candidates); len(candidates) == 0 {

@@ -185,7 +185,9 @@ func TestSplitRoute(t *testing.T) {
 	if err := m.Publish(ctx, slot, membership("vllm"), []Published{published("i1", 1, true)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Publish(ctx, OwnerRef{Kind: OwnerInstance, ID: "next"}, membership("sglang"), []Published{published("next", 2, true)}); err != nil {
+	canary := membership("sglang")
+	canary.Slot = slot.ID
+	if err := m.Publish(ctx, OwnerRef{Kind: OwnerInstance, ID: "next"}, canary, []Published{published("next", 2, true)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.NameRoute(ctx, slot, "chat", RouteSpec{}); err != nil {
@@ -286,8 +288,8 @@ func TestResolveWakesSlotAcrossRestart(t *testing.T) {
 	if pool, _, err := m.Resolve(ctx, "solo"); err != nil || pool.ID != PoolIDOf(llama, "sglang", "") || w.count() != 2 || w.woken[1] != inst {
 		t.Fatalf("instance pool not woken %v %v %v", pool.ID, err, w.woken)
 	}
-	if !m.Waking(PoolIDOf(llama, "sglang", "")) || !m.Waking(PoolIDOf(llama, "vllm", "")) {
-		t.Fatal("woken pools not marked waking")
+	if !m.Scope("solo", PoolIDOf(llama, "sglang", ""), "solo").Waking() || !m.Scope("chat", PoolIDOf(llama, "vllm", ""), "chat").Waking() {
+		t.Fatal("woken owners not marked waking")
 	}
 	if pool, adapter, err := m.Lookup(ctx, "chat"); err != nil || pool.ID != PoolIDOf(llama, "vllm", "") || adapter != "" || w.count() != 3 {
 		t.Fatalf("lookup of an empty slot pool %v %q %v %d", pool.ID, adapter, err, w.count())
@@ -326,6 +328,124 @@ func TestResolveWakesSlotAcrossRestart(t *testing.T) {
 	routes, err := d.ListRoutes(ctx)
 	if err != nil || len(routes) != 1 || routes[0].GetName() != "chat" {
 		t.Fatalf("stored routes %v %v", routes, err)
+	}
+}
+
+// An idle slot's names wake it beside another owner's ready endpoint, and that owner's name wakes that owner alone
+func TestResolveWakesIdleOwnerBesideAnother(t *testing.T) {
+	ctx := context.Background()
+	m, _, _ := newManager(t)
+	slot := OwnerRef{Kind: OwnerSlot, ID: "s1"}
+	solo := OwnerRef{Kind: OwnerInstance, ID: "solo"}
+	if err := m.Publish(ctx, slot, membership("vllm"), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Primary", "freddie"} {
+		if _, err := m.NameRoute(ctx, slot, name, RouteSpec{ServedName: "primary"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.Publish(ctx, solo, membership("vllm"), []Published{published("solo", 8001, true)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.NameRoute(ctx, solo, "qwen", RouteSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	w := &wakeLog{}
+	m.SetWaker(w)
+	vllm := PoolIDOf(llama, "vllm", "")
+	if pool, model, err := m.Resolve(ctx, "qwen"); err != nil || pool.ID != vllm || model != "qwen" || w.count() != 0 {
+		t.Fatalf("standalone name %v %q %v woke %v", pool.ID, model, err, w.woken)
+	}
+	for i, name := range []string{"freddie", "Primary"} {
+		pool, model, err := m.Resolve(ctx, name)
+		if err != nil || pool.ID != vllm || model != "primary" || w.count() != i+1 || w.woken[i] != slot {
+			t.Fatalf("slot name %s %v %q %v woke %v, want the slot", name, pool.ID, model, err, w.woken)
+		}
+	}
+	m.Unpublish(ctx, solo)
+	if _, _, err := m.Resolve(ctx, "qwen"); err != nil || w.count() != 3 || w.woken[2] != solo {
+		t.Fatalf("idle standalone name %v woke %v, want the standalone alone", err, w.woken)
+	}
+}
+
+// A slot's scope takes its occupants' endpoints alone, its wake outlasting other owners' joins until an occupant joins or leaves
+func TestSlotScopeFollowsItsOccupant(t *testing.T) {
+	ctx := context.Background()
+	m, _, _ := newManager(t)
+	slot := OwnerRef{Kind: OwnerSlot, ID: "s1"}
+	solo := OwnerRef{Kind: OwnerInstance, ID: "solo"}
+	occupant := OwnerRef{Kind: OwnerInstance, ID: "occ"}
+	seated := membership("vllm")
+	seated.Slot = slot.ID
+	vllm := PoolIDOf(llama, "vllm", "")
+	if err := m.Publish(ctx, slot, membership("vllm"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.NameRoute(ctx, slot, "freddie", RouteSpec{ServedName: "primary"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Publish(ctx, solo, membership("vllm"), []Published{published("solo", 8001, true)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.NameRoute(ctx, solo, "qwen", RouteSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	state := func(name string) v1.RouteState {
+		r, _ := m.Route(name)
+		return r.GetStatus().GetState()
+	}
+	if state("freddie") != v1.RouteState_ROUTE_STATE_PENDING || state("qwen") != v1.RouteState_ROUTE_STATE_READY {
+		t.Fatalf("idle slot route %s beside a ready standalone route %s", state("freddie"), state("qwen"))
+	}
+	w := &wakeLog{}
+	m.SetWaker(w)
+	if _, _, err := m.Resolve(ctx, "freddie"); err != nil || w.count() != 1 {
+		t.Fatalf("slot wake %v %v", err, w.woken)
+	}
+	scope := m.Scope("freddie", vllm, "primary")
+	soloEP, _ := m.Store().Endpoint("solo/8001")
+	if !scope.Waking() || scope.Serves(soloEP) {
+		t.Fatalf("slot scope waking %v serves the standalone %v", scope.Waking(), scope.Serves(soloEP))
+	}
+	m.SetReady(ctx, "solo", false)
+	m.SetReady(ctx, "solo", true)
+	if !scope.Waking() {
+		t.Fatal("the standalone's endpoint ended the slot's wake")
+	}
+	if err := m.Publish(ctx, occupant, seated, []Published{published("occ", 8002, true)}); err != nil {
+		t.Fatal(err)
+	}
+	occEP, _ := m.Store().Endpoint("occ/8002")
+	switch {
+	case scope.Waking():
+		t.Fatal("the occupant joined and the slot still waits")
+	case !scope.Serves(occEP) || scope.Serves(soloEP):
+		t.Fatalf("slot scope serves occupant %v standalone %v", scope.Serves(occEP), scope.Serves(soloEP))
+	case m.Scope("qwen", vllm, "qwen").Serves(occEP):
+		t.Fatal("the standalone's scope took the slot's occupant")
+	case state("freddie") != v1.RouteState_ROUTE_STATE_READY:
+		t.Fatalf("slot route %s with its occupant ready", state("freddie"))
+	}
+	if err := m.SplitRoute(ctx, slot, "freddie", []WeightedTarget{{Pool: PoolIDOf(llama, "sglang", ""), Model: "next", Weight: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if moved := m.Scope("freddie", vllm, "primary"); !moved.Serves(occEP) || moved.Serves(soloEP) {
+		t.Fatalf("a request resolved before its route moved serves occupant %v standalone %v", moved.Serves(occEP), moved.Serves(soloEP))
+	}
+	if _, err := m.NameRoute(ctx, slot, "freddie", RouteSpec{ServedName: "primary"}); err != nil {
+		t.Fatal(err)
+	}
+	m.Unpublish(ctx, occupant)
+	if _, _, err := m.Resolve(ctx, "freddie"); err != nil || w.count() != 2 || !scope.Waking() {
+		t.Fatalf("second wake %v %v waking %v", err, w.woken, scope.Waking())
+	}
+	if err := m.Publish(ctx, occupant, seated, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.Unpublish(ctx, occupant)
+	if scope.Waking() {
+		t.Fatal("the occupant left without serving and the slot still waits")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/pkg/bodyparse"
+	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	"github.com/nickheyer/nebu/pkg/metrics"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -378,6 +380,10 @@ func (x *exchange) chat(ctx context.Context) {
 			x.fail(err)
 			return
 		}
+		if err := x.fitUnparsed(err); err != nil {
+			x.fail(err)
+			return
+		}
 		x.passthrough(ctx, nil)
 		return
 	}
@@ -389,17 +395,26 @@ func (x *exchange) chat(ctx context.Context) {
 			return
 		}
 	}
-	if native && !x.changed && !x.plan.active() && !x.emulate && creq.Kind != chat.Count {
-		x.passthrough(ctx, creq)
-		return
-	}
-	x.t.Translated = !same
+	tpl := x.templateReasoning()
 	if !same {
 		if x.api == v1.ApiFlavor_API_FLAVOR_ANTHROPIC && x.stripsBillingHeader() {
 			chat.StripBillingHeader(creq)
 		}
-		chat.Cross(creq, x.api)
+		if err := chat.Cross(creq, x.api, tpl); err != nil {
+			x.fail(err)
+			return
+		}
 	}
+	fitted, err := chat.FitEffort(creq, tpl)
+	if err != nil {
+		x.fail(err)
+		return
+	}
+	if native && !x.changed && !fitted && !x.plan.active() && !x.emulate && creq.Kind != chat.Count {
+		x.passthrough(ctx, creq)
+		return
+	}
+	x.t.Translated = !same
 	if traits.Strict && !same {
 		chat.DropExtras(creq)
 	}
@@ -764,6 +779,34 @@ func attained(ttft, tpot time.Duration, resp *framework.Response) bool {
 		ok = ok && resp.TPOT() > 0 && resp.TPOT() <= tpot
 	}
 	return ok
+}
+
+// How the template behind the picked endpoint takes reasoning settings, nil when the endpoint names no template
+func (x *exchange) templateReasoning() *v1.ChatTemplate {
+	if x.dec == nil || len(x.dec.Endpoints) == 0 {
+		return nil
+	}
+	return chattemplate.FromLabels(x.dec.Endpoints[0].Labels())
+}
+
+// Checks the reasoning_effort of a body passed through unparsed, refusing one the template rejects or that needs rewriting
+func (x *exchange) fitUnparsed(parseErr error) error {
+	doc := x.document()
+	if doc == nil {
+		return nil
+	}
+	raw, ok := doc.Field("reasoning_effort")
+	if !ok {
+		return nil
+	}
+	fitted, err := chat.FitEffort(&chat.Request{Kind: x.kind, Model: x.model, Extra: map[string]json.RawMessage{"reasoning_effort": raw}}, x.templateReasoning())
+	if err != nil {
+		return err
+	}
+	if fitted {
+		return bad("reasoning_effort none becomes the chat template's thinking switch, which needs a body the gateway parses, %v", parseErr)
+	}
+	return nil
 }
 
 // Whether the scheduled instance has Claude Code's billing header dropped, true before an endpoint is picked

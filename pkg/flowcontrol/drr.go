@@ -9,9 +9,12 @@ type waitState int
 
 const (
 	stateWaiting waitState = iota
+	// Out of the pool lock while its placement runs, still linked in its flow
+	statePlacing
 	stateDispatched
 	stateAbandoned
 	stateShed
+	stateUnplaced
 	stateClosed
 )
 
@@ -22,11 +25,15 @@ type waiter struct {
 	flow *flow
 	prev *waiter
 	next *waiter
-	// The latest dispatch pass the item sits out, after a soft saturation, a lost route slot or a requeue
-	heldPass uint64
-	state    waitState
-	permit   *permit
-	done     chan struct{}
+	// The round its placement alone found no room in, sat out until the round moves on
+	held uint64
+	// Whether its caller gave up while its placement ran
+	quit  bool
+	state waitState
+	// Why it was shed or left unplaced
+	err    error
+	permit *permit
+	done   chan struct{}
 }
 
 // Charges between one token and the ceiling so cheap items still take turns
@@ -55,18 +62,6 @@ func (f *flow) push(w *waiter) {
 		f.tail.next = w
 	}
 	f.tail = w
-	f.n++
-}
-
-// Inserts the waiter at the head, ahead of every item queued after its first admission
-func (f *flow) pushFront(w *waiter) {
-	w.prev, w.next = nil, f.head
-	if f.head == nil {
-		f.tail = w
-	} else {
-		f.head.prev = w
-	}
-	f.head = w
 	f.n++
 }
 
@@ -107,6 +102,16 @@ type band struct {
 	heldPass uint64
 	// Queued items per bit length of their charged cost
 	costs [26]int
+	// The turn and the credit changes of the latest pick, taken back when its waiter is not dispatched
+	turn    *flow
+	changed []credit
+}
+
+// One change a pick made to a flow, the credit it added and whether the flow held its quantum before
+type credit struct {
+	flow    *flow
+	added   int
+	granted bool
 }
 
 func newBand(priority int) *band {
@@ -123,8 +128,8 @@ func (b *band) quantum() int {
 	return 0
 }
 
-// Queues the waiter on its fairness id flow, at its head when front, opening a new flow behind the current turn
-func (b *band) add(w *waiter, id string, front bool) (*flow, bool) {
+// Queues the waiter on its fairness id flow, opening a new flow behind the current turn
+func (b *band) add(w *waiter, id string) (*flow, bool) {
 	f, created := b.flows[id], false
 	if f == nil {
 		f = &flow{id: id, band: b}
@@ -133,11 +138,7 @@ func (b *band) add(w *waiter, id string, front bool) (*flow, bool) {
 		created = true
 	}
 	w.flow = f
-	if front {
-		f.pushFront(w)
-	} else {
-		f.push(w)
-	}
+	f.push(w)
 	b.n++
 	b.costs[bits.Len(uint(w.cost))]++
 	return f, created
@@ -187,25 +188,45 @@ func (b *band) unlinkFlow(f *flow) {
 // Next waiter by deficit round robin with credit capped at two quanta, nil when every flow is held back
 func (b *band) pick(eligible func(*waiter) bool) *waiter {
 	q := b.quantum()
+	b.turn, b.changed = b.cur, b.changed[:0]
 	for idle := 0; idle < len(b.flows); {
 		f := b.cur
 		w := f.first(eligible)
 		if w == nil {
-			f.deficit, f.granted = min(f.deficit, 0), false
+			b.set(f, min(f.deficit, 0), false)
 			b.cur = f.next
 			idle++
 			continue
 		}
 		if !f.granted {
-			f.deficit = min(f.deficit, q) + q
-			f.granted = true
+			b.set(f, min(f.deficit, q)+q, true)
 		}
 		if w.cost <= f.deficit {
 			return w
 		}
-		f.granted = false
+		b.set(f, f.deficit, false)
 		b.cur = f.next
 		idle = 0
 	}
+	b.unpick()
 	return nil
+}
+
+// Changes a flow's credit and quantum mark, remembering the change for unpick
+func (b *band) set(f *flow, deficit int, granted bool) {
+	b.changed = append(b.changed, credit{f, deficit - f.deficit, f.granted})
+	f.deficit, f.granted = deficit, granted
+}
+
+// Takes back the turn and credit changes of the latest pick, for a pick whose waiter was not dispatched
+func (b *band) unpick() {
+	for i := len(b.changed) - 1; i >= 0; i-- {
+		c := b.changed[i]
+		c.flow.deficit -= c.added
+		c.flow.granted = c.granted
+	}
+	if b.turn != nil && b.flows[b.turn.id] == b.turn {
+		b.cur = b.turn
+	}
+	b.changed = b.changed[:0]
 }

@@ -45,25 +45,20 @@ message Store {
   uint64 max_bytes = 1;
 }
 
-// Queueing, shedding and saturation thresholds of the gateway's flow control
+// Queueing and shedding of the gateway's flow control
 message FlowControl {
+  reserved 4, 5;
+  reserved "saturation_queue_depth", "saturation_kv_utilization";
   // Requests a pool holds queued across its bands before a lower band is displaced or the arrival refused
   uint32 queue_capacity = 1 [(buf.validate.field).uint32.gte = 1];
   // Longest wait in a queue before the request is refused
   uint32 queue_timeout_ms = 2 [(buf.validate.field).uint32.gte = 1];
-  // Bands at or below this priority are shed instead of queued under saturation
+  // Bands at or below this priority are shed instead of queued when no endpoint has room
   int32 sheddable_below = 3 [(buf.validate.field).int32 = {
     gte: -1001
     lte: 1000
   }];
-  // Requests waiting on an endpoint at which it counts as saturated
-  uint32 saturation_queue_depth = 4 [(buf.validate.field).uint32.gte = 1];
-  // KV cache utilization from zero to one at which an endpoint counts as saturated
-  double saturation_kv_utilization = 5 [(buf.validate.field).double = {
-    gt: 0
-    lte: 1
-  }];
-  // Age past which scraped endpoint metrics no longer count
+  // Age past which a scraped metrics sample no longer counts as its runtime's answer
   uint32 metrics_staleness_ms = 6 [(buf.validate.field).uint32.gte = 1];
   // The quota of every fairness id without one of its own
   Quota quota = 7;

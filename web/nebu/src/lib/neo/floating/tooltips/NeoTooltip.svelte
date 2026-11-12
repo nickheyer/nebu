@@ -150,10 +150,11 @@
       // Size runs last so the available space it reports belongs to the placement flip settled on
       middleware.push(
         size({
+          padding: 8,
           ...sizeOptions,
           apply(args) {
-            available.width = args.availableWidth - 8;
-            available.height = args.availableHeight - 8;
+            available.width = args.availableWidth;
+            available.height = args.availableHeight;
             sizeOptions?.apply?.(args);
           },
         }),

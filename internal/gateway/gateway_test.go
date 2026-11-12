@@ -221,7 +221,8 @@ func TestStatusTable(t *testing.T) {
 	}
 	saturated := h.publish("saturated", "sat", "vllm", datalayer.AppProtocolHTTP, true, pools.RouteSpec{ServedName: "stub-model"}, good.URL)
 	for _, ep := range h.store.Endpoints(saturated, nil) {
-		h.store.SetAttribute(ep.ID(), datalayer.CollectorCapacity, 0)
+		h.store.SetAttribute(ep.ID(), datalayer.CollectorCapacity, 1)
+		h.store.SetAttribute(ep.ID(), datalayer.CollectorAssumed, 1)
 	}
 	body := func(model string) string {
 		return strings.Replace(chatBody, `"model":"chat"`, `"model":"`+model+`"`, 1)
@@ -629,5 +630,108 @@ func TestServedLabelSplit(t *testing.T) {
 	}
 	if r := h.do(http.MethodPost, "/v1/chat/completions", strings.Replace(chatBody, `"model":"chat"`, `"model":"`+key("canary").String()+`"`, 1)); r.status == http.StatusServiceUnavailable {
 		t.Fatalf("the pool's base model found no endpoint: %s", r.body)
+	}
+}
+
+// Records every owner woken and brings the slot's endpoint up a moment after its wake
+type slotWaker struct {
+	mu    sync.Mutex
+	woken []pools.OwnerRef
+	up    func(pools.OwnerRef)
+}
+
+func (w *slotWaker) Wake(_ context.Context, owner pools.OwnerRef) error {
+	w.mu.Lock()
+	w.woken = append(w.woken, owner)
+	w.mu.Unlock()
+	go w.up(owner)
+	return nil
+}
+
+func (w *slotWaker) seen() []pools.OwnerRef {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]pools.OwnerRef(nil), w.woken...)
+}
+
+// An idle slot's names wake it and reach its own endpoint beside ready standalone instances in the same pool
+func TestIdleSlotWakesBesideReadyInstances(t *testing.T) {
+	for _, twin := range []bool{false, true} {
+		t.Run(map[bool]string{false: "other served name", true: "same served name"}[twin], func(t *testing.T) {
+			h := newHarness(t, func(s *setup) { s.policy = &v1.Policy{RequestTimeoutMs: 10000} })
+			ctx := context.Background()
+			mem := pools.Membership{Model: key("qwen"), Runtime: "vllm", Protocol: datalayer.AppProtocolHTTP, Concurrency: 8, Metrics: &v1.MetricNames{HealthPath: "/health"}}
+			put := func(owner pools.OwnerRef, served, url string) {
+				addr, err := datalayer.ParseAddress(strings.TrimPrefix(url, "http://"))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := h.mgr.Publish(ctx, owner, mem, []pools.Published{{InstanceID: owner.ID, NodeID: testNode, Address: addr, Ready: true, Labels: map[string]string{instances.LabelServed: served}}}); err != nil {
+					t.Error(err)
+				}
+			}
+			_, slotSrv := h.stub("primary")
+			_, soloSrv := h.stub("qwen")
+			slot := pools.OwnerRef{Kind: pools.OwnerSlot, ID: "ad85"}
+			if err := h.mgr.Publish(ctx, slot, mem, nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"Primary", "freddie", "lexx"} {
+				if _, err := h.mgr.NameRoute(ctx, slot, name, pools.RouteSpec{ServedName: "primary"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			hosts := map[string]string{"qwen": hostOf(soloSrv)}
+			standalone := map[string]pools.OwnerRef{"qwen": {Kind: pools.OwnerInstance, ID: "59b8"}}
+			served := map[string]string{"qwen": "qwen"}
+			if twin {
+				_, twinSrv := h.stub("primary")
+				hosts["twin"], standalone["twin"], served["twin"] = hostOf(twinSrv), pools.OwnerRef{Kind: pools.OwnerInstance, ID: "7c1e"}, "primary"
+				put(standalone["twin"], "primary", twinSrv.URL)
+			}
+			put(standalone["qwen"], "qwen", soloSrv.URL)
+			for name, owner := range standalone {
+				if _, err := h.mgr.NameRoute(ctx, owner, name, pools.RouteSpec{ServedName: served[name]}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := &slotWaker{up: func(owner pools.OwnerRef) {
+				time.Sleep(200 * time.Millisecond)
+				if owner == slot {
+					put(slot, "primary", slotSrv.URL)
+				}
+			}}
+			h.mgr.SetWaker(w)
+			ask := func(model, want string) {
+				t.Helper()
+				r := h.do(http.MethodPost, "/v1/chat/completions", strings.Replace(chatBody, `"model":"chat"`, `"model":"`+model+`"`, 1))
+				if r.status != http.StatusOK || r.header.Get(requestcontrol.HeaderServed) != want {
+					t.Fatalf("%s answered %d from %q, want %s: %s", model, r.status, r.header.Get(requestcontrol.HeaderServed), want, r.body)
+				}
+			}
+			for name, host := range hosts {
+				ask(name, host)
+			}
+			if woken := w.seen(); len(woken) != 0 {
+				t.Fatalf("standalone names woke %v", woken)
+			}
+			start := time.Now()
+			ask("freddie", hostOf(slotSrv))
+			if woken := w.seen(); len(woken) != 1 || woken[0] != slot || time.Since(start) < 200*time.Millisecond {
+				t.Fatalf("woke %v after %s, want the slot alone and the request held until it served", woken, time.Since(start))
+			}
+			for range 8 {
+				for _, name := range []string{"Primary", "freddie", "lexx"} {
+					ask(name, hostOf(slotSrv))
+				}
+				for name, host := range hosts {
+					ask(name, host)
+				}
+			}
+			if woken := w.seen(); len(woken) != 1 {
+				t.Fatalf("woke %v, want the slot once", woken)
+			}
+		})
 	}
 }

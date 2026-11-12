@@ -77,8 +77,7 @@ func poolSession(t *testing.T) *mcp.ClientSession {
 		Metrics: mreg, Telemetry: tp, Health: health.NewRegistry(), Logger: log,
 		Config: gateway.Config{
 			Policy: &v1.Policy{}, OutputTokens: 64,
-			Flow:       flowcontrol.Config{QueueCapacity: 16, QueueTimeout: time.Second, SheddableBelow: -1, Tick: 10 * time.Millisecond},
-			Saturation: flowcontrol.Thresholds{QueueDepth: 8, KVUtilization: 0.9}, Staleness: time.Second,
+			Flow:  flowcontrol.Config{QueueCapacity: 16, QueueTimeout: time.Second, SheddableBelow: -1, Tick: 10 * time.Millisecond},
 			Retry: gateway.Retry{Shed: time.Second, Unavailable: time.Second}, TraceRetention: time.Hour, TraceRing: 16,
 			Version: "test", Interval: 50 * time.Millisecond,
 		},

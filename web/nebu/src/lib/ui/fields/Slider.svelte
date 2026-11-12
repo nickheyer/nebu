@@ -4,7 +4,7 @@
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
-	// A bounded number as a rail and a box, an unset value resting on the number it resolves to
+	// A bounded number as a rail and a box, an unset value leaving both empty
 	let {
 		value = $bindable(),
 		min = 0,
@@ -15,7 +15,6 @@
 		info,
 		disabled = false,
 		message,
-		fallback,
 		optional = false,
 		// The label beside a short box at the row's end and the rail under both, for a narrow column
 		inline = false,
@@ -30,24 +29,23 @@
 		info?: string;
 		disabled?: boolean;
 		message?: string;
-		fallback?: number;
 		optional?: boolean;
 		inline?: boolean;
 		onchange?: (n: number | undefined) => void;
 	} = $props();
 
 	const id = fieldId();
-	// Where the knob sits, the value or what it resolves to, held inside the rail
-	const rest = $derived(Math.min(max, Math.max(min, value ?? fallback ?? min)));
+	// Where the knob sits, the value held inside the rail, the rail's start while unset
+	const rest = $derived(Math.min(max, Math.max(min, value ?? min)));
 	const shown = $derived(value === undefined ? '' : String(value));
 	let typed = $state(untrack(() => shown));
 	let knob = $state(untrack(() => rest));
 	// Whether a pointer or a key is on the rail
 	let held = $state(false);
 	const blank = $derived(value === undefined);
-	// Characters of the longest number the box shows, a bound, the value it rests on, or the maximum at the step's decimals
+	// Characters of the longest number the box shows, a bound, the value, or the maximum at the step's decimals
 	const decimals = $derived((String(step).split('.')[1] ?? '').length);
-	const chars = $derived(Math.max(...[min, max, value, fallback].filter((n) => n !== undefined).map((n) => String(n).length), String(Math.trunc(max)).length + (decimals ? decimals + 1 : 0)));
+	const chars = $derived(Math.max(...[min, max, value].filter((n) => n !== undefined).map((n) => String(n).length), String(Math.trunc(max)).length + (decimals ? decimals + 1 : 0)));
 	const fit = $derived(`calc(${unit ? 3.25 : 2.5}rem + ${chars + (unit?.length ?? 0)}ch)`);
 	const boxWidth = $derived(`max(${inline ? 'var(--nebu-inline-box, 6.5rem)' : unit ? `calc(5.5rem + ${unit.length}ch)` : '5rem'}, ${fit})`);
 
@@ -106,7 +104,7 @@
 		<NeoRange bind:value={knob} {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
 	</div>
 	<div class="box">
-		<NeoInput type="text" inputmode="decimal" {id} bind:value={typed} {disabled} placeholder={fallback === undefined ? undefined : String(fallback)} elevation={-1} floating={false} width="100%" after={unit ? after : undefined} onchange={commit} onblur={commit} aria-label={label} />
+		<NeoInput type="text" inputmode="decimal" {id} bind:value={typed} {disabled} elevation={-1} floating={false} width="100%" after={unit ? after : undefined} onchange={commit} onblur={commit} aria-label={label} />
 	</div>
 	{#if message}<span class="secondary message">{message}</span>{/if}
 </div>

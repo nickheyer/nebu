@@ -35,7 +35,7 @@ func (a *seatAt) Scan(v any) error {
 	return nil
 }
 
-// Scans a comma separated node id list
+// Scans a comma separated list of node ids or effort levels
 type spanAt struct{ ids []string }
 
 func (a *spanAt) Scan(v any) error {
@@ -90,7 +90,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			return err
 		}
 		if tp := in.GetTemplate(); tp != nil {
-			if err := exec(`INSERT INTO instance_templates (instance_id, source, tools, error) VALUES (?, ?, ?, ?)`, id, tp.GetSource(), enumCol(tp.GetTools()), tp.GetError()); err != nil {
+			if err := exec(`INSERT INTO instance_templates (instance_id, source, tools, error, efforts, reads_effort, thinking, thinking_switch, reasoning_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, tp.GetSource(), enumCol(tp.GetTools()), tp.GetError(), strings.Join(tp.GetEfforts(), ","), boolCol(tp.GetReadsEffort()), enumCol(tp.GetThinking()), tp.GetThinkingSwitch(), tp.GetReasoningError()); err != nil {
 				return err
 			}
 		}
@@ -262,9 +263,12 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	}, id); err != nil {
 		return err
 	}
-	templates, err := list(ctx, d, `SELECT source, tools, error FROM instance_templates WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.ChatTemplate, error) {
+	templates, err := list(ctx, d, `SELECT source, tools, error, efforts, reads_effort, thinking, thinking_switch, reasoning_error FROM instance_templates WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.ChatTemplate, error) {
 		tp := &v1.ChatTemplate{}
-		return tp, rows.Scan(&tp.Source, enumAt[v1.ToolSupport]{&tp.Tools}, &tp.Error)
+		var efforts spanAt
+		err := rows.Scan(&tp.Source, enumAt[v1.ToolSupport]{&tp.Tools}, &tp.Error, &efforts, (*flag)(&tp.ReadsEffort), enumAt[v1.Thinking]{&tp.Thinking}, &tp.ThinkingSwitch, &tp.ReasoningError)
+		tp.Efforts = efforts.ids
+		return tp, err
 	}, id)
 	if err != nil {
 		return err

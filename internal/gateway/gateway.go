@@ -112,10 +112,6 @@ type Config struct {
 	OutputTokens int
 	// Queueing, timeouts and shedding of flow control
 	Flow flowcontrol.Config
-	// Scraped levels at which an endpoint counts as saturated
-	Saturation flowcontrol.Thresholds
-	// Age past which scraped metrics are ignored by saturation and objectives
-	Staleness time.Duration
 	// Waits refused clients are told to take
 	Retry Retry
 	// How long persisted traces are kept before pruning
@@ -248,8 +244,8 @@ func New(deps Deps) (*Gateway, error) {
 		return nil, errors.New("gateway needs the metrics registry, telemetry provider, health registry and logger")
 	case deps.Config.OutputTokens <= 0:
 		return nil, errors.New("gateway needs a positive default output token count")
-	case deps.Config.Staleness <= 0, deps.Config.Interval <= 0:
-		return nil, errors.New("gateway needs positive metric staleness and interval")
+	case deps.Config.Interval <= 0:
+		return nil, errors.New("gateway needs a positive interval")
 	case deps.Config.TraceRetention <= 0, deps.Config.TraceRing <= 0:
 		return nil, errors.New("gateway needs a positive trace retention and ring size")
 	case deps.Config.Retry.Shed <= 0, deps.Config.Retry.Unavailable <= 0:
@@ -299,11 +295,8 @@ func New(deps Deps) (*Gateway, error) {
 	g.Reload(deps.Config.Keys, deps.Config.Policy)
 	g.conns = newConns(deps.Dial)
 	g.traces = newRecorder(deps.DB, deps.Events, deps.Logger, clock, deps.Config.TraceRing)
-	detector, err := flowcontrol.NewMetricsDetector(deps.Store, g.predictor, deps.Config.Staleness, deps.Config.Saturation)
-	if err != nil {
-		return nil, err
-	}
-	if g.flow, err = flowcontrol.NewController(deps.Config.Flow, detector, deps.Metrics); err != nil {
+	var err error
+	if g.flow, err = flowcontrol.NewController(deps.Config.Flow, deps.Metrics); err != nil {
 		return nil, err
 	}
 	if g.exporter, err = metrics.NewExporter(deps.Metrics, deps.Store, g.flow, g.index, deps.Config.Interval); err != nil {

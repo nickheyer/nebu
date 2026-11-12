@@ -99,11 +99,11 @@ type Step struct {
 	Dir string
 }
 
-// One unified diff applied to the tree
+// One unified diff applied to the tree unless the build leaves it out
 type Patch struct {
 	ID string
-	// Patch condition. Nil applies to all builds.
-	Applies func(b *Build) bool
+	// What the patched build does differently
+	Description string
 	// The diff itself, or where to fetch it
 	Content []byte
 	URL     string

@@ -47,18 +47,20 @@ type view struct {
 	routeOrder []string
 	exact      map[string]*rule
 	catchAll   *rule
-	served     map[string][]servedBy
+	served     map[string][]scope
 	objectives map[string]*v1.Objective
 	configs    map[string]*v1.SchedulerConfig
 	configList []string
 	imported   map[datalayer.EndpointID]bool
+	// The owners each endpoint serves for, its publisher and the slot that publisher occupies
+	holders map[datalayer.EndpointID][]OwnerRef
 }
 
-// A pool record, the slot and instance owners woken when it has no endpoints, and whether a wake is under way
+// A pool record, its slot and instance owners, and the owners woken with no endpoint serving for them joined since
 type poolView struct {
 	record *v1.Pool
 	wake   []OwnerRef
-	waking bool
+	waking map[OwnerRef]bool
 }
 
 // Recounts the pool's endpoints and sets its conditions and parent entry, true when its status changed
@@ -255,12 +257,6 @@ func (m *Manager) RouteView(name string) (*v1.Route, bool) {
 	return r, ok
 }
 
-// Whether a request woke an owner of the pool and no endpoint has joined it since
-func (m *Manager) Waking(id datalayer.PoolID) bool {
-	pv, ok := m.view.Load().pools[id]
-	return ok && pv.waking
-}
-
 // Pools whose spec exports them, with the endpoints this node publishes and none imported from another member
 func (m *Manager) Exported() []*v1.Pool {
 	v := m.view.Load()
@@ -284,12 +280,13 @@ func (m *Manager) publishViewLocked() {
 		objectives: maps.Clone(m.st.objectives),
 		configs:    make(map[string]*v1.SchedulerConfig, len(m.st.configs)),
 		imported:   map[datalayer.EndpointID]bool{},
+		holders:    make(map[datalayer.EndpointID][]OwnerRef, len(m.st.endpoints)),
 	}
 	for id, ps := range m.st.pools {
 		if ps.record == nil {
 			continue
 		}
-		pv := &poolView{record: ps.record, waking: ps.waking}
+		pv := &poolView{record: ps.record, waking: maps.Clone(ps.waking)}
 		for _, o := range ps.owners {
 			if o.Kind == OwnerSlot || o.Kind == OwnerInstance {
 				pv.wake = append(pv.wake, o)
@@ -308,12 +305,27 @@ func (m *Manager) publishViewLocked() {
 		v.configs[name] = cs.record
 	}
 	v.configList = slices.Sorted(maps.Keys(v.configs))
+	holders := map[OwnerRef][]OwnerRef{}
 	for id, owner := range m.st.endpoints {
 		if owner.Kind == OwnerNode {
 			v.imported[id] = true
 		}
+		h, ok := holders[owner]
+		if !ok {
+			h = m.holdersLocked(owner)
+			holders[owner] = h
+		}
+		v.holders[id] = h
 	}
 	m.view.Store(v)
+}
+
+// The owners a publisher's endpoints serve for, the publisher and the slot its membership occupies
+func (m *Manager) holdersLocked(publisher OwnerRef) []OwnerRef {
+	if os := m.st.owners[publisher]; os != nil && os.m != nil && os.m.Slot != "" {
+		return []OwnerRef{publisher, {Kind: OwnerSlot, ID: os.m.Slot}}
+	}
+	return []OwnerRef{publisher}
 }
 
 // One rewrite rule ready for a weighted pick
@@ -327,11 +339,12 @@ type rule struct {
 	targets  []target
 }
 
-// A rule target with its static weight
+// A rule target with its static weight and the owner whose endpoints serve it, zero for a user rule's
 type target struct {
 	pool   datalayer.PoolID
 	model  string
 	weight int
+	owner  OwnerRef
 }
 
 // Whether this rule outranks another matching the same name, user over owner, then oldest route, name and rule order
@@ -357,9 +370,7 @@ func (m *Manager) compileLocked(v *view, rs *routeState) {
 	created := rs.route.GetMeta().GetCreatedAt().AsTime()
 	for i, rr := range rs.route.GetSpec().GetRules() {
 		c := &rule{route: rs.route.GetName(), user: user, created: created, order: i, balance: rs.route.GetSpec().GetBalance()}
-		for _, t := range m.liveTargetsLocked(rs, rr) {
-			c.targets = append(c.targets, target{pool: datalayer.PoolID(t.GetPoolId()), model: t.GetModel(), weight: int(t.GetWeight())})
-		}
+		c.targets = m.ruleTargetsLocked(rs, rr, true)
 		c.draining = !user && len(c.targets) == 0 && m.allDrainingLocked(rs) && (len(rs.own.GetTargets()) > 0 || len(rs.shared) > 0)
 		if rr.GetMatch() == "" {
 			if user && (v.catchAll == nil || c.before(v.catchAll)) {
@@ -373,59 +384,71 @@ func (m *Manager) compileLocked(v *view, rs *routeState) {
 	}
 }
 
-// The targets of a rule whose owner is not draining, a user's as written, an owner's own then each shared owner's
-func (m *Manager) liveTargetsLocked(rs *routeState, rr *v1.RewriteRule) []*v1.RewriteTarget {
+// A rule's targets, a user's as written, an owner's own then each shared owner's, draining owners skipped when live
+func (m *Manager) ruleTargetsLocked(rs *routeState, rr *v1.RewriteRule, live bool) []target {
 	if rs.owner == (OwnerRef{}) {
-		return rr.GetTargets()
+		return targetsOf(rr.GetTargets(), OwnerRef{})
 	}
-	var out []*v1.RewriteTarget
-	if !m.drainingLocked(rs.owner) {
-		out = append(out, rs.own.GetTargets()...)
+	var out []target
+	if !live || !m.drainingLocked(rs.owner) {
+		out = append(out, targetsOf(rs.own.GetTargets(), rs.owner)...)
 	}
 	for _, o := range slices.SortedFunc(maps.Keys(rs.shared), compareOwners) {
-		if !m.drainingLocked(o) {
-			out = append(out, rs.shared[o].target)
+		if !live || !m.drainingLocked(o) {
+			out = append(out, targetsOf([]*v1.RewriteTarget{rs.shared[o].target}, o)...)
 		}
 	}
 	return out
 }
 
-// A pool serving a name and whether the name is an adapter there
-type servedBy struct {
-	pool    datalayer.PoolID
-	adapter bool
+// Rewrite targets as rule targets the owner serves
+func targetsOf(in []*v1.RewriteTarget, owner OwnerRef) []target {
+	out := make([]target, len(in))
+	for i, t := range in {
+		out[i] = target{pool: datalayer.PoolID(t.GetPoolId()), model: t.GetModel(), weight: int(t.GetWeight()), owner: owner}
+	}
+	return out
 }
 
-// Every name a pool answers to, from its model, its endpoints' catalogs and adapter labels, and the routes naming it
-func (m *Manager) servedLocked() map[string][]servedBy {
-	names := map[string]map[datalayer.PoolID]bool{}
-	add := func(name string, pool datalayer.PoolID, adapter, weak bool) {
+// Every name a pool answers to by its model, endpoint catalogs, adapter labels and routes, with the owners serving it
+func (m *Manager) servedLocked() map[string][]scope {
+	names := map[string]map[datalayer.PoolID]*scope{}
+	// Records a name in a pool as served by one owner, or by every owner when every is set
+	add := func(name string, pool datalayer.PoolID, adapter, weak bool, owner OwnerRef, every bool) {
 		if name == "" {
 			return
 		}
 		byPool := names[name]
 		if byPool == nil {
-			byPool = map[datalayer.PoolID]bool{}
+			byPool = map[datalayer.PoolID]*scope{}
 			names[name] = byPool
 		}
-		prev, had := byPool[pool]
+		s, had := byPool[pool]
 		switch {
 		case !had:
-			byPool[pool] = adapter
+			s = &scope{pool: pool, adapter: adapter}
+			byPool[pool] = s
 		case !weak:
-			byPool[pool] = prev && adapter
+			s.adapter = s.adapter && adapter
+		}
+		switch {
+		case every:
+			s.any = true
+		case owner != (OwnerRef{}) && !slices.Contains(s.owners, owner):
+			s.owners = append(s.owners, owner)
 		}
 	}
 	for id, ps := range m.st.pools {
-		add(ps.dl.Model, id, false, false)
+		add(ps.dl.Model, id, false, false, OwnerRef{}, true)
 		for _, ep := range m.store.Endpoints(id, nil) {
-			add(ep.Labels()[datalayer.LabelAdapter], id, true, false)
+			publisher := m.st.endpoints[ep.ID()]
+			add(ep.Labels()[datalayer.LabelAdapter], id, true, false, publisher, false)
 			if c, ok := datalayer.Attribute[*datalayer.Catalog](ep, datalayer.CollectorCatalog); ok {
 				for _, name := range c.Models {
-					add(name, id, false, false)
+					add(name, id, false, false, publisher, false)
 				}
 				for _, name := range c.Adapters {
-					add(name, id, true, false)
+					add(name, id, true, false, publisher, false)
 				}
 			}
 		}
@@ -436,23 +459,27 @@ func (m *Manager) servedLocked() map[string][]servedBy {
 		}
 		owned := rs.owner != OwnerRef{}
 		for _, rr := range rs.route.GetSpec().GetRules() {
-			for _, t := range rr.GetTargets() {
-				pool := datalayer.PoolID(t.GetPoolId())
-				if m.st.pools[pool] == nil {
+			for _, t := range m.ruleTargetsLocked(rs, rr, false) {
+				if m.st.pools[t.pool] == nil {
 					continue
 				}
-				add(t.GetModel(), pool, false, true)
+				add(t.model, t.pool, false, true, t.owner, false)
 				if owned {
-					add(rr.GetMatch(), pool, false, true)
+					add(rr.GetMatch(), t.pool, false, true, t.owner, false)
 				}
 			}
 		}
 	}
-	out := make(map[string][]servedBy, len(names))
+	out := make(map[string][]scope, len(names))
 	for name, byPool := range names {
-		list := make([]servedBy, 0, len(byPool))
+		list := make([]scope, 0, len(byPool))
 		for _, pool := range slices.Sorted(maps.Keys(byPool)) {
-			list = append(list, servedBy{pool: pool, adapter: byPool[pool]})
+			s := *byPool[pool]
+			if s.any || len(s.owners) == 0 {
+				s.any, s.owners = true, nil
+			}
+			slices.SortFunc(s.owners, compareOwners)
+			list = append(list, s)
 		}
 		out[name] = list
 	}

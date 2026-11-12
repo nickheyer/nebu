@@ -100,8 +100,17 @@ func TestResolveAndFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if params.Int("n_ctx") != 4096 || params.Str("flash_attn") != "on" || !params.IsAuto("n_gpu_layers") || params.Int("n_batch") != 64 || params.Int("log_verbosity") != 3 {
-		t.Fatalf("params %v", params)
+	if params.Int("n_ctx") != 4096 || params.Str("flash_attn") != "on" || params.Int("n_batch") != 64 || len(params) != 3 {
+		t.Fatalf("a launch holds the three params set and no other: %v", params)
+	}
+	// Empty text and auto leave a param unset, so a launch holds nothing for it
+	if unset, err := Resolve(rt, map[string]string{"n_ctx": "auto", "n_gpu_layers": " AUTO ", "n_batch": "", "cpu_moe": "", "flash_attn": " "}); err != nil || len(unset) != 0 {
+		t.Fatalf("unset params: %v %v", unset, err)
+	}
+	// A plan reckons with what llama.cpp keeps for each param left unset
+	assumed, err := Assume(rt, map[string]string{"n_ctx": "4096", "n_batch": ""})
+	if err != nil || assumed.Int("n_ctx") != 4096 || !assumed.IsAuto("n_gpu_layers") || assumed.Int("n_batch") != 2048 || assumed.Int("n_ubatch") != 512 || assumed.Int("n_parallel") != -1 || assumed.Int("log_verbosity") != 3 || assumed["cache_ram"] != nil || assumed["cache_reuse"] != nil {
+		t.Fatalf("assumed params: %v %v", assumed, err)
 	}
 	for _, bad := range []map[string]string{{"nope": "1"}, {"n_ctx": "many"}, {"cpu_moe": "maybe"}} {
 		if _, err := Resolve(rt, bad); err == nil {
@@ -157,7 +166,7 @@ func TestDeviceFactsFeedRules(t *testing.T) {
 		{Id: "c1", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Facts: map[string]string{"threads": "16"}},
 		{Id: "g", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"driver_version": "580.65"}},
 	}}
-	if cpuThreads(h) != 32 || driverVersion(h, "nvidia") != "580.65" || driverVersion(h, "amd") != "" {
+	if driverVersion(h, "nvidia") != "580.65" || driverVersion(h, "amd") != "" {
 		t.Fatal("device facts")
 	}
 	release, err := MethodOf(LlamaCpp{}, "release")

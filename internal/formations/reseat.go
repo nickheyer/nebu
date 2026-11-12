@@ -231,7 +231,7 @@ func (m *Manager) seatInputs(f *v1.Formation) (*planned, error) {
 	}
 	params := f.GetRequest().GetParams()
 	var slotArgs string
-	if f.GetSlotId() != "" {
+	if f.GetSlotId() != "" && !f.GetRequest().GetExact() {
 		if m.SlotView == nil {
 			return nil, fmt.Errorf("%w: slot %s: no slots are wired to the conductor", ErrFormation, f.GetSlotId())
 		}
@@ -241,7 +241,7 @@ func (m *Manager) seatInputs(f *v1.Formation) (*planned, error) {
 		}
 		params, slotArgs = runtimes.Merge(slot.GetParams(), params), slot.GetArgs()
 	}
-	return &planned{rt: rt, name: f.GetName(), params: params, args: runtimes.JoinArgs(slotArgs, f.GetRequest().GetArgs())}, nil
+	return &planned{rt: rt, name: f.GetName(), params: params, args: runtimes.RunArgs(slotArgs, f.GetRequest().GetArgs())}, nil
 }
 
 // Relaunches one replica seat with backoff until it serves, the formation stops, or it fails too often

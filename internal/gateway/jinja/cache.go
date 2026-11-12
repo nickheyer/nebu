@@ -3,12 +3,12 @@ package jinja
 import (
 	"sync"
 
-	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/chattemplate/source"
 )
 
 // Compiled templates per instance, each compiled once and safe for concurrent use
 type Cache struct {
-	load    func(instanceID string) (*chattemplate.Template, error)
+	load    func(instanceID string) (*source.Template, error)
 	mu      sync.Mutex
 	entries map[string]*cacheEntry
 }
@@ -20,7 +20,7 @@ type cacheEntry struct {
 	err  error
 }
 
-func NewCache(load func(instanceID string) (*chattemplate.Template, error)) *Cache {
+func NewCache(load func(instanceID string) (*source.Template, error)) *Cache {
 	return &Cache{load: load, entries: map[string]*cacheEntry{}}
 }
 

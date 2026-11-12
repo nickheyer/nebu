@@ -157,11 +157,12 @@ func (m *Manager) healthChanged(id datalayer.PoolID) {
 	m.publishViewLocked()
 }
 
-// Rebuilds the served names after an endpoint's catalog changed
+// Rebuilds the served names and the route statuses judged by them after an endpoint's catalog changed
 func (m *Manager) catalogChanged() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.closed {
+		m.refreshRoutesLocked(context.Background())
 		m.publishViewLocked()
 	}
 }

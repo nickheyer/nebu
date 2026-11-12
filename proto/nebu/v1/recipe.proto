@@ -46,6 +46,12 @@ message Var {
   string label = 5;
 }
 
+// One source patch a recipe applies before its steps
+message Patch {
+  string id = 1;
+  string description = 2;
+}
+
 // Build recipe.
 message Recipe {
   string id = 1;
@@ -61,6 +67,8 @@ message Recipe {
   // Build variables and defaults.
   repeated Var vars = 9;
   uint32 timeout_ms = 10;
+  // Source patches a build applies in order unless it leaves them out
+  repeated Patch patches = 11;
 }
 
 // One build of a recipe on this host
@@ -124,6 +132,8 @@ message BuildRequest {
   string image = 6;
   bool force = 7;
   string ref = 8;
+  // Recipe patches the build leaves out, by id
+  repeated string skip_patches = 9;
 }
 
 // Returns the build record and its task

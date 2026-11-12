@@ -112,10 +112,12 @@ func (fakeRecipe) Variants() []recipes.Variant { return nil }
 func (fakeRecipe) Sandbox() recipes.Sandbox {
 	return recipes.Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST}
 }
-func (fakeRecipe) Outputs() []string        { return nil }
-func (fakeRecipe) Binary() string           { return "fakebin" }
-func (fakeRecipe) Timeout() time.Duration   { return time.Minute }
-func (fakeRecipe) Patches() []recipes.Patch { return nil }
+func (fakeRecipe) Outputs() []string      { return nil }
+func (fakeRecipe) Binary() string         { return "fakebin" }
+func (fakeRecipe) Timeout() time.Duration { return time.Minute }
+func (fakeRecipe) Patches() []recipes.Patch {
+	return []recipes.Patch{{ID: "motd", Description: "Adds a message file", Content: []byte("--- /dev/null\n+++ b/motd.txt\n@@ -0,0 +1 @@\n+hi\n")}}
+}
 
 func (fakeRecipe) Steps(b *recipes.Build) []recipes.Step {
 	script := "#!/bin/sh\necho fake version 4.5.6 " + b.Vars["greeting"] + "\n"
@@ -302,7 +304,7 @@ func TestInstallByMethod(t *testing.T) {
 	for _, f := range options[0].GetFields() {
 		names = append(names, f.GetName())
 	}
-	if want := []string{"sandbox", "image", "force", "var.greeting"}; strings.Join(names, ",") != strings.Join(want, ",") {
+	if want := []string{"sandbox", "image", "force", "var.greeting", "patch.motd"}; strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("fields %v", names)
 	}
 	if _, err := m.Install(ctx, "fake", "source", map[string]string{"nope": "1"}); err == nil {
@@ -314,7 +316,13 @@ func TestInstallByMethod(t *testing.T) {
 	if _, err := m.Install(ctx, "fake", "nope", nil); err == nil {
 		t.Fatal("unknown method should fail")
 	}
-	task, err := m.Install(ctx, "fake", "source", map[string]string{"var.greeting": "moon"})
+	if _, err := m.Install(ctx, "fake", "source", map[string]string{"patch.nope": "false"}); err == nil {
+		t.Fatal("a patch the recipe lacks should be refused")
+	}
+	if _, err := m.Install(ctx, "fake", "source", map[string]string{"patch.motd": "maybe"}); err == nil {
+		t.Fatal("a patch toggle that is no boolean should be refused")
+	}
+	task, err := m.Install(ctx, "fake", "source", map[string]string{"var.greeting": "moon", "patch.motd": "false"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,8 +342,12 @@ func TestInstallByMethod(t *testing.T) {
 		t.Fatalf("installs %v", list)
 	}
 	builds, _ := m.ListBuilds(ctx, "fake")
-	if len(builds) != 1 || builds[0].GetVars()["greeting"] != "moon" || builds[0].GetTaskId() != task.GetId() {
-		t.Fatalf("the install's build should carry its var and task: %v", builds)
+	if len(builds) != 1 || builds[0].GetVars()["greeting"] != "moon" || builds[0].GetTaskId() != task.GetId() || len(builds[0].GetPatches()) != 0 {
+		t.Fatalf("the install's build should carry its var and task and leave the patch out: %v", builds)
+	}
+	patched, _, err := m.Build(ctx, &v1.BuildRequest{RuntimeId: "fake", Vars: map[string]string{"greeting": "moon"}})
+	if err != nil || patched.GetId() == builds[0].GetId() || strings.Join(patched.GetPatches(), ",") != "motd" {
+		t.Fatalf("a build with every patch is a build of its own: %v %v", patched, err)
 	}
 }
 

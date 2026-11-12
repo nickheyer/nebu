@@ -13,7 +13,9 @@
 		head,
 		list,
 		children,
-		width = 560
+		width = 560,
+		// A record holding a table, which takes the wider share of the page
+		wide = false
 	}: {
 		open?: boolean;
 		onclose?: () => void;
@@ -21,7 +23,10 @@
 		list?: Snippet;
 		children: Snippet;
 		width?: number;
+		wide?: boolean;
 	} = $props();
+
+	const drawer = $derived(wide ? Math.max(width, 880) : width);
 
 	let pageWidth = $state(0);
 	const beside = $derived(list !== undefined && !viewport.mobile && pageWidth >= 1080);
@@ -49,7 +54,7 @@
 	{#if beside && open}
 		<div class="split">
 			<div class="list">{@render list?.()}</div>
-			<aside class="pane">
+			<aside class="pane" class:wide>
 				<div class="panel" in:hatch>{@render record()}</div>
 			</aside>
 		</div>
@@ -61,8 +66,8 @@
 					<div class="sheet mobile">{@render record()}</div>
 				</NeoDialog>
 			{:else}
-				<NeoDrawer bind:open filled placement="right" width="{width}px" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
-					<div class="sheet" style:width="{width}px">{@render record()}</div>
+				<NeoDrawer bind:open filled placement="right" width="min({drawer}px, 96vw)" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
+					<div class="sheet" style:width="min({drawer}px, 96vw)">{@render record()}</div>
 				</NeoDrawer>
 			{/if}
 		{/if}
@@ -104,6 +109,9 @@
 		flex: 0 0 clamp(480px, 50%, 900px);
 		flex-direction: column;
 		min-width: 0;
+	}
+	.pane.wide {
+		flex-basis: clamp(640px, 64%, 1200px);
 	}
 	.panel {
 		--nebu-sheet-pad: var(--nebu-space-5);

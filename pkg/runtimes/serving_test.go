@@ -224,15 +224,40 @@ func TestDeferredCounts(t *testing.T) {
 	if _, ok := running([]string{"max_running_requests=None"}); ok {
 		t.Fatal("an unset cap is no count")
 	}
-	// A slot count left to llama.cpp is not recorded, so the log fills it, and its pool is unified as llama.cpp unifies it
-	params, _ := Resolve(LlamaCpp{}, map[string]string{"n_parallel": "-1"})
-	cmd, err := LlamaCpp{}.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": filepath.Join(t.TempDir(), "w.gguf")}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}})
-	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--parallel -1") || cmd.Params["n_parallel"] != "" || cmd.Params["kv_unified"] != "on" {
-		t.Fatalf("auto slots %v %v", cmd, err)
+	// A slot count left to llama.cpp is not recorded, so the log fills it and whether the pool is unified
+	for passed, overrides := range map[bool]map[string]string{false: nil, true: {"n_parallel": "-1"}} {
+		params, _ := Resolve(LlamaCpp{}, overrides)
+		cmd, err := LlamaCpp{}.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": filepath.Join(t.TempDir(), "w.gguf")}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}})
+		if err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--parallel -1") != passed || cmd.Params["n_parallel"] != "" || cmd.Params["kv_unified"] != "" {
+			t.Fatalf("auto slots with %v: %v %v", overrides, cmd, err)
+		}
+		if (LlamaCpp{}).Capacity(cmd.Params) != 0 {
+			t.Fatalf("no slot count is assumed before llama.cpp logs its own: %v", cmd.Params)
+		}
+	}
+	unified := (LlamaCpp{}).Policy().Deferred["kv_unified"]
+	for line, want := range map[string]string{
+		"0.00.227.866 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 40960, kv_unified = 'true'":  "on",
+		"0.01.574.167 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 93696, kv_unified = 'false'": "off",
+	} {
+		if v, ok := unified([]string{"0.00.019.372 I srv    load_model: loading model '/m.gguf'", line}); !ok || v != want {
+			t.Fatalf("pool of %q read as %q %v, want %s", line, v, ok, want)
+		}
+	}
+	if v, ok := unified([]string{"0.00.019.372 I srv    load_model: loading model '/m.gguf'"}); ok {
+		t.Fatalf("no slot line states no pool, got %q", v)
+	}
+	// The layers llama.cpp offloads are read when its loader logs them, as it does from trace verbosity
+	offloaded := (LlamaCpp{}).Policy().Stated["n_gpu_layers"]
+	if v, ok := offloaded([]string{"0.01.100.000 I load_tensors: offloading output layer to GPU", "0.01.100.001 I load_tensors: offloaded 21/29 layers to GPU"}); !ok || v != "21" {
+		t.Fatalf("offloaded layers %q %v", v, ok)
+	}
+	if v, ok := offloaded([]string{"0.01.574.167 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 93696, kv_unified = 'false'"}); ok {
+		t.Fatalf("a log at info verbosity states no layer count, got %q", v)
 	}
 }
 
-// vLLM passes its sequence cap, LoRA environment and modules, sleep dev mode, and gRPC through the Rust frontend
+// vLLM passes a set sequence cap, LoRA environment and modules, sleep dev mode, and gRPC through the Rust frontend
 func TestVLLMLaunchServing(t *testing.T) {
 	rt := VLLM{}
 	launch := func(overrides map[string]string, devices []*v1.Device, facts map[string]string) (*Command, error) {
@@ -242,35 +267,29 @@ func TestVLLMLaunchServing(t *testing.T) {
 		}
 		return rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights_dir": "/w"}, Host: "127.0.0.1", Port: 8000, Install: Install{Path: "/venv/bin/vllm"}, Devices: devices, InstallRecord: recorded(facts)})
 	}
-	for _, c := range []struct {
-		device *v1.Device
-		want   string
-	}{
-		{card("g", "0", "NVIDIA H100 80GB HBM3", 80), "1024"},
-		{card("g", "0", "NVIDIA A100-SXM4-80GB", 80), "256"},
-		{card("g", "0", "NVIDIA GB10", 120), "256"},
-		{card("g", "0", "NVIDIA B200", 180), "1024"},
-		{card("g", "0", "NVIDIA RTX 4090", 24), "256"},
-	} {
-		cmd, err := launch(nil, []*v1.Device{c.device}, nil)
-		if err != nil || cmd.Params["max_num_seqs"] != c.want || !strings.Contains(strings.Join(cmd.Args, " "), "--max-num-seqs "+c.want) {
-			t.Errorf("%s: %v %v", c.device.GetName(), cmd, err)
-		}
-	}
-	if _, err := launch(nil, nil, nil); err == nil || !strings.Contains(err.Error(), "max_num_seqs is unset") {
-		t.Fatalf("no device to size the cap from: %v", err)
-	}
+	// An unset sequence cap, prefix cache and adapter count carry no flag, vLLM keeping its own
 	gpu := []*v1.Device{card("g", "0", "NVIDIA RTX 4090", 24)}
 	cmd, err := launch(nil, gpu, nil)
-	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--enable-prefix-caching") || cmd.Env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] != "" || cmd.Env["VLLM_SERVER_DEV_MODE"] != "" {
-		t.Fatalf("defaults %v %v", cmd, err)
+	if err != nil || cmd.Env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] != "" || cmd.Env["VLLM_SERVER_DEV_MODE"] != "" {
+		t.Fatalf("nothing set %v %v", cmd, err)
+	}
+	for _, unset := range []string{"--max-num-seqs", "--enable-prefix-caching", "--max-loras", "--kv-cache-dtype", "--tensor-parallel-size", "--max-model-len"} {
+		if strings.Contains(strings.Join(cmd.Args, " "), unset) {
+			t.Fatalf("%s was not set and is passed: %v", unset, cmd.Args)
+		}
+	}
+	if _, recorded := cmd.Params["max_num_seqs"]; recorded || rt.Capacity(cmd.Params) != 0 {
+		t.Fatalf("no sequence cap is recorded for one vLLM picks: %v", cmd.Params)
+	}
+	if cmd, err = launch(map[string]string{"max_num_seqs": "64"}, gpu, nil); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--max-num-seqs 64") || rt.Capacity(cmd.Params) != 64 {
+		t.Fatalf("a set sequence cap is passed and is the route's capacity: %v %v", cmd, err)
 	}
 	cmd, err = launch(map[string]string{"lora_modules": "sql=/a/sql, chat=/a/chat"}, gpu, nil)
 	line := ""
 	if err == nil {
 		line = strings.Join(cmd.Args, " ")
 	}
-	if err != nil || !strings.Contains(line, "--enable-lora") || !strings.Contains(line, "--max-loras 4") || !strings.Contains(line, "--lora-modules sql=/a/sql chat=/a/chat --kv-events-config") || cmd.Env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] != "True" {
+	if err != nil || !strings.Contains(line, "--enable-lora") || strings.Contains(line, "--max-loras") || !strings.Contains(line, "--lora-modules sql=/a/sql chat=/a/chat --kv-events-config") || cmd.Env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] != "True" {
 		t.Fatalf("adapters at launch %s %v %v", line, cmd, err)
 	}
 	if cmd, err = launch(map[string]string{"lora_modules": "sql=/a/sql", "max_loras": "2"}, gpu, nil); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--max-loras 2") {
@@ -347,7 +366,7 @@ func TestSGLangLaunchServing(t *testing.T) {
 
 // NeMo starts its own Ray cluster with the deploy script's settings and its metrics export pinned after the served port
 func TestNeMoRayBootstrap(t *testing.T) {
-	params, err := Resolve(NeMo{}, map[string]string{"num_cpus": "16", "include_dashboard": "true", "runtime_env": `{"env_vars":{"A":"1"}}`})
+	params, err := Resolve(NeMo{}, map[string]string{"num_gpus": "2", "num_cpus": "16", "include_dashboard": "true", "runtime_env": `{"env_vars":{"A":"1"}}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,13 +377,18 @@ func TestNeMoRayBootstrap(t *testing.T) {
 	if cmd.Command != "/opt/venv/bin/python" || cmd.Args[0] != "-c" || cmd.Args[1] != nemoBootstrap || cmd.Args[3] != "/opt/deploy_ray_inframework.py" || cmd.Params["metrics_port"] != "9001" {
 		t.Fatalf("bootstrap %v", cmd.Args)
 	}
-	for _, want := range []string{`"address":"local"`, `"_metrics_export_port":9001`, `"num_gpus":1`, `"num_cpus":16`, `"include_dashboard":true`, `"runtime_env":{"env_vars":{"A":"1"}}`} {
+	for _, want := range []string{`"address":"local"`, `"_metrics_export_port":9001`, `"num_gpus":2`, `"num_cpus":16`, `"include_dashboard":true`, `"runtime_env":{"env_vars":{"A":"1"}}`} {
 		if !strings.Contains(cmd.Args[2], want) {
 			t.Errorf("ray init %s lacks %s", cmd.Args[2], want)
 		}
 	}
 	if !strings.Contains(strings.Join(cmd.Args[3:], " "), "--megatron_checkpoint /w --host 127.0.0.1 --port 9000") {
 		t.Fatalf("script args %v", cmd.Args[3:])
+	}
+	// Ray counts the devices and cores itself when the launch names neither
+	bare, _ := Resolve(NeMo{}, nil)
+	if cmd, err = (NeMo{}).Launch(Launch{Name: "m", Params: bare, Artifacts: map[string]string{"weights_dir": "/w"}, Host: "127.0.0.1", Port: 9000, Install: Install{Path: "/x", Dir: "/opt"}}); err != nil || strings.Contains(cmd.Args[2], "num_gpus") || strings.Contains(cmd.Args[2], "num_cpus") {
+		t.Fatalf("unset device and core counts: %v %v", cmd, err)
 	}
 	params["runtime_env"] = "{"
 	if _, err := (NeMo{}).Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights_dir": "/w"}, Host: "127.0.0.1", Port: 9000, Install: Install{Path: "/x", Dir: "/opt"}}); err == nil || !strings.Contains(err.Error(), "runtime_env") {
@@ -480,38 +504,31 @@ func TestInventory(t *testing.T) {
 	}
 }
 
-// Every LoRA file beside the model loads unapplied, an explicit adapter list replaces the scan
-func TestLlamaCppAdaptersBesideTheModel(t *testing.T) {
+// A LoRA file beside the model stays unloaded until the launch lists it, listed ones loading as the params say
+func TestLlamaCppLoadsOnlyListedAdapters(t *testing.T) {
 	dir := t.TempDir()
 	weights := filepath.Join(dir, "model.gguf")
 	writeGGUF(t, weights, map[string]string{"general.type": "model"}, nil)
-	writeGGUF(t, filepath.Join(dir, "sql.gguf"), map[string]string{"general.type": "adapter", "adapter.type": "lora"}, nil)
-	writeGGUF(t, filepath.Join(dir, "cv.gguf"), map[string]string{"general.type": "adapter", "adapter.type": "control_vector"}, nil)
-	writeGGUF(t, filepath.Join(dir, "mmproj.gguf"), map[string]string{"general.type": "mmproj"}, nil)
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o644)
+	sql := filepath.Join(dir, "sql.gguf")
+	writeGGUF(t, sql, map[string]string{"general.type": "adapter", "adapter.type": "lora"}, nil)
 	rt := LlamaCpp{}
 	params, _ := Resolve(rt, nil)
 	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": weights}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}}
 	cmd, err := rt.Launch(in)
-	sql := filepath.Join(dir, "sql.gguf")
-	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--lora "+sql+" ") || !strings.Contains(strings.Join(cmd.Args, " "), "--lora-init-without-apply") || cmd.Params["lora"] != sql {
-		t.Fatalf("adapters beside %v %v", cmd, err)
+	if err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--lora") || cmd.Params["lora"] != "" {
+		t.Fatalf("an adapter beside the model was not listed and is loaded: %v %v", cmd, err)
+	}
+	if rt.Adapters("http://x", cmd.Params) != nil {
+		t.Fatal("no adapters, nothing to switch")
+	}
+	in.Params, _ = Resolve(rt, map[string]string{"lora": sql, "lora_scaled": "/other.gguf:0.5", "lora_init_without_apply": "true"})
+	cmd, err = rt.Launch(in)
+	line := strings.Join(cmd.Args, " ") + " "
+	if err != nil || !strings.Contains(line, "--lora "+sql+" ") || !strings.Contains(line, "--lora-scaled /other.gguf:0.5 ") || !strings.Contains(line, "--lora-init-without-apply ") || cmd.Params["lora"] != sql {
+		t.Fatalf("listed adapters %v %v", cmd, err)
 	}
 	if rt.Adapters("http://x", cmd.Params) == nil {
 		t.Fatal("a launch with adapters switches them")
-	}
-	params, _ = Resolve(rt, map[string]string{"lora": "/other.gguf"})
-	in.Params = params
-	if cmd, err = rt.Launch(in); err != nil || strings.Contains(strings.Join(cmd.Args, " "), sql) || strings.Contains(strings.Join(cmd.Args, " "), "--lora-init-without-apply") {
-		t.Fatalf("listed adapters replace the scan %v %v", cmd, err)
-	}
-	os.WriteFile(filepath.Join(dir, "broken.gguf"), []byte("nope"), 0o644)
-	in.Params, _ = Resolve(rt, nil)
-	if _, err = rt.Launch(in); err == nil || !strings.Contains(err.Error(), "broken.gguf") {
-		t.Fatalf("an unreadable candidate: %v", err)
-	}
-	if rt.Adapters("http://x", map[string]string{}) != nil {
-		t.Fatal("no adapters, nothing to switch")
 	}
 }
 
@@ -569,5 +586,30 @@ func TestDevicesWithoutMemoryAreNeverPinned(t *testing.T) {
 	got, err := acceleratorOf(Launch{Plan: none, Profile: profile})
 	if err != nil || got != "1x NVIDIA RTX 4090 + 2x NVIDIA H100 80GB HBM3" {
 		t.Fatalf("accelerator over every device with memory: %q %v", got, err)
+	}
+}
+
+// A launch's template params name what runs in the model's template's place, nothing when they are unset
+func TestTemplateOverrides(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "t.jinja")
+	if err := os.WriteFile(file, []byte("{{ messages }}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		rt         TemplateOverrider
+		params     map[string]string
+		text, file string
+	}{
+		{LlamaCpp{}, nil, "", ""},
+		{LlamaCpp{}, map[string]string{"chat_template": "chatml"}, "chatml", ""},
+		{LlamaCpp{}, map[string]string{"chat_template": "{{ messages }}", "chat_template_file": file}, "", file},
+		{LlamaCpp{}, map[string]string{"jinja": "off", "chat_template_file": file}, "llama.cpp's renderer without jinja", ""},
+		{SGLang{}, nil, "", ""},
+		{SGLang{}, map[string]string{"chat_template": file}, "", file},
+		{SGLang{}, map[string]string{"chat_template": "llama-3-instruct"}, "llama-3-instruct", ""},
+	} {
+		if text, named := c.rt.TemplateOverride(c.params); text != c.text || named != c.file {
+			t.Errorf("%T %v: text %q file %q, want %q %q", c.rt, c.params, text, named, c.text, c.file)
+		}
 	}
 }

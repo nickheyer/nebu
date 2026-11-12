@@ -167,11 +167,13 @@
   };
 
   const onFocus: FocusEventHandler<HTMLTextAreaElement> = (e) => {
+    focused = true;
     touched = true;
     onfocus?.(e);
   };
 
   const onBlur: FocusEventHandler<HTMLTextAreaElement> = (e) => {
+    focused = false;
     validate({ dirty: dirtyOnBlur, valid: validateOnBlur });
     onblur?.(e);
   };
@@ -423,7 +425,6 @@
     aria-describedby={visible ? messageId : undefined}
     bind:this={ref}
     bind:value
-    bind:focused
     class:neo-textarea={true}
     class:neo-scroll={scrollbar}
     class:neo-affix={affix || after}

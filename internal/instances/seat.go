@@ -67,6 +67,7 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest, self stri
 	if err := seatPlanned(profile, seat); err != nil {
 		return nil, err
 	}
+	profile = m.unreserved(profile, self)
 	p := &prepared{req: req, rt: rt, install: install, name: name, profile: profile, planned: profile, seat: seat, role: role}
 	if role.Files == runtimes.FilesNone {
 		if p.params, err = runtimes.Resolve(rt, req.GetParams()); err != nil {
@@ -94,9 +95,18 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest, self stri
 	}
 	if seat.GetMemory() != nil {
 		p.plan = seat.GetMemory()
-		for k, v := range p.plan.GetParams() {
-			if p.params.IsAuto(k) {
-				p.params[k] = v
+		// A seat that loads the model serves it, so its plan takes the host memory serving fills
+		if role.Files != runtimes.FilesNone && rt.Policy() != nil {
+			p.plan = proto.Clone(seat.GetMemory()).(*v1.MemoryPlan)
+			rt.Policy().Reserve(p.plan, p.params, profile, true)
+		}
+		// A formation is the conductor's plan, so a seat runs the plan's placement for each param its request leaves unset
+		for _, param := range rt.Params() {
+			name := param.GetName()
+			if v := p.plan.GetParams()[name]; param.GetSolved() && v != "" && v != estimate.Auto && p.params[name] == nil {
+				if p.params[name], err = runtimes.Value(param, v); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

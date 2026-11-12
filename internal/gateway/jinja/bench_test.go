@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/chattemplate/source"
 	"github.com/nickheyer/nebu/pkg/transcode/vllm"
 )
 
@@ -18,7 +18,7 @@ func BenchmarkRender(b *testing.B) {
 	messages := fx.Conversations["multi_tool_calls"]
 	for _, name := range benchTemplates {
 		b.Run(name, func(b *testing.B) {
-			tmpl, err := Compile(&chattemplate.Template{Text: string(readTestdata(b, "templates", name)), Source: name})
+			tmpl, err := Compile(&source.Template{Text: string(readTestdata(b, "templates", name)), Source: name})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -56,7 +56,7 @@ func BenchmarkParse(b *testing.B) {
 
 // Renders Qwen2.5's template over a 20 message conversation with tools through the public API
 func BenchmarkQwen25Render20(b *testing.B) {
-	tmpl, err := Compile(&chattemplate.Template{Text: string(readTestdata(b, "templates", "qwen25.jinja")), Source: "qwen25.jinja"})
+	tmpl, err := Compile(&source.Template{Text: string(readTestdata(b, "templates", "qwen25.jinja")), Source: "qwen25.jinja"})
 	if err != nil {
 		b.Fatal(err)
 	}

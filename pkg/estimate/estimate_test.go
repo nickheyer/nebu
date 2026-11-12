@@ -28,7 +28,7 @@ func policy(t *testing.T, id string) (*estimate.Policy, estimate.Params) {
 		if rt.ID() != id {
 			continue
 		}
-		params, err := runtimes.Resolve(rt, nil)
+		params, err := runtimes.Assume(rt, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,11 +38,14 @@ func policy(t *testing.T, id string) (*estimate.Policy, estimate.Params) {
 	return nil, nil
 }
 
-// Runtime defaults with fixed context and unquantized cache for exact byte counts.
+// Runtime defaults with fixed context, unquantized cache and no prompt cache for exact byte counts.
 func defaults(params estimate.Params, overrides map[string]any) estimate.Params {
 	out := params.Clone()
 	if out.IsAuto("n_ctx") {
 		out["n_ctx"] = int64(8192)
+	}
+	if v, known := out["cache_ram"]; known && v == nil {
+		out["cache_ram"] = int64(0)
 	}
 	for _, k := range []string{"cache_type_k", "cache_type_v"} {
 		if _, ok := out[k]; ok {
@@ -305,7 +308,7 @@ func TestAutoContextKeepsTheMinimumContextLayers(t *testing.T) {
 	}
 }
 
-func TestParamStatesAndRefusal(t *testing.T) {
+func TestPlanWarningAndSetContext(t *testing.T) {
 	p, params := policy(t, "llamacpp")
 	d := descriptor(4, 100*mib, 0)
 	d.Params["n_ctx_train"] = 8192
@@ -314,16 +317,8 @@ func TestParamStatesAndRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	states, refusal := p.ParamStates(in, plan)
-	if refusal != "" {
-		t.Fatalf("nothing to refuse: %s", refusal)
-	}
-	byName := map[string]*v1.ParamState{}
-	for _, s := range states {
-		byName[s.GetName()] = s
-	}
-	if byName["n_ctx"].GetMax() != 8192 || byName["n_gpu_layers"].GetMax() != 4 || byName["n_ubatch"].GetMax() != 2048 {
-		t.Fatalf("bounds %v", states)
+	if warning := p.PlanWarning(in, plan); warning != "" {
+		t.Fatalf("nothing to warn of: %s", warning)
 	}
 	// Parallel sequences each hold the trained length, so a set context may reach their sum
 	four := input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"n_parallel": int64(4), "n_ctx": int64(32768)}))
@@ -331,22 +326,14 @@ func TestParamStatesAndRefusal(t *testing.T) {
 	if err != nil || plan.GetParams()["n_ctx"] != "32768" {
 		t.Fatalf("the set context is planned as set: %v %v", plan.GetParams(), err)
 	}
-	if states, _ := p.ParamStates(four, plan); states[0].GetName() != "n_ctx" || states[0].GetMax() != 32768 {
-		t.Fatalf("four sequences bound the context at four trained lengths: %v", states)
-	}
 	// A quantized value cache without flash attention plans, llama.cpp judging the pair
 	in.Params = defaults(params, map[string]any{"flash_attn": "off", "cache_type_v": "q8_0"})
 	plan, err = p.Plan(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, warning := p.ParamStates(in, plan); warning != "" {
+	if warning := p.PlanWarning(in, plan); warning != "" {
 		t.Fatalf("nothing to warn of: %q", warning)
-	}
-	for _, s := range states {
-		if s.GetName() == "cache_type_v" {
-			t.Fatal("the value cache type has no state of its own")
-		}
 	}
 	// Empty cache types stay empty and size the cache as llama.cpp's f16 does
 	sized := func(k, v string) (uint64, map[string]string) {
@@ -705,12 +692,12 @@ func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
 	if plan, err = p.Plan(in); err != nil || plan.GetCacheBytes() != 4*perLayer {
 		t.Fatalf("an assistant shares the target's cache: %d %v", plan.GetCacheBytes(), err)
 	}
-	// An unset method is draft-mtp for a head file and llama.cpp's own pick otherwise, a set one stays as set
-	if plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil))); err != nil || plan.GetParams()["spec_type"] != estimate.Auto {
+	// An unset method is planned as draft-mtp for a head file, as llama.cpp reads it, and stays unset otherwise
+	if plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil))); err != nil || plan.GetParams()["spec_type"] != "" {
 		t.Fatalf("no draft model leaves the method to llama.cpp: %v %v", plan.GetParams()["spec_type"], err)
 	}
 	in.Params = defaults(params, map[string]any{"draft_model": "/drafts/small.gguf"})
-	for arch, want := range map[string]string{"llama": estimate.Auto, "gemma4-assistant": "draft-mtp", "dflash": estimate.Auto} {
+	for arch, want := range map[string]string{"llama": "", "gemma4-assistant": "draft-mtp", "dflash": ""} {
 		draft.Architecture = arch
 		if plan, err = p.Plan(in); err != nil || plan.GetParams()["spec_type"] != want {
 			t.Fatalf("%s draft: %v %v", arch, plan.GetParams()["spec_type"], err)
@@ -924,5 +911,116 @@ func TestDataParallelRanksTakeTheirOwnDevices(t *testing.T) {
 	two, err := p.Plan(input(descriptor(8, gib, 0), small, defaults(params, map[string]any{"n_ctx": int64(4096), "data_parallel_size": int64(2)})))
 	if err != nil || one.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || two.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || two.GetCacheBytes() != 2*one.GetCacheBytes() || two.GetOverheadBytes() != 2*one.GetOverheadBytes() {
 		t.Fatalf("two ranks count every rank's cache and overhead: one %v two %v %v", one, two, err)
+	}
+}
+
+// An unset prompt cache reserves llama.cpp's own limit where the host has it, a sized one counts whole
+func TestLlamaPromptCacheReservesHostMemory(t *testing.T) {
+	p, params := policy(t, "llamacpp")
+	d := descriptor(28, 100*mib, 0)
+	bare, err := p.Plan(input(d, host(12*gib, 64*gib), defaults(params, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := func(hostMem uint64) uint64 { return uint64(float64(hostMem)*0.95) - 300*mib }
+	cases := []struct {
+		name    string
+		cache   any
+		hostMem uint64
+		reserve uint64
+		solved  string
+		verdict v1.FitVerdict
+	}{
+		{"unset on a roomy host", nil, 64 * gib, 8192 * mib, "", v1.FitVerdict_FIT_VERDICT_FITS},
+		{"unset cut to what the host has left", nil, 4 * gib, room(4 * gib), "", v1.FitVerdict_FIT_VERDICT_FITS},
+		{"sized", int64(2048), 64 * gib, 2048 * mib, "2048", v1.FitVerdict_FIT_VERDICT_FITS},
+		{"sized past the host", int64(100 * 1024), 64 * gib, 100 * gib, "102400", v1.FitVerdict_FIT_VERDICT_NO},
+		{"as many tokens as the context", int64(-1), 64 * gib, bare.GetCacheBytes(), "-1", v1.FitVerdict_FIT_VERDICT_FITS},
+		{"off", int64(0), 64 * gib, 0, "0", v1.FitVerdict_FIT_VERDICT_FITS},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := p.Plan(input(d, host(12*gib, tc.hostMem), defaults(params, map[string]any{"cache_ram": tc.cache})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.GetVerdict() != tc.verdict || plan.GetReserveBytes() != tc.reserve || plan.GetParams()["cache_ram"] != tc.solved {
+				t.Fatalf("verdict %s reserve %d cache_ram %q, want %s %d %q: %s", plan.GetVerdict(), plan.GetReserveBytes(), plan.GetParams()["cache_ram"], tc.verdict, tc.reserve, tc.solved, plan.GetDetail())
+			}
+			var hosted uint64
+			for _, pu := range plan.GetPools() {
+				if pu.GetKind() == v1.PoolKind_POOL_KIND_HOST {
+					hosted += pu.GetUsedBytes()
+				}
+			}
+			if hosted != 300*mib+tc.reserve {
+				t.Fatalf("host pools hold %d, want the embedding's %d and the reserve's %d", hosted, 300*mib, tc.reserve)
+			}
+		})
+	}
+	t.Run("a seat's share reserves nothing until its launch", func(t *testing.T) {
+		in := input(d, host(12*gib, 64*gib), defaults(params, map[string]any{"cache_ram": nil}))
+		in.Part = true
+		plan, err := p.Plan(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.GetReserveBytes() != 0 || plan.GetParams()["cache_ram"] != "" {
+			t.Fatalf("part plan reserve %d cache_ram %q", plan.GetReserveBytes(), plan.GetParams()["cache_ram"])
+		}
+		p.Reserve(plan, in.Params, in.Host, false)
+		if plan.GetReserveBytes() != 8192*mib || plan.GetParams()["cache_ram"] != "" {
+			t.Fatalf("after the seat's reserve %d cache_ram %q", plan.GetReserveBytes(), plan.GetParams()["cache_ram"])
+		}
+	})
+}
+
+// An unset context is planned as the runtime will pick it, cut to fit or the trained length
+func TestUnsetContextIsTheRuntimesOwnPick(t *testing.T) {
+	trained := func() *v1.Descriptor {
+		d := descriptor(4, 100*mib, 0)
+		d.Params["n_ctx_train"] = 131072
+		return d
+	}
+	tight := host(2*gib, 64*gib)
+	llama, llamaParams := policy(t, "llamacpp")
+	fitted, err := llama.Plan(input(trained(), tight, llamaParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx, _ := strconv.Atoi(fitted.GetParams()["n_ctx"]); ctx < 4096 || ctx >= 131072 || fitted.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
+		t.Fatalf("llama.cpp cuts an unset context to what fits, planned %d %s", ctx, fitted.GetVerdict())
+	}
+	off := llamaParams.Clone()
+	off["fit"] = "off"
+	whole, err := llama.Plan(input(trained(), tight, off))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if whole.GetParams()["n_ctx"] != "131072" || whole.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || !strings.Contains(whole.GetDetail(), "device") {
+		t.Fatalf("with its fit off llama.cpp runs the trained length with every layer on the device, which this one cannot hold: %s %s %s", whole.GetParams()["n_ctx"], whole.GetVerdict(), whole.GetDetail())
+	}
+	roomy, err := llama.Plan(input(trained(), host(48*gib, 64*gib), off))
+	if err != nil || roomy.GetParams()["n_gpu_layers"] != "5" || roomy.GetParams()["n_cpu_moe"] != "0" || roomy.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("with its fit off and room for it every layer is on the device: %v %v", roomy.GetParams(), err)
+	}
+	for _, id := range []string{"vllm", "sglang"} {
+		p, params := policy(t, id)
+		plan, err := p.Plan(input(trained(), tight, params))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.GetParams()["n_ctx"] != "131072" || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO {
+			t.Fatalf("%s cuts no context, so an unset one is the trained length: %v %s", id, plan.GetParams()["n_ctx"], plan.GetVerdict())
+		}
+		// What the host can reach is another question, the largest context that fits whatever the runtime would pick
+		reach := input(trained(), host(4*gib, 64*gib), params)
+		reach.Reach = true
+		if plan, err = p.Plan(reach); err != nil {
+			t.Fatal(err)
+		}
+		if ctx, _ := strconv.Atoi(plan.GetParams()["n_ctx"]); ctx < 256 || ctx >= 131072 || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+			t.Fatalf("%s reaches the largest context that fits: %d %s %s", id, ctx, plan.GetVerdict(), plan.GetDetail())
+		}
 	}
 }

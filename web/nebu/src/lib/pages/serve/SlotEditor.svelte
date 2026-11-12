@@ -26,6 +26,7 @@
 	import { slotLamp, slotShape } from '#lib/ui/status.js';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
+	import RuntimeFields from '#lib/pages/serve/RuntimeFields.svelte';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 
@@ -36,6 +37,8 @@
 	let name = $state(draft?.name ?? '');
 	let description = $state(draft?.description ?? '');
 	let runtimeId = $state(draft?.runtimeId ?? '');
+	// The install the slot launches, the runtime's newest when empty
+	let installId = $state(draft?.installId ?? '');
 	let params = $state<Record<string, string>>({ ...(draft?.params ?? {}) });
 	let policy = $state(draft?.policy ? clone(PolicySchema, draft.policy) : create(PolicySchema));
 	let profile = $state(draft?.profile ? clone(ProfileSchema, draft.profile) : create(ProfileSchema));
@@ -47,10 +50,10 @@
 	let saving = $state(false);
 	let error = $state<string | undefined>(undefined);
 	let deleteOpen = $state(false);
-	let runtimes = $state<RuntimeStatus[]>([]);
+	let runtimes = $state<RuntimeStatus[] | undefined>(undefined);
 
 	function snapshot(): string {
-		return JSON.stringify([name, description, runtimeId, params, toJsonString(PolicySchema, policy), toJsonString(ProfileSchema, profile), aliases.map((a) => toJsonString(SlotAliasSchema, a)), args]);
+		return JSON.stringify([name, description, runtimeId, installId, params, toJsonString(PolicySchema, policy), toJsonString(ProfileSchema, profile), aliases.map((a) => toJsonString(SlotAliasSchema, a)), args]);
 	}
 	const initial = untrack(snapshot);
 	const dirty = $derived(snapshot() !== initial || (limits !== undefined && JSON.stringify(limits) !== limitsAtOpen));
@@ -59,6 +62,7 @@
 		try {
 			runtimes = (await rpc.runtimes.listRuntimes({})).runtimes;
 		} catch (err) {
+			runtimes = [];
 			toast.error('Runtimes failed to list', reason(err));
 		}
 	});
@@ -122,13 +126,16 @@
 	}
 
 	const closed = $derived(limits !== undefined && Object.values(limits).every((n) => n <= 0));
-	const installed = $derived(new Set([...live.installs.values()].map((i) => i.runtimeId)));
-	const runtimeOptions = $derived(
-		runtimes
-			.filter((r) => r.runtime && (installed.has(r.runtime.id) || r.runtime.id === runtimeId))
-			.map((r) => ({ value: r.runtime!.id, label: r.runtime!.name || r.runtime!.id, tip: r.runtime!.description || undefined }))
-	);
-	const runtimeParams = $derived(runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime?.params ?? []);
+	const runtimeParams = $derived(runtimes?.find((r) => r.runtime?.id === runtimeId)?.runtime?.params ?? []);
+
+	// Parameters of another runtime leave with it, so the slot never launches one runtime with another's
+	let paramsOf = untrack(() => runtimeId);
+	$effect(() => {
+		const known = new Set(runtimeParams.map((p) => p.name));
+		if (runtimeId === paramsOf || !runtimes?.length) return;
+		paramsOf = runtimeId;
+		untrack(() => (params = Object.fromEntries(Object.entries(params).filter(([k]) => known.has(k)))));
+	});
 	const occupied = $derived(slot !== undefined && slot.instanceId !== '');
 	const others = $derived(
 		[...live.slots.values()]
@@ -146,7 +153,7 @@
 		error = undefined;
 		try {
 			const held = { placement: draft?.placement ?? Placement.UNSPECIFIED, deviceIds: draft?.deviceIds ?? [], poolBytes: draft?.poolBytes ?? {}, memoryBytes: draft?.memoryBytes ?? 0n };
-			const common = { description, runtimeId, params, policy, profile, aliases, args, position: draft?.position ?? 0, ...(live.host && limits ? resources(live.host, limits) : held) };
+			const common = { description, runtimeId, installId, params, policy, profile, aliases, args, position: draft?.position ?? 0, ...(live.host && limits ? resources(live.host, limits) : held) };
 			if (editing && slot) await rpc.slots.updateSlot({ id: slot.id, name: name === slot.name ? '' : name, ...common });
 			else await rpc.slots.createSlot({ name, ...common });
 			toast.success(editing ? `Saved ${name}` : `Created ${name}`);
@@ -189,6 +196,13 @@
 			<Text bind:value={description} label="Description" max={140} />
 		</FieldRow>
 	</FormSection>
+	<FormSection title="Launch settings" info="What a model launched in the slot runs with. A launch or swap into the slot replaces them with its own.">
+		<RuntimeFields {runtimes} bind:runtimeId bind:installId optional />
+		<Text bind:value={args} label="Extra arguments" max={512} mono />
+	</FormSection>
+	{#if runtimeParams.length}
+		<ParamsForm params={runtimeParams} bind:values={params} />
+	{/if}
 	{#if limits}
 		<FormSection title="Memory">
 			<PoolMemory bind:value={limits} profile={live.host} />
@@ -221,15 +235,6 @@
 			</NeoButton>
 		</Row>
 	</FormSection>
-	<FormSection title="Launch">
-		<FieldRow>
-			<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" clearable />
-			<Text bind:value={args} label="Extra arguments" max={512} mono />
-		</FieldRow>
-	</FormSection>
-	{#if runtimeParams.length}
-		<ParamsForm params={runtimeParams} bind:values={params} />
-	{/if}
 </Stack>
 <SaveBar always={!editing} {dirty} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name.trim() || closed} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
 {#if slot && occupied}

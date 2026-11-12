@@ -11,14 +11,13 @@
 		value = $bindable(''),
 		label,
 		info,
-		placeholder,
 		filter = 'any',
 		disabled = false,
 		message,
 		error,
 		icon,
 		onchange
-	}: { value?: string; label?: string; info?: string; placeholder?: string; filter?: BrowseFilter; disabled?: boolean; message?: string; error?: string; icon?: Snippet; onchange?: (v: string) => void } = $props();
+	}: { value?: string; label?: string; info?: string; filter?: BrowseFilter; disabled?: boolean; message?: string; error?: string; icon?: Snippet; onchange?: (v: string) => void } = $props();
 
 	const id = fieldId();
 	let open = $state(false);
@@ -37,7 +36,7 @@
 
 <div class="field">
 	<FieldLabel {label} {info} forId={id} />
-	<NeoInput bind:value {id} {placeholder} {disabled} elevation={-1} placement="inside" floating={false} width="100%" message={error ?? message} {error} autocomplete="off" class="mono-input" before={icon} after={browse} aria-label={label} oninput={() => onchange?.(value)} />
+	<NeoInput bind:value {id} {disabled} elevation={-1} placement="inside" floating={false} width="100%" message={error ?? message} {error} autocomplete="off" class="mono-input" before={icon} after={browse} aria-label={label} oninput={() => onchange?.(value)} />
 </div>
 <DirectoryBrowser bind:open start={value} {filter} onpick={picked} />
 

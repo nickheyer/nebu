@@ -57,7 +57,7 @@ func (SGLang) Params() []*v1.Param {
 		groupModel       = "Model"
 		groupIdentity    = "Identity"
 		groupChat        = "Chat"
-		groupSpeculative = "Speculative decoding"
+		groupSpeculative = GroupSpeculative
 		groupDiagnostics = "Diagnostics"
 		groupAdapters    = "Adapters"
 		groupServing     = "Serving"
@@ -147,6 +147,10 @@ func (r SGLang) Launch(in Launch) (*Command, error) {
 	delete(p, "tool_call_parser")
 	if parser == "" {
 		parser = sglangToolParser(in)
+	}
+	// The metrics endpoint the gateway reads load from stays on unless set off
+	if p["enable_metrics"] == nil {
+		p["enable_metrics"] = true
 	}
 	paths, err := loraPairs("lora_paths", p.Str("lora_paths"))
 	if err != nil {
@@ -267,20 +271,5 @@ func (SGLang) Policy() *estimate.Policy {
 		RanksParam:    "dp_size",
 		Deferred:      map[string]func([]string) (string, bool){"max_running_requests": sglangRunning},
 		Shape:         func(p estimate.Params) archs.Run { return archs.Run{Context: float64(p.Int("n_ctx"))} },
-		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
-			gpus := float64(len(host.Kind(s.Host, v1.DeviceKind_DEVICE_KIND_GPU)))
-			ctx := float64(s.Params.Int("n_ctx"))
-			return []*v1.ParamState{
-				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
-				bounds("chunked_prefill_size", -1, ctx, 512),
-				bounds("max_total_tokens", 256, 0, 256),
-				bounds("max_prefill_tokens", ctx, 0, 256),
-				bounds("mem_fraction_static", 0.05, 1, 0.01),
-				bounds("tp_size", 1, gpus, 1),
-				bounds("pp_size", 1, max(gpus, 1), 1),
-				bounds("dp_size", 1, max(gpus, 1), 1),
-				bounds("ep_size", 1, max(gpus, 1), 1),
-			}, ""
-		},
 	}
 }

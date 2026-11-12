@@ -322,7 +322,7 @@ func TestCappedReader(t *testing.T) {
 func TestStartTwice(t *testing.T) {
 	store := datalayer.NewStore()
 	src := New(store, StoreResolver(store), Options{})
-	if src.timeout != DefaultWorking {
+	if src.timeout != DefaultIdle {
 		t.Fatalf("default scrape timeout = %v", src.timeout)
 	}
 	if err := src.Start(context.Background()); err != nil {

@@ -16,6 +16,14 @@ export function reasonWords(reason: string): string {
 		.toLowerCase();
 }
 
+// Conditions naming a state a resource passes through, which a settled one does not hold
+const passing = new Set(['Draining', 'Degraded', 'Swapping', 'Canary']);
+
+// Whether a condition names a passing state instead of a check that should hold
+export function passingCondition(type: string): boolean {
+	return passing.has(type);
+}
+
 // The lamp a state lights
 export type Lamp = 'success' | 'warning' | 'error' | 'primary' | 'muted';
 

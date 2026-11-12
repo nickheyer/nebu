@@ -68,11 +68,11 @@ func TestDefaults(t *testing.T) {
 			name: "metrics pool",
 			yaml: config.DefaultConfig,
 			profiles: map[string][]string{
-				"default": {"ready-filter/ready", "fresh-metrics-filter/fresh", "subset-filter/subset", "kv-threshold-filter/kv-limit", "capacity-filter/capacity", "lora-affinity-filter/lora-filter", "objective-filter/objective"},
+				"default": {"ready-filter/ready", "subset-filter/subset", "capacity-filter/capacity", "lora-affinity-filter/lora-filter", "objective-filter/objective"},
 			},
-			weights:     map[string]map[string]float64{"default": {"queue": 1, "kv": 1, "prefix": 3, "lora": 1, "assumed": 1, "latency": 2, "tps": 1}},
+			weights:     map[string]map[string]float64{"default": {"prefix": 3, "lora": 1, "assumed": 1, "latency": 2, "tps": 1}},
 			lifecycle:   []string{"prefix-cache-scorer/prefix", "latency-scorer/latency", "assumed-load", "throughput"},
-			cands:       []*schedtest.Endpoint{schedtest.EP("a").Metrics(fresh), schedtest.EP("b").Metrics(fresh), schedtest.EP("stale")},
+			cands:       []*schedtest.Endpoint{schedtest.EP("a").Metrics(fresh), schedtest.EP("b")},
 			req:         framework.Request{ID: "r", PromptTokens: 10},
 			wantPrimary: "default",
 		},
@@ -90,12 +90,12 @@ func TestDefaults(t *testing.T) {
 			name: "disaggregated pool",
 			yaml: config.DefaultPDConfig,
 			profiles: map[string][]string{
-				"prefill": {"ready-filter/ready", "fresh-metrics-filter/fresh", "subset-filter/subset", "role-filter/prefill-role", "kv-threshold-filter/kv-limit", "capacity-filter/capacity", "lora-affinity-filter/lora-filter"},
-				"decode":  {"ready-filter/ready", "fresh-metrics-filter/fresh", "subset-filter/subset", "role-filter/decode-role", "kv-threshold-filter/kv-limit", "capacity-filter/capacity", "lora-affinity-filter/lora-filter"},
+				"prefill": {"ready-filter/ready", "subset-filter/subset", "role-filter/prefill-role", "capacity-filter/capacity", "lora-affinity-filter/lora-filter"},
+				"decode":  {"ready-filter/ready", "subset-filter/subset", "role-filter/decode-role", "capacity-filter/capacity", "lora-affinity-filter/lora-filter"},
 			},
 			weights: map[string]map[string]float64{
-				"prefill": {"queue": 1, "kv": 1, "prefix": 3, "lora": 1, "assumed": 1, "ep": 1, "tps": 1},
-				"decode":  {"queue": 1, "kv": 1, "prefix": 3, "lora": 1, "assumed": 1, "latency": 2, "ep": 1, "tps": 1},
+				"prefill": {"prefix": 3, "lora": 1, "assumed": 1, "ep": 1, "tps": 1},
+				"decode":  {"prefix": 3, "lora": 1, "assumed": 1, "latency": 2, "ep": 1, "tps": 1},
 			},
 			lifecycle:   []string{"prefix-cache-scorer/prefix", "latency-scorer/latency", "assumed-load", "throughput"},
 			cands:       []*schedtest.Endpoint{withRole("p", datalayer.RolePrefill), withRole("d", datalayer.RoleDecode)},
@@ -107,11 +107,11 @@ func TestDefaults(t *testing.T) {
 			name: "replicas pool",
 			yaml: config.DefaultReplicasConfig,
 			profiles: map[string][]string{
-				"replicas": {"ready-filter/ready", "fresh-metrics-filter/fresh", "subset-filter/subset", "kv-threshold-filter/kv-limit", "capacity-filter/capacity", "lora-affinity-filter/lora-filter"},
+				"replicas": {"ready-filter/ready", "subset-filter/subset", "capacity-filter/capacity", "lora-affinity-filter/lora-filter"},
 			},
-			weights:     map[string]map[string]float64{"replicas": {"queue": 1, "kv": 1, "prefix": 4, "assumed": 1, "latency": 1, "ep": 1, "tps": 1}},
+			weights:     map[string]map[string]float64{"replicas": {"prefix": 4, "assumed": 1, "latency": 1, "ep": 1, "tps": 1}},
 			lifecycle:   []string{"prefix-cache-scorer/prefix", "latency-scorer/latency", "assumed-load", "throughput"},
-			cands:       []*schedtest.Endpoint{schedtest.EP("a").Metrics(fresh), schedtest.EP("b").Metrics(fresh), schedtest.EP("stale")},
+			cands:       []*schedtest.Endpoint{schedtest.EP("a").Metrics(fresh), schedtest.EP("b")},
 			req:         framework.Request{ID: "r", PromptTokens: 10},
 			wantPrimary: "replicas",
 		},
@@ -150,9 +150,6 @@ func TestDefaults(t *testing.T) {
 			}
 			if res.PrimaryProfile != tc.wantPrimary || len(res.Endpoints()) == 0 {
 				t.Fatalf("primary %s endpoints %v", res.PrimaryProfile, schedtest.IDs(res.Endpoints()))
-			}
-			if slices.Contains(schedtest.IDs(res.Endpoints()), "stale") {
-				t.Fatal("stale endpoint picked")
 			}
 			if tc.wantPrefill != (res.Profile("prefill") != nil) {
 				t.Fatalf("prefill %v, want %v", schedtest.IDs(res.Profile("prefill")), tc.wantPrefill)

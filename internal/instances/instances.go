@@ -60,9 +60,11 @@ type Reservation struct {
 	DeviceIDs   []string
 	MemoryBytes uint64
 	// Bytes the slot may take from each of this node's memory pools, by pool id
-	PoolBytes  map[string]uint64
-	Placement  v1.Placement
-	RuntimeID  string
+	PoolBytes map[string]uint64
+	Placement v1.Placement
+	RuntimeID string
+	// The install of the runtime the slot pins, the runtime's newest when empty
+	InstallID  string
 	Params     map[string]string
 	InstanceID string
 	// The formation serving the slot, when one does
@@ -95,9 +97,20 @@ func WithSwap(ctx context.Context) context.Context { return context.WithValue(ct
 // Whether the context marks a swap, so a replacement may launch beside the occupant it replaces
 func FromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
 
+type unsettledKey struct{}
+
+// Marks a context as a launch whose slot takes its settings only once it serves, as a swap's replacement does
+func Unsettled(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unsettledKey{}, true)
+}
+
+func unsettled(ctx context.Context) bool { v, _ := ctx.Value(unsettledKey{}).(bool); return v }
+
 // Slot manager interface for bound instances
 type Slots interface {
 	Reservation(ctx context.Context, slotID string) (*Reservation, error)
+	// Hands the slot the runtime, install, params and args a run names, which the slot keeps as its own
+	Settle(slotID string, run *v1.RunRequest) error
 	// Whether a slot answers to the name, as its own name or an alias
 	Owns(name string) bool
 	// Called after every state change, outside the instance lock
@@ -179,8 +192,9 @@ type prepared struct {
 	profile    *v1.HostProfile
 	planned    *v1.HostProfile
 	res        *Reservation
-	params     estimate.Params
-	plan       *v1.MemoryPlan
+	// What the request, its slot and the kept defaults set, the launch passing these and nothing the plan works out
+	params estimate.Params
+	plan   *v1.MemoryPlan
 	// Slot defaults under request params, stored groups resolved to files, what the plan was made from
 	layered map[string]string
 	// What the plan left uncounted, logged when the run starts
@@ -225,7 +239,50 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	if p.req.GetIdleUnloadSeconds() > 0 && p.seat != nil {
 		return nil, nil, fmt.Errorf("%w: a seat follows its formation and never unloads on its own", runtimes.ErrParam)
 	}
+	if p.res != nil && p.seat == nil {
+		if !unsettled(ctx) {
+			named := proto.Clone(req).(*v1.RunRequest)
+			// An install named without its runtime settles with the runtime it belongs to
+			if named.GetInstallId() != "" {
+				named.RuntimeId = p.rt.ID()
+			}
+			if err := m.Slots.Settle(p.res.SlotID, named); err != nil {
+				return nil, nil, err
+			}
+		}
+		p.complete()
+	}
 	return m.create(ctx, p)
+}
+
+// Makes the request carry every setting it launches with, so a later launch of it reads none from its slot
+func (p *prepared) complete() {
+	if p.req.GetExact() {
+		return
+	}
+	p.req.Params = runtimes.Merge(p.res.Params, p.req.GetParams())
+	p.req.Args = p.args()
+	p.req.Exact = true
+}
+
+// Completes a slot occupant recorded before requests carried every setting, which launched its words after the slot's
+func (p *prepared) inherit() {
+	if p.res == nil || p.seat != nil || p.req.GetExact() {
+		return
+	}
+	// The slot took both runs of words when it loaded, so words it ends with stand for the pair
+	if strings.HasSuffix(p.res.Args, strings.TrimSpace(p.req.GetArgs())) {
+		p.req.Args = p.res.Args
+	}
+	p.complete()
+}
+
+// The extra words the launch renders, the request's alone when it carries every setting, else over its slot's
+func (p *prepared) args() string {
+	if p.req.GetExact() {
+		return strings.TrimSpace(p.req.GetArgs())
+	}
+	return runtimes.RunArgs(p.res.args(), p.req.GetArgs())
 }
 
 // Records a prepared run, names its route, and starts the reconciler on its first launch
@@ -335,7 +392,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest, self string) 
 	if err != nil {
 		return nil, err
 	}
-	rt, params := p.rt, p.params
+	rt := p.rt
 	if p.req.GetSnapshot() {
 		if p.snapshot, err = m.snapshotter(p.planned, p.res.placement()); err != nil {
 			return nil, err
@@ -345,9 +402,13 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest, self string) 
 		if p.plan, p.warning, err = m.Inspector.Plan(ctx, rt, p.descriptor, p.planned, p.layered, true, p.res.placement(), p.stored.GetRepo(), p.stored, p.companions); err != nil {
 			return nil, err
 		}
-		for k, v := range p.plan.GetParams() {
-			if _, deferred := rt.Policy().Deferred[k]; params.IsAuto(k) && !deferred {
-				params[k] = v
+		// Of the plan only what the model calls for and the runtime cannot find itself reaches the launch
+		for _, param := range rt.Params() {
+			name := param.GetName()
+			if v := p.plan.GetParams()[name]; param.GetSupplied() && v != "" && v != estimate.Auto && p.params[name] == nil {
+				if p.params[name], err = runtimes.Value(param, v); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -373,7 +434,7 @@ func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self st
 			return nil, err
 		}
 		req.SlotId = res.SlotID
-		if req.RuntimeId == "" {
+		if req.RuntimeId == "" && !req.GetExact() {
 			req.RuntimeId = res.RuntimeID
 		}
 		if req.Name == "" {
@@ -388,6 +449,7 @@ func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self st
 	if err != nil {
 		return nil, err
 	}
+	profile = m.unreserved(profile, self)
 	if res != nil {
 		if err := pinnable(profile, res.DeviceIDs); err != nil {
 			return nil, err
@@ -404,6 +466,10 @@ func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self st
 		return nil, err
 	}
 	req.RuntimeId = rt.ID()
+	// A slot's pinned install runs unless the request names its own or carries every setting itself
+	if res != nil && !req.GetExact() && req.GetInstallId() == "" && res.RuntimeID == rt.ID() {
+		req.InstallId = res.InstallID
+	}
 	install, err := m.pinInstall(ctx, req, rt)
 	if err != nil {
 		return nil, err
@@ -423,14 +489,14 @@ func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self st
 		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement, res.PoolBytes)
 	}
 	var slotParams map[string]string
-	if res != nil {
+	if res != nil && !req.GetExact() {
 		slotParams = res.Params
 	}
 	companions, err := m.Inspector.Companions(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
 	if err != nil {
 		return nil, err
 	}
-	// Request params override slot params over the runtime's defaults, and stored groups named by path params resolve to their files
+	// Request params override slot params over the runtime's defaults, an exact request leaving the slot's out, and stored groups named by path params resolve to files
 	layered, err := runtimes.ResolveStore(rt, runtimes.Merge(m.defaults(rt.ID()), slotParams, req.GetParams()), append(append([]*v1.StoredModel{}, companions...), stored))
 	if err != nil {
 		return nil, err
@@ -815,6 +881,41 @@ func (m *Manager) artifacts(stored *v1.StoredModel, rt runtimes.Runtime) map[str
 			out["prepared_dir"] = dir
 		} else {
 			m.Log.Warn("prepared dir", "err", err)
+		}
+	}
+	return out
+}
+
+// The profile less the host memory this node's other live instances may still fill as they serve
+func (m *Manager) unreserved(profile *v1.HostProfile, self string) *v1.HostProfile {
+	m.mu.Lock()
+	var held uint64
+	for _, in := range m.list {
+		if rec := in.snapshot(); !Terminal(rec.GetState()) && rec.GetId() != self {
+			held += rec.GetPlan().GetReserveBytes()
+		}
+	}
+	m.mu.Unlock()
+	if held == 0 {
+		return profile
+	}
+	out := proto.Clone(profile).(*v1.HostProfile)
+	kind := v1.PoolKind_POOL_KIND_UNIFIED
+	for _, pl := range out.GetPools() {
+		if pl.GetKind() == v1.PoolKind_POOL_KIND_HOST {
+			kind = v1.PoolKind_POOL_KIND_HOST
+		}
+	}
+	for _, pl := range out.GetPools() {
+		if pl.GetKind() != kind {
+			continue
+		}
+		take := min(held, pl.GetTotalBytes())
+		held -= take
+		pl.TotalBytes -= take
+		// A measured pool keeps one free byte at least, zero reading as never measured
+		if pl.GetFreeBytes() > 0 {
+			pl.FreeBytes = max(pl.GetFreeBytes(), take+1) - take
 		}
 	}
 	return out

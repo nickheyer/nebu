@@ -77,7 +77,7 @@ const (
 	sessionKeyFile = "session.key"
 	// The service name spans are exported under
 	serviceName = "nebu"
-	// How often queued gateway requests are reconsidered when no release wakes them, and their pool's endpoints sampled meanwhile
+	// How often queued gateway requests are placed again without a release, and the longest wait for a sample before admission
 	flowTick = 50 * time.Millisecond
 	// Samples of an endpoint with requests on it per staleness window, so three failures in a row leave it stale
 	workingSamples = 4
@@ -525,8 +525,6 @@ func (d *Daemon) openGateway(rts *runtimes.Registry, bus *events.Bus) error {
 				Quota:          quotaOf(fc.GetQuota()),
 				Quotas:         quotasOf(fc.GetQuotas()),
 			},
-			Saturation:     flowcontrol.Thresholds{QueueDepth: int(fc.GetSaturationQueueDepth()), KVUtilization: fc.GetSaturationKvUtilization()},
-			Staleness:      time.Duration(fc.GetMetricsStalenessMs()) * time.Millisecond,
 			Retry:          gateway.Retry{Shed: retryShed, Unavailable: retryUnavailable},
 			TraceRetention: retention,
 			TraceRing:      int(gw.GetTraceRing()),

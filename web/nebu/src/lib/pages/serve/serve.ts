@@ -73,24 +73,11 @@ export function policyRows(p: Policy | undefined): KeyRow[] {
 	].filter((r) => r.value !== '');
 }
 
-// Splits a model key of source, repository and group, the repository holding one slash of its own
-export function splitKey(key: string): {
-	sourceId: string;
-	repo: string;
-	group: string;
-} {
-	const parts = key.split('/');
-	if (parts.length < 3)
-		return {
-			sourceId: parts[0] ?? '',
-			repo: parts.slice(1).join('/'),
-			group: ''
-		};
-	return {
-		sourceId: parts[0]!,
-		repo: parts.slice(1, 3).join('/'),
-		group: parts.slice(3).join('/')
-	};
+// Every way a model key splits into source, repository and group, a repository of two words first since most are
+export function keySplits(key: string): { sourceId: string; repo: string; group: string }[] {
+	const [sourceId = '', ...rest] = key.split('/');
+	const cuts = [2, ...rest.map((_, i) => i + 1).filter((n) => n !== 2)].filter((n) => n <= rest.length);
+	return cuts.map((n) => ({ sourceId, repo: rest.slice(0, n).join('/'), group: rest.slice(n).join('/') }));
 }
 
 // The whole update a slot takes, since an update replaces every field it carries
@@ -103,6 +90,7 @@ export function slotUpdate(s: Slot, patch: { position?: number; placement?: Plac
 		memoryBytes: s.memoryBytes,
 		poolBytes: s.poolBytes,
 		runtimeId: s.runtimeId,
+		installId: s.installId,
 		params: s.params,
 		policy: s.policy,
 		profile: s.profile,

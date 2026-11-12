@@ -294,6 +294,9 @@ func TestSaturatedRefusals(t *testing.T) {
 		{"lora nothing can ever serve", filter.NewLoRAAffinityFilter(), framework.Request{Adapter: "x"}, []*schedtest.Endpoint{schedtest.EP("a"), schedtest.EP("b").With(datalayer.CollectorCatalog, &datalayer.Catalog{Adapters: []string{"y"}})}, framework.ErrNoEndpoints},
 		{"capacity every seat full", filter.NewCapacityFilter(), framework.Request{}, []*schedtest.Endpoint{schedtest.EP("a").With(datalayer.CollectorCapacity, 1).With(datalayer.CollectorAssumed, 1)}, framework.ErrSaturated},
 		{"objective every endpoint misses", filter.NewObjectiveFilter(slow, schedtest.NewIndexer(4)), framework.Request{Objective: framework.Objective{TTFT: time.Millisecond}}, []*schedtest.Endpoint{schedtest.EP("a"), schedtest.EP("b")}, framework.ErrSaturated},
+		{"metrics every sample stale", filter.NewFreshMetricsFilter(time.Second, clock), framework.Request{}, []*schedtest.Endpoint{schedtest.EP("a").Metrics(datalayer.ServerMetrics{UpdatedAt: clock.Now().Add(-time.Minute)}), schedtest.EP("b")}, framework.ErrSaturated},
+		{"kv every endpoint over the threshold", filter.NewKVThresholdFilter(0.9), framework.Request{}, []*schedtest.Endpoint{schedtest.EP("a").Metrics(datalayer.ServerMetrics{UpdatedAt: clock.Now(), KVCacheUtilization: 0.95})}, framework.ErrSaturated},
+		{"queue every endpoint over the threshold", filter.NewQueueThresholdFilter(2), framework.Request{}, []*schedtest.Endpoint{schedtest.EP("a").Metrics(datalayer.ServerMetrics{UpdatedAt: clock.Now(), QueuedRequests: 3})}, framework.ErrSaturated},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

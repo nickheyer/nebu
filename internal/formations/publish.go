@@ -9,6 +9,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/pools"
+	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
@@ -153,6 +154,18 @@ func (m *Manager) seatPublished(f *v1.Formation, rt runtimes.Runtime, s *v1.Seat
 	return out, nil
 }
 
+// Labels every seat endpoint with the reasoning settings of the template a head seat recorded, the seats serving one model
+func labelReasoning(eps []pools.Published, seats []*v1.Instance) {
+	for _, in := range seats {
+		if tp := in.GetTemplate(); tp != nil {
+			for i := range eps {
+				chattemplate.SetLabels(eps[i].Labels, tp)
+			}
+			return
+		}
+	}
+}
+
 // Publishes every ready serving seat under the formation's owner except those in skip, unpublishing when none serves
 func (m *Manager) publishSeats(ctx context.Context, id string, skip map[string]bool) error {
 	f, err := m.Get(id)
@@ -165,6 +178,7 @@ func (m *Manager) publishSeats(ctx context.Context, id string, skip map[string]b
 	}
 	var eps []pools.Published
 	var first *v1.Instance
+	var served []*v1.Instance
 	records := map[string]*v1.Instance{}
 	for _, s := range f.GetSeats() {
 		if skip[seatKey(s)] || s.GetInstanceId() == "" || s.GetState() != v1.InstanceState_INSTANCE_STATE_READY || !seatServes(rt, f.GetShape(), s.GetRole()) {
@@ -175,6 +189,7 @@ func (m *Manager) publishSeats(ctx context.Context, id string, skip map[string]b
 			return fmt.Errorf("%s on %s: %w", s.GetRole(), s.GetNodeName(), err)
 		}
 		records[seatKey(s)] = in
+		served = append(served, in)
 		seatEps, err := m.seatPublished(f, rt, s, in)
 		if err != nil {
 			return err
@@ -189,6 +204,7 @@ func (m *Manager) publishSeats(ctx context.Context, id string, skip map[string]b
 		m.Registrar.Unpublish(ctx, owner)
 		return nil
 	}
+	labelReasoning(eps, served)
 	membership, err := instances.MembershipOf(rt, first, f.GetPlan().GetSchedulerConfig(), m.Instances.AcceleratorOf(ctx, first))
 	if err != nil {
 		return err
@@ -196,6 +212,7 @@ func (m *Manager) publishSeats(ctx context.Context, id string, skip map[string]b
 	if membership.Inventory, err = m.formationInventory(ctx, f, first, records, skip); err != nil {
 		return fmt.Errorf("inventory of %s: %w", f.GetName(), err)
 	}
+	membership.Slot = f.GetSlotId()
 	if err := m.Registrar.Publish(ctx, owner, membership, eps); err != nil {
 		return fmt.Errorf("publish %s: %w", f.GetName(), err)
 	}

@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/chattemplate/source"
 	"github.com/nickheyer/nebu/pkg/transcode/vllm"
 )
 
 func compileText(t *testing.T, text string) *Template {
 	t.Helper()
-	tmpl, err := Compile(&chattemplate.Template{Text: text, Source: "test"})
+	tmpl, err := Compile(&source.Template{Text: text, Source: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestToolUseVariant(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpl, err := Compile(&chattemplate.Template{Text: "default {{ tools }}", ToolUse: tc.toolUse, Source: "gguf"})
+			tmpl, err := Compile(&source.Template{Text: "default {{ tools }}", ToolUse: tc.toolUse, Source: "gguf"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,13 +180,13 @@ func TestMessageShaping(t *testing.T) {
 func TestCompileErrors(t *testing.T) {
 	tests := []struct {
 		name string
-		src  *chattemplate.Template
+		src  *source.Template
 	}{
 		{name: "nil", src: nil},
-		{name: "syntax", src: &chattemplate.Template{Text: "{% if %}"}},
-		{name: "unclosed", src: &chattemplate.Template{Text: "{% for x in y %}"}},
-		{name: "unknown filter", src: &chattemplate.Template{Text: "{{ x|nope }}"}},
-		{name: "bad tool use variant", src: &chattemplate.Template{Text: "ok", ToolUse: "{{ x"}},
+		{name: "syntax", src: &source.Template{Text: "{% if %}"}},
+		{name: "unclosed", src: &source.Template{Text: "{% for x in y %}"}},
+		{name: "unknown filter", src: &source.Template{Text: "{{ x|nope }}"}},
+		{name: "bad tool use variant", src: &source.Template{Text: "ok", ToolUse: "{{ x"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,7 +239,7 @@ func TestCache(t *testing.T) {
 	var loads atomic.Int32
 	failFirst := map[string]bool{"flaky": true}
 	var mu sync.Mutex
-	cache := NewCache(func(id string) (*chattemplate.Template, error) {
+	cache := NewCache(func(id string) (*source.Template, error) {
 		loads.Add(1)
 		time.Sleep(20 * time.Millisecond)
 		mu.Lock()
@@ -248,7 +248,7 @@ func TestCache(t *testing.T) {
 			failFirst[id] = false
 			return nil, errors.New("not ready")
 		}
-		return &chattemplate.Template{Text: "{{ messages[0].content }} from " + id, Source: id}, nil
+		return &source.Template{Text: "{{ messages[0].content }} from " + id, Source: id}, nil
 	})
 	var wg sync.WaitGroup
 	got := make([]*Template, 64)

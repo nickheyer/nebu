@@ -48,6 +48,7 @@ func (s *Selection) Build() *v1.Build {
 		Image:     s.Image,
 		Vars:      s.Vars,
 		Facts:     s.Facts,
+		Patches:   s.Patches,
 		CreatedAt: timestamppb.Now(),
 	}
 }
@@ -87,13 +88,9 @@ func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	if b.Image != "" || s.Sandbox != v1.SandboxKind_SANDBOX_KIND_OCI {
 		b.Image = s.Image
 	}
-	b.Patches = nil
+	b.Patches = s.Patches
 	contents := map[string][]byte{}
-	bctx := s.context(b, nil, 1)
 	for _, p := range rc.Patches() {
-		if p.Applies == nil || p.Applies(bctx) {
-			b.Patches = append(b.Patches, p.ID)
-		}
 		if len(p.Content) > 0 {
 			contents[p.ID] = p.Content
 		} else {
@@ -230,6 +227,7 @@ func (e *Engine) patch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 	}
 	for _, p := range s.Recipe.Patches() {
 		if !selected[p.ID] {
+			fmt.Fprintf(out, "patch %s left out\n", p.ID)
 			continue
 		}
 		data := p.Content

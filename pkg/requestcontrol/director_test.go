@@ -162,7 +162,7 @@ func TestObjectiveAndFairness(t *testing.T) {
 			}
 			item := e.flow.lastItem(t)
 			want := flowcontrol.FlowKey{FairnessID: c.fairness, Priority: c.obj.Priority}
-			if item.Flow != want || item.Priority != c.obj.Priority || item.TTFT != c.obj.TTFT || item.TPOT != c.obj.TPOT {
+			if item.Flow != want || item.Priority != c.obj.Priority {
 				t.Fatalf("item %+v, want flow %+v and objective %+v", item, want, c.obj)
 			}
 			e.dir.ResponseComplete(context.Background(), dec, nil)
@@ -193,7 +193,7 @@ func TestRequestFromBody(t *testing.T) {
 			if r.Prompt != c.prompt || r.PromptTokens != c.tokens || r.ExpectedOutputTokens != c.expected || r.Streaming != c.stream {
 				t.Fatalf("request %+v", r)
 			}
-			if item := e.flow.lastItem(t); item.Cost != c.tokens+c.expected || item.Pool != "p1" || item.Model != "llama" || item.ID != "rid-1" {
+			if item := e.flow.lastItem(t); item.Cost != c.tokens+c.expected || item.Pool != "p1" || item.ID != "rid-1" {
 				t.Fatalf("item %+v", item)
 			}
 			if r.ID != "rid-1" || dec.Headers[HeaderRequestID] != "rid-1" || r.Headers[HeaderRequestID] != "rid-1" {

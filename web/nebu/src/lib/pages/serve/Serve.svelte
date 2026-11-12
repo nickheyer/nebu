@@ -29,7 +29,7 @@
 	import Launch, { type LaunchStart } from '#lib/pages/serve/Launch.svelte';
 	import SlotEditor from '#lib/pages/serve/SlotEditor.svelte';
 	import SlotRow from '#lib/pages/serve/SlotRow.svelte';
-	import { slotHref, slotUpdate, splitKey, terminal } from '#lib/pages/serve/serve.js';
+	import { slotHref, slotUpdate, terminal } from '#lib/pages/serve/serve.js';
 	import { serveTabs } from '#lib/pages/serve/tabs.js';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -123,7 +123,7 @@
 		return {
 			slotId: swap ?? q.get('slot') ?? undefined,
 			swap: swap !== null,
-			model: model ? splitKey(model) : undefined,
+			model: model ?? undefined,
 			runtimeId: q.get('runtime') ?? undefined,
 			params: context ? { n_ctx: context } : undefined,
 			plan: q.get('plan') !== null
@@ -258,7 +258,7 @@
 
 <PageHeader tabs={serveTabs} active="instances" />
 
-<Sheet open={panelOpen} onclose={close} {list}>
+<Sheet open={panelOpen} onclose={close} {list} wide={slotParam !== null}>
 	{#if slotParam === 'new'}
 		<SlotEditor onclose={close} />
 	{:else if slotParam !== null}

@@ -1,0 +1,19 @@
+{%- set reasoning = reasoning_effort if reasoning_effort is defined and reasoning_effort else 'xhigh' %}
+{%- if reasoning not in ('xhigh', 'medium', 'low') %}
+    {{- raise_exception('Unexpected reasoning effort ' ~ reasoning ~ '. Supported types are xhigh (default), medium, and low.') }}
+{%- endif %}
+{%- for message in messages %}
+    {%- set content = message.content %}
+    {%- if message.role == 'assistant' and '</think>' in content %}
+        {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+    {%- endif %}
+    {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>\n' }}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\n\n</think>\n\n' }}
+    {%- else %}
+        {{- '<think>\nReasoning effort: ' + reasoning + '\n' }}
+    {%- endif %}
+{%- endif %}

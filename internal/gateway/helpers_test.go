@@ -197,7 +197,6 @@ func newHarness(t *testing.T, opts ...func(*setup)) *harness {
 		Metrics: mreg, Telemetry: tp, Health: hreg, Logger: log,
 		Config: Config{
 			Keys: s.keys, Policy: s.policy, OutputTokens: 64, Flow: flow,
-			Saturation: flowcontrol.Thresholds{QueueDepth: 8, KVUtilization: 0.9}, Staleness: 2 * time.Second,
 			Retry: Retry{Shed: time.Second, Unavailable: 2 * time.Second}, TraceRetention: 24 * time.Hour, TraceRing: 64,
 			Version: "test", Interval: 50 * time.Millisecond, Chain: s.chain,
 		},
@@ -237,27 +236,31 @@ func key(model string) pools.ModelKey {
 	return pools.ModelKey{SourceID: "hf", Repo: model, Group: "q4"}
 }
 
-// Publishes one metric less instance per address in a pool of the model and runtime, naming a route
+// Publishes a metric less instance per address under one owner in the model and runtime's pool, naming the route
 func (h *harness) publish(route, model, runtime string, proto datalayer.AppProtocol, ready bool, spec pools.RouteSpec, addrs ...string) datalayer.PoolID {
 	h.t.Helper()
 	ctx := context.Background()
-	var first pools.OwnerRef
+	var owner pools.OwnerRef
+	var eps []pools.Published
 	for i, a := range addrs {
 		addr, err := datalayer.ParseAddress(strings.TrimPrefix(a, "http://"))
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		owner := pools.OwnerRef{Kind: pools.OwnerInstance, ID: route + "-" + addr.String()}
+		id := route + "-" + addr.String()
 		if i == 0 {
-			first = owner
+			owner = pools.OwnerRef{Kind: pools.OwnerInstance, ID: id}
 		}
+		eps = append(eps, pools.Published{InstanceID: id, NodeID: testNode, Address: addr, Ready: ready})
+	}
+	if len(eps) > 0 {
 		mem := pools.Membership{Model: key(model), Runtime: runtime, Protocol: proto, Concurrency: 8, Metrics: &v1.MetricNames{HealthPath: "/health"}}
-		if err := h.mgr.Publish(ctx, owner, mem, []pools.Published{{InstanceID: owner.ID, NodeID: testNode, Address: addr, Ready: ready}}); err != nil {
+		if err := h.mgr.Publish(ctx, owner, mem, eps); err != nil {
 			h.t.Fatal(err)
 		}
 	}
 	if route != "" {
-		if _, err := h.mgr.NameRoute(ctx, first, route, spec); err != nil {
+		if _, err := h.mgr.NameRoute(ctx, owner, route, spec); err != nil {
 			h.t.Fatal(err)
 		}
 	}

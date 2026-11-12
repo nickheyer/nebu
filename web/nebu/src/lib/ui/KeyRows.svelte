@@ -58,8 +58,11 @@
 		min-width: 0;
 	}
 	:global(.kv-tip) {
-		flex: 1 1 auto;
+		flex: 0 1 auto;
 		min-width: 0;
+	}
+	.vcell > :global(.copy) {
+		margin-left: auto;
 	}
 	.v {
 		display: inline-block;

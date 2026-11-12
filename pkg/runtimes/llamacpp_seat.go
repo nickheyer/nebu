@@ -27,8 +27,6 @@ const (
 	factFitFlag     = "fit_flag"
 	factSlotsFlag   = "slots_flag"
 	factLoadMode    = "load_mode"
-	// Whether the build takes the flag that renders chat templates with tools
-	factJinja = "jinja"
 	// The draft model flags that were renamed when the speculative options took the spec prefix
 	factDraftMin          = "draft_min"
 	factDraftPMin         = "draft_p_min"
@@ -69,7 +67,6 @@ var llamaFlags = map[string][]string{
 	factLoadMode:          {"--load-mode", "--direct-io"},
 	factNoMmap:            {"--no-mmap"},
 	factMlock:             {"--mlock"},
-	factJinja:             {"--jinja"},
 }
 
 // A flag as the install's help spelled it, the newest spelling when the help was not read
@@ -472,7 +469,7 @@ func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	p["draft_model"] = in.Draft
 	p["draft_device"] = device
 	p["fit"] = ""
-	if p.Str("spec_type") == Auto || p.Str("spec_type") == "" {
+	if p.Str("spec_type") == "" {
 		p["spec_type"] = "draft-simple"
 	}
 	in.Params = p

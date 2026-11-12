@@ -69,6 +69,8 @@ type Membership struct {
 	SchedulerConfig string
 	// Context length, quantization, accelerator, modalities and throughput class the owner's launch reports, nil before it launched
 	Inventory *v1.RuntimeInventory
+	// The slot whose routes the owner's endpoints serve, empty for an owner outside a slot
+	Slot string
 }
 
 // What a route an owner names forwards to
@@ -159,7 +161,7 @@ type Registrar interface {
 	DropObjectives(ctx context.Context, owner OwnerRef)
 }
 
-// Launches the slot or instance owner of a pool with no endpoints, called for every request that finds the pool empty
+// Launches a slot or instance owner with no endpoint in its pool, called per request finding none serving it
 type Waker interface {
 	Wake(ctx context.Context, owner OwnerRef) error
 }

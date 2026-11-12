@@ -170,7 +170,12 @@ CREATE TABLE instance_templates (
   instance_id TEXT PRIMARY KEY REFERENCES instances (id) ON DELETE CASCADE,
   source TEXT NOT NULL DEFAULT '',
   tools TEXT NOT NULL DEFAULT '',
-  error TEXT NOT NULL DEFAULT ''
+  error TEXT NOT NULL DEFAULT '',
+  efforts TEXT NOT NULL DEFAULT '',
+  reads_effort INTEGER NOT NULL DEFAULT 0,
+  thinking TEXT NOT NULL DEFAULT '',
+  thinking_switch TEXT NOT NULL DEFAULT '',
+  reasoning_error TEXT NOT NULL DEFAULT ''
 );
 
 -- Long running operations and their logs
@@ -273,7 +278,8 @@ CREATE TABLE slots (
   conditions TEXT NOT NULL DEFAULT '',
   meta TEXT NOT NULL DEFAULT '',
   observed_generation INTEGER NOT NULL DEFAULT 0,
-  pool_bytes TEXT NOT NULL DEFAULT ''
+  pool_bytes TEXT NOT NULL DEFAULT '',
+  install_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (

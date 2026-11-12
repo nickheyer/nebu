@@ -8,14 +8,26 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// The body an anthropic request reaches a chat completions runtime as
+// The body an anthropic request reaches a chat completions runtime as when no template was read for it
 func crossed(t *testing.T, body string) (map[string]json.RawMessage, []string, []string) {
+	t.Helper()
+	sent, roles, contents, err := crossedFor(t, body, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sent, roles, contents
+}
+
+// The body an anthropic request reaches a runtime as under the template's reasoning settings, or its refusal
+func crossedFor(t *testing.T, body string, tpl *v1.ChatTemplate) (map[string]json.RawMessage, []string, []string, error) {
 	t.Helper()
 	req, err := (anthropic{}).Parse(AnthropicMessages, []byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	Cross(req, v1.ApiFlavor_API_FLAVOR_ANTHROPIC)
+	if err := Cross(req, v1.ApiFlavor_API_FLAVOR_ANTHROPIC, tpl); err != nil {
+		return nil, nil, nil, err
+	}
 	_, out, err := (openai{}).Render(req)
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +51,7 @@ func crossed(t *testing.T, body string) (map[string]json.RawMessage, []string, [
 		roles = append(roles, m.Role)
 		contents = append(contents, string(m.Content))
 	}
-	return sent, roles, contents
+	return sent, roles, contents, nil
 }
 
 // A coding agent's reminder sent as a later system turn reaches the runtime as a user turn with its text unchanged
@@ -92,11 +104,12 @@ func TestCrossSystemPlacement(t *testing.T) {
 	}
 }
 
-// Thinking and output settings become the effort and format a chat completions runtime reads
+// Thinking and output settings become the effort and format of a runtime without a template record, adaptive alone naming none
 func TestCrossEffortAndFormat(t *testing.T) {
 	for settings, want := range map[string]string{
 		`"thinking":{"type":"disabled"},"output_config":{"effort":"high"}`: `"none"`,
-		`"thinking":{"type":"adaptive"}`:                                   `"high"`,
+		`"thinking":{"type":"adaptive"}`:                                   ``,
+		`"thinking":{"type":"enabled"}`:                                    ``,
 		`"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}`:  `"low"`,
 		`"output_config":{"effort":"max"}`:                                 `"max"`,
 		`"thinking":{"type":"enabled","budget_tokens":512}`:                `"minimal"`,
@@ -132,7 +145,9 @@ func TestCrossOtherProtocols(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	Cross(req, v1.ApiFlavor_API_FLAVOR_OPENAI)
+	if err := Cross(req, v1.ApiFlavor_API_FLAVOR_OPENAI, nil); err != nil {
+		t.Fatal(err)
+	}
 	if req.Messages[1].Role != "system" || req.Extra["metadata"] == nil {
 		t.Fatalf("messages %+v extra %v", req.Messages, req.Extra)
 	}

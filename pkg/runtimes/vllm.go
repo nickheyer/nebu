@@ -69,7 +69,7 @@ func (VLLM) Params() []*v1.Param {
 		groupIdentity    = "Identity"
 		groupChat        = "Chat"
 		groupAdapters    = "Adapters"
-		groupSpeculative = "Speculative decoding"
+		groupSpeculative = GroupSpeculative
 		groupDiagnostics = "Diagnostics"
 		groupServing     = "Serving"
 	)
@@ -89,7 +89,7 @@ func (VLLM) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: groupContext, Flag: "--max-model-len",
 			Rule: contextRule},
-		intParam("max_num_seqs", "Max sequences", groupContext, "--max-num-seqs", "", "sequences", "requests one scheduler step may run, empty passes vLLM's own choice for the first device, 1024 from 70 GiB except an A100 or GB10, otherwise 256", 1, 0, 1, false),
+		intParam("max_num_seqs", "Max sequences", groupContext, "--max-num-seqs", "", "sequences", "requests one scheduler step may run, empty keeps vLLM's own choice by the first device's memory", 1, 0, 1, false),
 		intParam("max_num_batched_tokens", "Max batched tokens", groupContext, "--max-num-batched-tokens", "", "tokens", "tokens one scheduler step may hold, empty keeps vLLM's 2048, 8192 or 16384 on larger devices", 1, 0, 256, true),
 		{Name: "enable_prefix_caching", Label: "Prefix caching", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "on", Choices: switchChoices, Group: groupContext, Advanced: true,
 			Description: "reuse cache blocks of a shared prompt prefix, which prefix aware routing counts on, empty keeps vLLM's on"},
@@ -133,7 +133,7 @@ func (VLLM) Params() []*v1.Param {
 		strParam("tool_call_parser", "Tool call parser", groupChat, "", "", "parser for tool calls, empty picks one for the model family", nil, true),
 		boolParam("enable_lora", "LoRA adapters", groupAdapters, "--enable-lora", "accept LoRA adapters named by requests and loaded at runtime"),
 		fileList(strParam("lora_modules", "Adapters at launch", groupAdapters, "", "", "name=path pairs, comma separated, served from the start and turning LoRA on", nil, true), v1.ParamList_PARAM_LIST_NAMED),
-		intParam("max_loras", "Max adapters per batch", groupAdapters, "--max-loras", "", "adapters", "empty keeps vLLM's 1, or 4 when adapters are listed at launch", 1, 0, 1, true),
+		intParam("max_loras", "Max adapters per batch", groupAdapters, "--max-loras", "", "adapters", "empty keeps vLLM's 1", 1, 0, 1, true),
 		intParam("max_lora_rank", "Max adapter rank", groupAdapters, "--max-lora-rank", "", "", "empty keeps vLLM's 16", 1, 0, 8, true),
 		intParam("max_cpu_loras", "Adapters held in host memory", groupAdapters, "--max-cpu-loras", "", "adapters", "empty keeps vLLM's same as max_loras", 1, 0, 1, true),
 		strParam("speculative_config", "Speculative config", groupSpeculative, "--speculative-config", "", "a JSON object such as {\"method\":\"ngram\",\"num_speculative_tokens\":4}, methods ngram, suffix, draft_model, eagle, eagle3, dflash, dspark, or an MTP type", nil, true),
@@ -171,21 +171,12 @@ func (r VLLM) Launch(in Launch) (*Command, error) {
 	if ranks > 1 && !experts {
 		delete(p, "data_parallel_size")
 	}
-	// The sequence cap is passed even when unset, so the route's capacity is the one vLLM runs with
-	if p["max_num_seqs"] == nil {
-		if p["max_num_seqs"], err = vllmSeqs(devices); err != nil {
-			return nil, err
-		}
-	}
 	modules, err := loraPairs("lora_modules", p.Str("lora_modules"))
 	if err != nil {
 		return nil, err
 	}
 	if len(modules) > 0 {
 		p["enable_lora"] = true
-		if p["max_loras"] == nil {
-			p["max_loras"] = int64(4)
-		}
 	}
 	args := []string{"serve", dir, "--host", in.Host, "--port", strconv.Itoa(port), "--enable-auto-tool-choice", "--tool-call-parser", parser}
 	switches, switchEmitted := switchFlags(p, vllmSwitches)
@@ -229,19 +220,6 @@ func (r VLLM) Launch(in Launch) (*Command, error) {
 	}
 	pinEnv(env, devices)
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted, Devices: devices, Port: port}, nil
-}
-
-// vLLM's default sequence cap for the first device, 1024 from 160 GiB or from 70 GiB except an A100 or GB10, else 256
-func vllmSeqs(devices []*v1.Device) (int64, error) {
-	gpus := gpusOf(devices)
-	if len(gpus) == 0 {
-		return 0, fmt.Errorf("%w: max_num_seqs is unset and the launch names no device to take vLLM's default from, set max_num_seqs", ErrParam)
-	}
-	mem, name := gpus[0].GetMemoryTotalBytes(), strings.ToLower(gpus[0].GetName())
-	if mem >= 160<<30 || mem >= 70<<30 && !strings.Contains(name, "a100") && !strings.Contains(name, "gb10") {
-		return 1024, nil
-	}
-	return 256, nil
 }
 
 // Splits comma separated name=path pairs, each pair one argument
@@ -332,17 +310,5 @@ func (VLLM) Policy() *estimate.Policy {
 			return g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS
 		},
 		Shape: func(p estimate.Params) archs.Run { return archs.Run{Context: float64(p.Int("n_ctx"))} },
-		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
-			gpus := float64(len(host.Kind(s.Host, v1.DeviceKind_DEVICE_KIND_GPU)))
-			return []*v1.ParamState{
-				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
-				bounds("max_num_seqs", 1, 0, 1),
-				bounds("max_num_batched_tokens", 1, 0, 256),
-				bounds("gpu_memory_utilization", 0.05, 1, 0.01),
-				bounds("tensor_parallel_size", 1, gpus, 1),
-				bounds("pipeline_parallel_size", 1, max(gpus, 1), 1),
-				bounds("data_parallel_size", 1, max(gpus, 1), 1),
-			}, ""
-		},
 	}
 }

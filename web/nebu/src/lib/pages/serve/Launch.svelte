@@ -4,11 +4,11 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { isCancel, reason, rpc } from '#lib/api/transport.js';
+	import { Code } from '@connectrpc/connect';
+	import { isCancel, isCode, reason, rpc } from '#lib/api/transport.js';
 	import { bytes, enumLabel, tokensPerSecond } from '#lib/format.js';
 	import { live, modelKey } from '#lib/live/events.svelte.js';
-	import { ConditionStatus } from '#lib/proto/nebu/v1/meta_pb.js';
-	import { PlanProfile, Shape, ShapeSchema, type MemoryPlan, type ParamState, type Part } from '#lib/proto/nebu/v1/estimate_pb.js';
+	import { PlanProfile, Shape, ShapeSchema, type MemoryPlan, type Part } from '#lib/proto/nebu/v1/estimate_pb.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { PolicySchema, ProfileSchema } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { RunRequestSchema, type RunRequest } from '#lib/proto/nebu/v1/instance_pb.js';
@@ -43,20 +43,22 @@
 	import { contextLabel, verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
-	import { installLabel, modelPhrase } from '#lib/pages/serve/serve.js';
+	import RuntimeFields from '#lib/pages/serve/RuntimeFields.svelte';
+	import { keySplits, modelPhrase } from '#lib/pages/serve/serve.js';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
 
 	export type LaunchStart = {
 		slotId?: string;
 		swap?: boolean;
-		model?: { sourceId: string; repo: string; group: string };
+		// The key of a stored model, source, repository and group
+		model?: string;
 		runtimeId?: string;
 		params?: Record<string, string>;
 		plan?: boolean;
 	};
 
-	// One form that launches a model, swaps a slot's model, or plans a formation, everything past the model optional
+	// One form that launches a model, swaps a slot's model, or plans a formation, a slot's own settings filling it and taking what it launches with
 	let { start = {} }: { start?: LaunchStart } = $props();
 
 	const init = untrack(() => start);
@@ -86,16 +88,18 @@
 	const diffusion = $derived(model?.descriptor?.kind === ModelKind.DIFFUSION);
 	let parts = $state<Part[]>([]);
 	let runtimes = $state<RuntimeStatus[] | undefined>(undefined);
+	let runtimeId = $state('');
+	// The install the launch runs, the runtime's newest when empty
 	let installId = $state('');
 	let params = $state<Record<string, string>>({ ...(init.params ?? {}) });
 	let args = $state('');
-	let free = $state(swap);
+	// Plans against free memory as the launch and the runtime's own fit do, until switched to the whole of it
+	let free = $state(true);
 	let span = $state<string[]>([]);
 	let shape = $state<Shape>(Shape.UNSPECIFIED);
 	let profile = $state<PlanProfile>(PlanProfile.AUTO);
 	let plan = $state<MemoryPlan | undefined>(undefined);
 	let planWarning = $state('');
-	let paramStates = $state<ParamState[]>([]);
 	let formationPlan = $state<FormationPlan | undefined>(undefined);
 	let planError = $state('');
 	let name = $state('');
@@ -131,22 +135,11 @@
 			return model.runtimes === 0 || (model.runtimes & rt.bit) !== 0;
 		})
 	);
-	// Every install of a runtime that loads the model, the newest of each runtime first
-	const installs = $derived(
-		compatible.flatMap((r) =>
-			[...live.installs.values()].filter((i) => i.runtimeId === r.runtime?.id).sort((a, b) => Number(b.createdAt?.seconds ?? 0n) - Number(a.createdAt?.seconds ?? 0n))
-		)
-	);
-	const installOptions = $derived.by((): Option<string>[] =>
-		installs.map((i) => {
-			const rt = compatible.find((r) => r.runtime?.id === i.runtimeId)?.runtime;
-			const unmet = (i.status?.conditions ?? []).filter((c) => c.status === ConditionStatus.FALSE);
-			return { value: i.id, label: `${rt?.name || i.runtimeId} ${installLabel(i)}`, description: unmet.length ? unmet.map((c) => c.message || c.reason).join(', ') : undefined };
-		})
-	);
-	const install = $derived(installs.find((i) => i.id === installId));
-	const runtimeId = $derived(install?.runtimeId ?? '');
-	const runtime = $derived(compatible.find((r) => r.runtime?.id === runtimeId));
+	// Every install of a runtime that loads the model
+	const installs = $derived(compatible.flatMap((r) => [...live.installs.values()].filter((i) => i.runtimeId === r.runtime?.id)));
+	// The runtimes that load the model and have an install to run
+	const usable = $derived(compatible.filter((r) => installs.some((i) => i.runtimeId === r.runtime?.id)));
+	const runtime = $derived(usable.find((r) => r.runtime?.id === runtimeId));
 	const runtimeParams = $derived(runtime?.runtime?.params ?? []);
 
 	const nodeDevices = $derived.by((): Option<string>[] => {
@@ -167,7 +160,7 @@
 	const chosenDevices = $derived(slot?.deviceIds.length ? slot.deviceIds : undefined);
 	const verdict = $derived(formationPlan?.verdict ?? plan?.verdict);
 	const context = $derived(Number(plan?.params['n_ctx'] ?? 0));
-	const ready = $derived(model !== undefined && install !== undefined && (swap || planOnly || name.trim() !== '') && (!swap || canaryPercent === 0 || canarySeconds > 0));
+	const ready = $derived(model !== undefined && runtime !== undefined && (swap || planOnly || name.trim() !== '') && (!swap || canaryPercent === 0 || canarySeconds > 0));
 
 	function shapeLine(s: Shape): string {
 		switch (s) {
@@ -202,6 +195,8 @@
 			name: name.trim(),
 			params: cleanParams(),
 			slotId: slot?.id ?? '',
+			// A slot takes the form's settings whole, the ones cleared here cleared on the slot too
+			exact: slot !== undefined,
 			span,
 			shape,
 			profile,
@@ -239,8 +234,33 @@
 		}
 	}
 
+	// Takes the stored model a key names, tried at each split of its repository and group
+	async function loadKey(key: string) {
+		const known = live.models.get(key);
+		if (known) {
+			if (!modelPick) modelPick = key;
+			return;
+		}
+		try {
+			for (const want of keySplits(key)) {
+				const res = await rpc.store.getModel(want).catch((err) => {
+					if (isCode(err, Code.NotFound)) return undefined;
+					throw err;
+				});
+				if (!res?.model) continue;
+				if (modelPick) return;
+				seen.set(modelKey(res.model), res.model);
+				modelPick = modelKey(res.model);
+				return;
+			}
+			toast.error('Model failed to load', `${key} is not stored`);
+		} catch (err) {
+			toast.error('Model failed to load', reason(err));
+		}
+	}
+
 	onMount(async () => {
-		if (init.model) void loadModel(init.model);
+		if (init.model) void loadKey(init.model);
 		try {
 			runtimes = (await rpc.runtimes.listRuntimes({})).runtimes;
 		} catch (err) {
@@ -258,23 +278,49 @@
 		span = [...live.nodes.keys()];
 	});
 
-	// Takes a slot's parameters and arguments once it is chosen, and its model when the form holds none
+	// Fills the form with a slot's runtime, install, parameters and arguments once it is chosen, and its model when the form holds none
 	$effect(() => {
 		const s = slot;
-		if (!s || seeded === s.id) return;
+		if (!s) {
+			seeded = '';
+			return;
+		}
+		if (seeded === s.id) return;
 		seeded = s.id;
 		untrack(() => {
-			params = { ...s.params, ...params };
-			args ||= s.args;
+			params = { ...s.params, ...(init.params ?? {}) };
+			args = s.args;
+			if (s.runtimeId && !init.runtimeId) {
+				runtimeId = s.runtimeId;
+				installId = s.installId;
+			}
 			if (!init.model && !modelPick && s.request?.repo) void loadModel(s.request);
 		});
 	});
 
-	// Rests on the newest install of the runtime the link or slot names, else of the first that loads the model
+	// Rests on the runtime the link or slot names, else the first that loads the model, and lets go of an install that is gone
 	$effect(() => {
-		if (runtimes === undefined || installs.some((i) => i.id === installId)) return;
-		const wanted = init.runtimeId || slot?.runtimeId || '';
-		installId = (installs.find((i) => i.runtimeId === wanted) ?? installs[0])?.id ?? '';
+		if (runtimes === undefined) return;
+		if (!usable.some((r) => r.runtime?.id === runtimeId)) {
+			const wanted = init.runtimeId || slot?.runtimeId || '';
+			runtimeId = (usable.find((r) => r.runtime?.id === wanted) ?? usable[0])?.runtime?.id ?? '';
+			installId = '';
+		} else if (installId !== '' && !installs.some((i) => i.id === installId && i.runtimeId === runtimeId)) {
+			installId = '';
+		}
+	});
+
+	// Parameters of another runtime leave with it, so a launch never hands one runtime another's
+	let paramsOf = '';
+	$effect(() => {
+		const rt = runtime?.runtime;
+		if (!rt || rt.id === paramsOf) return;
+		paramsOf = rt.id;
+		const known = new Set(rt.params.map((p) => p.name));
+		untrack(() => {
+			const kept = Object.fromEntries(Object.entries(params).filter(([k]) => known.has(k)));
+			if (Object.keys(kept).length !== Object.keys(params).length) params = kept;
+		});
 	});
 
 	// The files the model needs that this host lacks, read again whenever the store changes
@@ -309,22 +355,22 @@
 		}
 	}
 
-	// Names the route after the slot or the repository until typed over
+	// Names the route after the slot, or after the repository until typed over
 	$effect(() => {
 		const key = modelId;
 		const s = slot;
 		if (!key) return;
 		untrack(() => {
 			const next = s?.name ?? model?.repo.split('/').pop() ?? '';
-			if (name === '' || name === defaultName) name = next;
+			if (s || name === '' || name === defaultName) name = next;
 			defaultName = next;
 		});
 	});
 
 	// Plans again a moment after the model, the runtime, a parameter or a memory choice changes
 	$effect(() => {
-		if (!modelId || !installId || runtime === undefined) return;
-		void [free, span, shape, profile, slot?.id, JSON.stringify(params)];
+		if (!modelId || runtime === undefined) return;
+		void [free, span, shape, profile, slot?.id, runtimeId, installId, JSON.stringify(params)];
 		const timer = setTimeout(() => void estimate(), 250);
 		return () => clearTimeout(timer);
 	});
@@ -347,7 +393,7 @@
 
 	// Asks the daemon for the command while its section is open, a moment after the request changes
 	$effect(() => {
-		if (!commandOpen || !modelId || !installId || runtime === undefined) return;
+		if (!commandOpen || !modelId || runtime === undefined) return;
 		const run = request();
 		const timer = setTimeout(() => {
 			previewError = '';
@@ -376,10 +422,9 @@
 				plan = res.plan?.memory;
 				planWarning = res.plan?.detail ?? '';
 			} else {
-				const res = await rpc.estimate.estimate({ sourceId: m.sourceId, repo: m.repo, group: m.group, runtimeId, params: cleanParams(), slotId: slot?.id ?? '', free }, { signal: abort.signal });
+				const res = await rpc.estimate.estimate({ sourceId: m.sourceId, repo: m.repo, group: m.group, runtimeId, params: cleanParams(), slotId: slot?.id ?? '', exact: slot !== undefined, free }, { signal: abort.signal });
 				plan = res.plan;
 				planWarning = res.warning;
-				paramStates = res.params;
 				formationPlan = undefined;
 			}
 		} catch (err) {
@@ -444,7 +489,7 @@
 		{:else}
 			<MemoryBars profile={live.host} instances={live.instances.values()} slots={live.slots.values()} {plan} only={chosenDevices} legend={false} />
 			<div class="verdict">
-				<Tip facts={[{ label: 'weights', value: bytes(plan.weightsBytes) }, { label: 'cache', value: bytes(plan.cacheBytes) }, { label: 'overhead', value: bytes(plan.overheadBytes) }]} tag="span">
+				<Tip facts={[{ label: 'weights', value: bytes(plan.weightsBytes) }, { label: 'cache', value: bytes(plan.cacheBytes) }, { label: 'overhead', value: bytes(plan.overheadBytes) }, { label: 'host reserve', value: bytes(plan.reserveBytes) }]} tag="span">
 					<span class="reading"><Dot lamp={verdictLamp(verdict)} label={verdictLabel(verdict)} />{#if context > 0}<span class="muted">{contextLabel(context)} context</span>{/if}</span>
 				</Tip>
 				<span class="fill"></span>
@@ -494,19 +539,22 @@
 				{/each}
 			</div>
 		{/if}
-		{#if model && runtimes !== undefined && installs.length === 0}
+		{#if model && runtimes !== undefined && usable.length === 0}
 			<Empty icon={EngineIcon} text="No runtime installed for this model" action="Runtimes" href="/runtimes" />
-		{:else if model && install}
-			<FieldRow>
-				<Select bind:value={installId} options={installOptions} label="Runtime" />
-				{#if !swap && !planOnly}<Text bind:value={name} label="Name" max={64} required />{/if}
-			</FieldRow>
+		{:else if model && runtime}
+			{#if !swap && !planOnly}
+				<FieldRow>
+					{#if slotOptions.length}<Select bind:value={slotId} options={slotOptions} label="Slot" info="The launch fills the slot and the slot keeps its runtime, parameters and arguments" clearable />{/if}
+					{#if !slot}<Text bind:value={name} label="Name" max={64} required />{/if}
+				</FieldRow>
+			{/if}
+			<RuntimeFields runtimes={usable} bind:runtimeId bind:installId />
 			{@render memory()}
 			{#if inMesh && planOnly}{@render mesh()}{/if}
 			<div class="more">
 				<Collapse label="Parameters">
 					<Stack gap={24}>
-						<ParamsForm params={runtimeParams} bind:values={params} states={paramStates} resolved={plan?.params} />
+						<ParamsForm params={runtimeParams} bind:values={params} supplied={plan?.params} />
 						<Text bind:value={args} label="Extra arguments" max={512} mono />
 					</Stack>
 				</Collapse>
@@ -532,7 +580,6 @@
 					<Collapse label="Route">
 						<Stack gap={24}>
 							<FieldRow wide>
-								{#if slotOptions.length}<Select bind:value={slotId} options={slotOptions} label="Slot" clearable />{/if}
 								<Duration bind:value={idleUnload} base="s" max={86_400} label="Unload when idle for" emptyZero />
 							</FieldRow>
 							{#if live.host?.facts['criu']}

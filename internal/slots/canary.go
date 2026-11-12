@@ -149,6 +149,7 @@ func (m *Manager) swapCanary(ctx context.Context, h *tasks.Handle, s *v1.Slot, o
 		}
 		h.Logf("step %d held up, the canary served %d requests with %d errors and the occupant %d with %d", i+1, can.Requests, can.Errors, occ.Requests, occ.Errors)
 	}
+	m.take(s.GetId(), run, mesh)
 	return m.promote(ctx, h, s, old, fresh, len(shares), total)
 }
 

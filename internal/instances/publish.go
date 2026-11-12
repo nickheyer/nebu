@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/nickheyer/nebu/internal/pools"
+	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
@@ -86,6 +87,7 @@ func MembershipOf(rt runtimes.Runtime, rec *v1.Instance, schedulerConfig, accele
 		KVCapacity:      kv,
 		SchedulerConfig: schedulerConfig,
 		Inventory:       rec.GetInventory(),
+		Slot:            rec.GetSlotId(),
 	}, nil
 }
 
@@ -209,6 +211,7 @@ func (m *Manager) endpoints(ctx context.Context, in *instance) ([]pools.Publishe
 	if modes := in.modesOf(); len(modes) > 0 {
 		labels[LabelModes] = strings.Join(modes, ",")
 	}
+	chattemplate.SetLabels(labels, m.chatTemplate(in))
 	refs := rankRefs(rec)
 	var out []pools.Published
 	for _, ref := range refs {
@@ -241,6 +244,23 @@ func (m *Manager) endpoints(ctx context.Context, in *instance) ([]pools.Publishe
 		}
 	}
 	return out, nil
+}
+
+// The instance's chat template record, probed from the template its launch runs and kept when the record predates the probe
+func (m *Manager) chatTemplate(in *instance) *v1.ChatTemplate {
+	rec := in.snapshot()
+	tp := rec.GetTemplate()
+	if tp.GetError() != "" || chattemplate.Probed(tp) {
+		return tp
+	}
+	if m.Store == nil || m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
+		return nil
+	}
+	probed := chattemplate.Describe(m.launchTemplate(rec))
+	if tp != nil && probed.GetError() == "" {
+		in.update(func(r *v1.Instance) { r.Template = probed })
+	}
+	return probed
 }
 
 // Publishes a ready instance's endpoints under its own owner, seats left to their conductor

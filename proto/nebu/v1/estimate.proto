@@ -111,6 +111,8 @@ message MemoryPlan {
   google.protobuf.Timestamp planned_at = 12;
   // Learned factor applied to cache_bytes, zero when none was learned
   double cache_ratio = 13;
+  // Host memory the run fills as it serves, beyond its weights, cache and overhead, counted in its host pools
+  uint64 reserve_bytes = 14;
 }
 
 // Learned correction for one runtime and architecture
@@ -139,14 +141,8 @@ message EstimateRequest {
   map<string, string> params = 6;
   string slot_id = 7;
   bool free = 8;
-}
-
-// Parameter bounds for the current model, host, and settings.
-message ParamState {
-  string name = 1;
-  double min = 2;
-  double max = 3;
-  double step = 4;
+  // The params are every param of the plan, the slot's left out instead of laid under them
+  bool exact = 9;
 }
 
 // Resolved blueprint dependency.
@@ -177,11 +173,11 @@ message Part {
   string subfolder = 15;
 }
 
-// Plan, descriptor, and parameter states for the requested inputs.
+// Plan and descriptor for the requested inputs
 message EstimateResponse {
+  reserved 3;
   MemoryPlan plan = 1;
   Descriptor descriptor = 2;
-  repeated ParamState params = 3;
   string warning = 4;
   // Missing dependencies and their download locations.
   repeated Part missing = 5;

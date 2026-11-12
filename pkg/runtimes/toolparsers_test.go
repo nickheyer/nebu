@@ -79,14 +79,6 @@ func TestLaunchToolFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	if args := strings.Join(cmd.Args, " "); strings.Contains(args, "--jinja") {
-		t.Fatalf("a build without the flag does not get it: %s", args)
-	}
-	in.InstallRecord = &v1.Install{Facts: map[string]string{factJinja: "--jinja"}}
-	cmd, err = LlamaCpp{}.Launch(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if args := strings.Join(cmd.Args, " "); !strings.Contains(args, "--jinja") {
-		t.Fatalf("llama.cpp args %s", args)
+		t.Fatalf("an unset jinja is left to llama.cpp: %s", args)
 	}
 }

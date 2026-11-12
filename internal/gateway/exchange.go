@@ -188,6 +188,10 @@ func (r *resolver) Lookup(ctx context.Context, model string) (datalayer.Pool, st
 	return p, a, err
 }
 
+func (r *resolver) Scope(clientModel string, pool datalayer.PoolID, model string) requestcontrol.Scope {
+	return r.next.Scope(clientModel, pool, model)
+}
+
 // Feeds pick latency and fail open fallbacks into metrics and every outcome into its target's counters
 type observer struct{ g *Gateway }
 

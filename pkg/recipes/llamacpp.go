@@ -147,6 +147,140 @@ const llamaEmptySlotFirst = `--- a/tools/server/server-context.cpp
          }
 `
 
+// Keeps idle slots of a unified cache in place, the least recently used moving to the prompt cache for room
+const llamaResidentIdleSlots = `--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1666,7 +1666,7 @@
+                 params_base.cache_idle_slots = false;
+             } else {
+                 if (params_base.kv_unified) {
+-                    SRV_TRC("%s", "idle slots will be saved to prompt cache and cleared upon starting a new task\n");
++                    SRV_TRC("%s", "idle slots keep their cells until a running slot needs them, then move to the prompt cache\n");
+                 } else {
+                     // without a unified KV cache, clearing a slot frees no reusable room, so we only
+                     // publish a RAM-cache copy of idle slots (their KV stays in VRAM) [TAG_IDLE_SLOT_CLEAR]
+@@ -1902,8 +1902,32 @@
+ 
+                 ret->prompt_save(*prompt_cache);
+ 
++                // a unified KV cache holds the prompt only in the cells other slots leave it, so idle ones move to
++                // the prompt cache, the least recently used first, before the state cached for this prompt comes back
++                while (params_base.kv_unified) {
++                    size_t n_held = 0;
++                    for (auto & slot : slots) {
++                        if (&slot != ret) {
++                            n_held += slot.prompt.n_tokens();
++                        }
++                    }
++
++                    if (n_held + task.tokens.size() <= (size_t) n_ctx || !try_clear_idle_slots(ret)) {
++                        break;
++                    }
++                }
++
+                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                     ret->prompt_clear();
++
++                    // a cached state longer than the prompt needs more cells than the prompt does
++                    while (try_clear_idle_slots(ret)) {
++                        if (ret->prompt_load(*prompt_cache, task.tokens)) {
++                            break;
++                        }
++
++                        ret->prompt_clear();
++                    }
+                 }
+ 
+                 prompt_cache->update();
+@@ -1915,36 +1939,42 @@
+         return ret;
+     }
+ 
+-    // return true if at least one slot has been cleared
+-    // TODO: improve logic
+-    //       - smarter decision which slot to clear (LRU or longest prompt?)
+-    //       - move slot to level 2 cache instead of removing?
+-    //       - instead of purging, try to store and resume later?
+-    bool try_clear_idle_slots() {
+-        bool res = false;
+-
++    // return true if a slot has been cleared
++    // the idle slot used longest ago, other than the one to keep, gives up its cells, its state moved to
++    // the prompt cache so its conversation resumes from there instead of being processed again
++    bool try_clear_idle_slots(const server_slot * keep = nullptr) {
+         if (!params_base.kv_unified) {
+-            return res;
++            return false;
+         }
+ 
++        server_slot * lru = nullptr;
++
+         for (auto & slot : slots) {
+-            if (slot.is_processing()) {
++            if (&slot == keep || slot.is_processing() || slot.prompt.n_tokens() == 0) {
+                 continue;
+             }
+ 
+-            if (slot.prompt.n_tokens() > 0) {
+-                SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
++            if (lru == nullptr || slot.t_last_used < lru->t_last_used) {
++                lru = &slot;
++            }
++        }
+ 
+-                slot.prompt_clear();
++        if (lru == nullptr) {
++            return false;
++        }
+ 
+-                res = true;
++        // clear slots one by one
++        if (prompt_cache && lru->prompt_save(*prompt_cache)) {
++            prompt_cache->update();
+ 
+-                // clear slots one by one
+-                break;
+-            }
++            SRV_WRN("moved slot %d with %zu tokens to the prompt cache\n", lru->id, lru->prompt.tokens.size());
++        } else {
++            SRV_WRN("clearing slot %d with %zu tokens, the prompt cache holds its state already or cannot take it\n", lru->id, lru->prompt.tokens.size());
+         }
+ 
+-        return res;
++        lru->prompt_clear();
++
++        return true;
+     }
+ 
+     std::vector<common_adapter_lora_info> construct_lora_list(const std::map<int, float> & config) const {
+@@ -3080,7 +3110,9 @@
+                         break; // drop the task
+                     }
+ 
+-                    if (params_base.cache_idle_slots) {
++                    // with a unified KV cache an idle slot keeps its cells and its conversation resumes in place,
++                    // try_clear_idle_slots moving it to the prompt cache once a running slot needs the room
++                    if (params_base.cache_idle_slots && !params_base.kv_unified) {
+                         for (auto & slot : slots) {
+                             if (!slot.is_processing()) {
+                                 SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
+@@ -3089,11 +3121,6 @@
+                                     SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
+                                     prompt_cache->update();
+                                 }
+-
+-                                if (params_base.kv_unified) {
+-                                    // [TAG_IDLE_SLOT_CLEAR]
+-                                    slot.prompt_clear();
+-                                }
+                             }
+                         }
+                     }
+`
+
 func (LlamaCpp) Patches() []Patch {
-	return []Patch{{ID: "server-empty-slot-first", Content: []byte(llamaEmptySlotFirst)}}
+	return []Patch{
+		{ID: "server-empty-slot-first", Description: "A request that would discard most of a slot's cache takes an empty slot instead", Content: []byte(llamaEmptySlotFirst)},
+		{ID: "server-resident-idle-slots", Description: "Idle slots of a unified cache keep their cells until a running slot needs the room", Content: []byte(llamaResidentIdleSlots)},
+	}
 }

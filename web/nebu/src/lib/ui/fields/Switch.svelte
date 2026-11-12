@@ -11,15 +11,17 @@
 		compact = false,
 		disabled = false,
 		message,
+		// The name a switch without a label goes by
+		aria,
 		onchange
-	}: { checked?: boolean; label?: string; info?: string; compact?: boolean; disabled?: boolean; message?: string; onchange?: (on: boolean) => void } = $props();
+	}: { checked?: boolean; label?: string; info?: string; compact?: boolean; disabled?: boolean; message?: string; aria?: string; onchange?: (on: boolean) => void } = $props();
 
 	const id = fieldId();
 </script>
 
 <div class="switchline" class:compact={compact || !label} class:disabled>
 	{#if label}<span class="words"><FieldLabel {label} {info} forId={id} /></span>{/if}
-	<NeoSwitch {id} bind:checked {disabled} {message} elevation={-1} aria-label={label} onchange={(e) => onchange?.((e.currentTarget as HTMLInputElement).checked)} />
+	<NeoSwitch {id} bind:checked {disabled} {message} elevation={-1} aria-label={label ?? aria} onchange={(e) => onchange?.((e.currentTarget as HTMLInputElement).checked)} />
 </div>
 
 <style>

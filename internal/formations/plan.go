@@ -140,8 +140,11 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, p
 		if err != nil {
 			return nil, fmt.Errorf("%w: slot %s: %v", ErrFormation, run.GetSlotId(), err)
 		}
-		params = runtimes.Merge(slot.GetParams(), run.GetParams())
-		budget, placement, slotArgs, poolBytes = slot.GetMemoryBytes(), slot.GetPlacement(), slot.GetArgs(), slot.GetPoolBytes()
+		// A run carrying every setting of its own leaves the slot's params and words out
+		if !run.GetExact() {
+			params, slotArgs = runtimes.Merge(slot.GetParams(), run.GetParams()), slot.GetArgs()
+		}
+		budget, placement, poolBytes = slot.GetMemoryBytes(), slot.GetPlacement(), slot.GetPoolBytes()
 	}
 	req := planner.Request{
 		Descriptor: descriptor,
@@ -165,7 +168,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, p
 			return 0
 		},
 	}
-	out := &planned{descriptor: descriptor, stored: stored, rt: rt, name: name, params: params, args: runtimes.JoinArgs(slotArgs, run.GetArgs())}
+	out := &planned{descriptor: descriptor, stored: stored, rt: rt, name: name, params: params, args: runtimes.RunArgs(slotArgs, run.GetArgs())}
 	draft, err := m.draft(ctx, params, rt, stored, companions, nodes)
 	if err != nil {
 		return nil, err

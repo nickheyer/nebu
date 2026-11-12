@@ -243,22 +243,5 @@ func (NeMo) Policy() *estimate.Policy {
 		ContextMax:    func(s *estimate.Scope) int64 { return int64(s.Model.ContextTrain) },
 		DevicesParam:  "num_gpus",
 		Shape:         func(p estimate.Params) archs.Run { return archs.Run{Context: float64(p.Int("n_ctx"))} },
-		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
-			gpus := float64(len(host.Kind(s.Host, v1.DeviceKind_DEVICE_KIND_GPU)))
-			return []*v1.ParamState{
-				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
-				bounds("max_batch_size", 1, 0, 1),
-				bounds("micro_batch_size", 1, float64(s.Params.Int("max_batch_size")), 1),
-				bounds("num_gpus", 1, gpus, 1),
-				bounds("tensor_model_parallel_size", 1, gpus, 1),
-				bounds("pipeline_model_parallel_size", 1, gpus, 1),
-				bounds("num_layers_in_first_pipeline_stage", 1, s.Model.Layers, 1),
-				bounds("num_layers_in_last_pipeline_stage", 1, s.Model.Layers, 1),
-				bounds("expert_model_parallel_size", 1, gpus, 1),
-				bounds("expert_tensor_parallel_size", 1, gpus, 1),
-				bounds("context_parallel_size", 1, gpus, 1),
-				bounds("num_cpus", 1, cpuThreads(s.Host), 1),
-			}, ""
-		},
 	}
 }

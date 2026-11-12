@@ -13,7 +13,7 @@
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { deviceLabel } from '#lib/ui/memory.js';
 	import { slotLamp, slotShape } from '#lib/ui/status.js';
-	import { canaryShare, canaryTimeLeft, modelPhrase, policyRows, slotHref } from '#lib/pages/serve/serve.js';
+	import { canaryShare, canaryTimeLeft, installLabel, modelPhrase, policyRows, slotHref } from '#lib/pages/serve/serve.js';
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
 
 	let {
@@ -42,10 +42,12 @@
 			return d ? deviceLabel(live.host, d) : id;
 		})
 	);
-	// Runtime, devices, memory, aliases and the limits the slot sets
+	const pinned = $derived(slot.installId ? live.installs.get(slot.installId) : undefined);
+	// Runtime, install, devices, memory, aliases and the limits the slot sets
 	const tip = $derived(
 		[
 			slot.runtimeId ? `runtime ${slot.runtimeId}` : '',
+			pinned ? `install ${installLabel(pinned)}` : '',
 			devices.length ? `devices ${devices.join(', ')}` : '',
 			slot.memoryBytes ? `memory ${bytes(slot.memoryBytes)}` : '',
 			...Object.entries(slot.poolBytes).map(([pool, n]) => `${pool} ${bytes(n)}`),
@@ -84,10 +86,11 @@
 		void goto(occupied ? `/serve/${encodeURIComponent(slot.instanceId)}` : slotHref(slot.id));
 	}
 
-	// The move the slot's state allows comes first, swap while serving, relaunch after a failure or idle unload
+	// The move the slot's state allows comes first, launch while empty, swap while serving, relaunch after a failure or idle unload
 	const menu = $derived.by((): MenuItem[] => {
 		const items: MenuItem[] = [];
-		if (slot.state === SlotState.READY) items.push({ label: 'Swap', href: `/serve/launch?swap=${slot.id}` });
+		if (slot.state === SlotState.EMPTY) items.push({ label: 'Launch', href: `/serve/launch?slot=${slot.id}` });
+		else if (slot.state === SlotState.READY) items.push({ label: 'Swap', href: `/serve/launch?swap=${slot.id}` });
 		else if (failed || slot.state === SlotState.IDLE) items.push({ label: 'Relaunch', onclick: relaunch });
 		items.push(
 			{ label: 'Edit', href: slotHref(slot.id), divider: items.length > 0 },

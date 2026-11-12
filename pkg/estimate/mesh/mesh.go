@@ -35,8 +35,6 @@ const (
 	relayMaxPrompt = 131072
 	// The scheduler configuration a replicas plan names, prefix cache aware across its seats
 	ReplicasSchedulerConfig = "replicas"
-	// The param group speculative settings live in on every runtime
-	speculativeGroup = "Speculative decoding"
 )
 
 // Returned when the request cannot be planned at all, as opposed to no candidate fitting
@@ -255,7 +253,7 @@ type Request struct {
 // Whether the request sets any speculative decoding param
 func (r Request) speculativeAsked() bool {
 	for _, p := range r.Runtime.Params() {
-		if p.GetGroup() != speculativeGroup {
+		if g := p.GetGroup(); g != runtimes.GroupSpeculative && g != runtimes.GroupDraft {
 			continue
 		}
 		v := strings.TrimSpace(r.Params[p.GetName()])

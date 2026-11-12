@@ -361,7 +361,7 @@ func TestRunRefusesSlotDevicesWithoutMemory(t *testing.T) {
 		},
 	}}}, nil, time.Minute)
 	res := &Reservation{SlotID: "s", Name: "main", DeviceIDs: []string{"blind0"}}
-	m.Slots = oneSlot{res}
+	m.Slots = oneSlot{res, new([]*v1.RunRequest)}
 	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, SlotId: "s"}
 	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "blind0" was not probed`) {
 		t.Fatalf("a slot pinned to a gpu the probes found no memory for: %v", err)

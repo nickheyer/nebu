@@ -285,7 +285,7 @@ func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descri
 	if err != nil {
 		return estimate.Input{}, err
 	}
-	params, err := runtimes.Resolve(rt, overrides)
+	params, err := runtimes.Assume(rt, overrides)
 	if err != nil {
 		return estimate.Input{}, err
 	}
@@ -386,18 +386,23 @@ func shards(path string) []string {
 	return out
 }
 
-// Plans memory use, with what the plan leaves uncounted
+// Plans memory use as the runtime will run it, with what the plan leaves uncounted
 func (i *Inspector) Plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, string, error) {
+	return i.plan(ctx, rt, d, profile, overrides, free, placement, repo, self, companions, false)
+}
+
+// Plans memory use, an unset context as the runtime will pick it or, to reach, as the largest that fits
+func (i *Inspector) plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel, reach bool) (*v1.MemoryPlan, string, error) {
 	in, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, "", err
 	}
+	in.Reach = reach
 	plan, err := rt.Policy().Plan(in)
 	if err != nil {
 		return nil, "", err
 	}
-	_, planWarning := rt.Policy().ParamStates(in, plan)
-	return plan, planWarning, nil
+	return plan, rt.Policy().PlanWarning(in, plan), nil
 }
 
 // Builds the full fit table for a model
@@ -497,10 +502,10 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 				overrides := withContext(runtimes.Merge(i.defaults(rt), layered), rt.Policy().ContextParam, n)
 				// Report fit against both available and total memory.
 				self := i.stored(req.GetSourceId(), req.GetRepo(), d.GetGroup())
-				plan, warning, err := i.Plan(ctx, rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
+				plan, warning, err := i.plan(ctx, rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions, n == 0)
 				var now *v1.MemoryPlan
 				if err == nil {
-					now, _, err = i.Plan(ctx, rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions)
+					now, _, err = i.plan(ctx, rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions, n == 0)
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
@@ -526,15 +531,32 @@ func planFailure(d *v1.Descriptor, rt runtimes.Runtime, err error) string {
 	return fmt.Sprintf("%s: memory on %s cannot be planned", d.GetGroup(), rt.Name())
 }
 
-// Plans one group on one runtime
-func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.EstimateResponse, error) {
+// The source, listing and group a request names, asked of the source
+func (i *Inspector) remote(ctx context.Context, req *v1.EstimateRequest) (sources.Source, *v1.Model, *formats.Group, error) {
 	src, model, err := i.Resolve(ctx, req.GetSourceId(), req.GetRepo(), req.GetRevision())
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	g, err := formats.FindGroup(i.Formats.Groups(model), req.GetGroup())
-	if err != nil {
-		return nil, err
+	return src, model, g, err
+}
+
+// Plans one group on one runtime, a stored group from its own descriptor as a launch reads it
+func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.EstimateResponse, error) {
+	self := i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup())
+	d, formatID := self.GetDescriptor_(), self.GetFormatId()
+	var src sources.Source
+	var model *v1.Model
+	var g *formats.Group
+	var err error
+	if d == nil || d.GetKind() == v1.ModelKind_MODEL_KIND_UNSPECIFIED || !descriptor.Current(d) {
+		if src, model, g, err = i.remote(ctx, req); err != nil {
+			return nil, err
+		}
+		if d, err = i.Describe(ctx, src, model, g); err != nil {
+			return nil, err
+		}
+		formatID = g.FormatID
 	}
 	c, err := i.constraint(ctx, req.GetSlotId())
 	if err != nil {
@@ -546,12 +568,8 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if runtimeID == "" {
 		runtimeID = c.RuntimeID
 	}
-	d, err := i.Describe(ctx, src, model, g)
-	if err != nil {
-		return nil, err
-	}
 	if runtimeID == "" {
-		fallback, err := i.DefaultRuntime(profile, g.FormatID, d.GetKind())
+		fallback, err := i.DefaultRuntime(profile, formatID, d.GetKind())
 		if err != nil {
 			return nil, err
 		}
@@ -561,12 +579,17 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	overrides := runtimes.Merge(i.defaults(rt), c.Params, req.GetParams())
+	// Request params override slot params over the runtime's defaults, an exact request leaving the slot's out
+	slotParams := c.Params
+	if req.GetExact() {
+		slotParams = nil
+	}
+	overrides := runtimes.Merge(i.defaults(rt), slotParams, req.GetParams())
 	companions, err := i.Companions(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
-	in, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
+	in, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), self, companions)
 	if err != nil {
 		return nil, err
 	}
@@ -574,12 +597,18 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	states, planWarning := rt.Policy().ParamStates(in, plan)
-	missing, err := i.missing(ctx, src, model, g, d, rt.Policy().MissingParts(in, plan))
+	parts := rt.Policy().MissingParts(in, plan)
+	// Only parts the plan lacks are looked up at the source, which a stored group was not asked until here
+	if len(parts) > 0 && g == nil {
+		if src, model, g, err = i.remote(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+	missing, err := i.missing(ctx, src, model, g, d, parts)
 	if err != nil {
 		return nil, err
 	}
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Warning: planWarning, Missing: missing}, nil
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Warning: rt.Policy().PlanWarning(in, plan), Missing: missing}, nil
 }
 
 // Resolves missing slots and associates each part with its runtime param.

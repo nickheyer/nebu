@@ -54,7 +54,7 @@ type Observer interface {
 type Pace = poll.Pace
 
 type Options struct {
-	// The pace of each demand, a zero field taking its default, the working pace also bounding one scrape
+	// The pace of each demand, a zero field taking its default, the idle pace also bounding one scrape
 	Pace Pace
 	// Told about every scrape when set
 	Observer Observer
@@ -128,7 +128,7 @@ func New(store datalayer.Store, resolve Resolver, opts Options) *Source {
 	s := &Source{
 		store:    store,
 		resolve:  resolve,
-		timeout:  pace.Working,
+		timeout:  pace.Idle,
 		observer: opts.Observer,
 		client:   newClient(opts.Dial),
 		fails:    map[datalayer.EndpointID]*failures{},

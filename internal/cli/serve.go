@@ -35,7 +35,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	shape := fs.String("shape", "", "formation shape: auto, chain, lockstep, relay, replicas, draft, or stages")
 	profile := fs.String("profile", "", "what the planner weighs: chat, agent, batch, or auto")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot's, which the slot then keeps")
 	snapshot := fs.Bool("snapshot", false, "snapshot the process with CRIU once ready, later launches restoring it instead of starting cold")
 	readRoute := runRouteFlags(fs)
 	positional, err := e.parse(fs, args, 1, 1, "run <repo> [flags] [--snapshot] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF]... [--mutating-tools] [--idle-unload D]")
@@ -342,7 +342,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	fs.Var(&canaryStep, "canary-step-percent", "`percent` added to the new model's share after each step it holds up through, one step when 0")
 	fs.Var(&canaryRegression, "canary-max-regression-percent", "`points` of error rate and objective attainment, and percent of mean TTFT and TPOT, the new model may trail by (default 10)")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot's, which the slot then keeps")
 	positional, err := e.parse(fs, args, 2, 2, "swap <slot> <repo> [flags] [--canary-percent N --canary-seconds N [--canary-step-percent N] [--canary-max-regression-percent N]]")
 	if err != nil {
 		return err
@@ -538,9 +538,10 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	memory := fs.String("memory", "", "the most memory a run takes per pool, such as 8GiB, whole pools when empty")
 	fs.Var(&poolMemory, "pool-memory", "the most memory a run takes from one pool as pool=size, node/pool=size for one on another member, repeatable or comma separated")
 	placement := fs.String("placement", "", "placement: device, host, or auto (device first, then host)")
-	fs.StringVar(&req.RuntimeId, "runtime", "", "default runtime for models run in the slot")
+	fs.StringVar(&req.RuntimeId, "runtime", "", "runtime the slot launches models with")
+	fs.StringVar(&req.InstallId, "install", "", "install of the runtime the slot launches, from nebu runtimes installs, the runtime's newest when empty")
 	fs.UintVar(&position, "position", 0, "place in the slot list, one based, last when 0")
-	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
+	fs.Var(&params, "param", "runtime param the slot launches with as name=value, repeatable")
 	fs.StringVar(&req.Args, "args", "", "extra words for the server command, split like a shell, with templates such as {{.Name}}, {{.Port}}, {{.Model}}, {{.Params.n_ctx}}, {{env \"KEY\"}}")
 	policy, limits := policyFlags(fs)
 	req.Policy = policy
@@ -581,14 +582,14 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME[=SLOT]] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--pool-memory POOL=8GiB] [--runtime R] [--param k=v] [--args \"--flag {{.Name}}\"] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME[=SLOT]] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--pool-memory POOL=8GiB] [--runtime R] [--install ID] [--param k=v] [--args \"--flag {{.Name}}\"] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
 		return err
 	}
-	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, PoolBytes: settings.PoolBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Args: settings.Args, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
+	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, PoolBytes: settings.PoolBytes, RuntimeId: settings.RuntimeId, InstallId: settings.InstallId, Params: settings.Params, Args: settings.Args, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
 	if err != nil {
 		return err
 	}
@@ -612,7 +613,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// Updates replace all fields. Merge flag changes into the current slot
 	cur := current.Msg.GetSlot()
-	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), PoolBytes: cur.GetPoolBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Args: cur.GetArgs(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), PoolBytes: cur.GetPoolBytes(), RuntimeId: cur.GetRuntimeId(), InstallId: cur.GetInstallId(), Params: cur.GetParams(), Args: cur.GetArgs(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
 		req.Policy = &v1.Policy{}
 	}
@@ -648,7 +649,13 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 		case "placement":
 			req.Placement = settings.Placement
 		case "runtime":
+			// Another runtime drops the install pinned for the one before it unless the flags name one
+			if req.RuntimeId != settings.RuntimeId && !set["install"] {
+				req.InstallId = ""
+			}
 			req.RuntimeId = settings.RuntimeId
+		case "install":
+			req.InstallId = settings.InstallId
 		case "param":
 			req.Params = settings.Params
 		case "args":
@@ -827,6 +834,7 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 			{"budget", estimate.Human(s.GetMemoryBytes())},
 			{"pool caps", poolMemoryText(s.GetPoolBytes())},
 			{"runtime", s.GetRuntimeId()},
+			{"install", s.GetInstallId()},
 			{"params", compact(s.GetParams())},
 			{"args", s.GetArgs()},
 			{"limits", policyText(s.GetPolicy())},

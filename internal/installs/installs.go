@@ -198,6 +198,7 @@ const (
 	fieldImage   = "image"
 	fieldForce   = "force"
 	varPrefix    = "var."
+	patchPrefix  = "patch."
 )
 
 var sandboxNames = []string{"host", "oci"}
@@ -279,6 +280,9 @@ func buildFields(rc recipes.Recipe, sel *build.Selection, profile *v1.HostProfil
 	for _, v := range rc.Vars() {
 		fields = append(fields, &v1.ConfigField{Name: varPrefix + v.Name, Label: firstOr(v.Label, v.Name), Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Vars[v.Name], Choices: v.Choices, Description: v.Description})
 	}
+	for _, p := range rc.Patches() {
+		fields = append(fields, &v1.ConfigField{Name: patchPrefix + p.ID, Label: "Patch " + p.ID, Type: v1.ConfigType_CONFIG_TYPE_BOOL, Default: "true", Description: p.Description})
+	}
 	return fields
 }
 
@@ -332,7 +336,7 @@ func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.Hos
 		known[name] = true
 	}
 	for k := range settings {
-		if !known[k] && !strings.HasPrefix(k, varPrefix) {
+		if !known[k] && !strings.HasPrefix(k, varPrefix) && !strings.HasPrefix(k, patchPrefix) {
 			return nil, fmt.Errorf("%w: install method %s takes no setting %q", runtimes.ErrParam, method, k)
 		}
 	}
@@ -377,7 +381,17 @@ func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.Hos
 			if strings.HasPrefix(k, varPrefix) {
 				p.build.Vars[strings.TrimPrefix(k, varPrefix)] = v
 			}
+			if id, named := strings.CutPrefix(k, patchPrefix); named && strings.TrimSpace(v) != "" {
+				on, err := strconv.ParseBool(strings.TrimSpace(v))
+				if err != nil {
+					return nil, fmt.Errorf("%w: %s: %v", runtimes.ErrParam, k, err)
+				}
+				if !on {
+					p.build.SkipPatches = append(p.build.SkipPatches, id)
+				}
+			}
 		}
+		slices.Sort(p.build.SkipPatches)
 		// Validate before starting work.
 		if _, _, err := m.resolveBuild(ctx, p.build); err != nil {
 			return nil, err
@@ -621,7 +635,7 @@ func (m *Manager) holder(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	for _, s := range slots {
-		if s.GetRequest().GetInstallId() == id {
+		if s.GetInstallId() == id {
 			return "slot " + s.GetName(), nil
 		}
 	}

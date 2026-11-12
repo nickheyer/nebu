@@ -114,6 +114,9 @@ func Describe(rc recipes.Recipe, profile *v1.HostProfile) *v1.Recipe {
 		}
 		out.Variants = append(out.Variants, pv)
 	}
+	for _, p := range rc.Patches() {
+		out.Patches = append(out.Patches, &v1.Patch{Id: p.ID, Description: p.Description})
+	}
 	return out
 }
 
@@ -193,12 +196,14 @@ func Variants(rc recipes.Recipe, profile *v1.HostProfile) []recipes.Variant {
 
 // Caller choices and site defaults for one build
 type Options struct {
-	Variant  string
-	Vars     map[string]string
-	Sandbox  v1.SandboxKind
-	Image    string
-	Ref      string
-	Defaults *v1.Builds
+	Variant string
+	Vars    map[string]string
+	Sandbox v1.SandboxKind
+	Image   string
+	Ref     string
+	// Recipe patches the build leaves out, by id
+	SkipPatches []string
+	Defaults    *v1.Builds
 }
 
 // Resolved build selection.
@@ -213,6 +218,8 @@ type Selection struct {
 	Image string
 	Ref   string
 	Facts map[string]string
+	// Recipe patches the build applies, by id in recipe order
+	Patches []string
 	// Tools the chosen variant needs that the host lacks, under the host sandbox
 	MissingTools []string
 	// Tools any variant needs that the host lacks
@@ -243,6 +250,9 @@ func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selectio
 		sel.Ref = Latest
 	}
 	sel.resolveVars()
+	if err := sel.pickPatches(opts.SkipPatches); err != nil {
+		return nil, err
+	}
 	sel.CLIs = CLIs(rc, opts.Defaults)
 	sel.CLI, _ = sandbox.Detect(sel.CLIs)
 	sel.AbsentTools = sandbox.MissingTools(allTools(rc))
@@ -287,6 +297,26 @@ func (s *Selection) resolveVars() {
 			s.Vars[k] = strings.TrimSpace(v)
 		}
 	}
+}
+
+// Keeps every recipe patch the caller did not leave out, refusing an id the recipe lacks
+func (s *Selection) pickPatches(skip []string) error {
+	left := map[string]bool{}
+	for _, id := range skip {
+		left[strings.TrimSpace(id)] = true
+	}
+	s.Patches = nil
+	for _, p := range s.Recipe.Patches() {
+		if left[p.ID] {
+			delete(left, p.ID)
+			continue
+		}
+		s.Patches = append(s.Patches, p.ID)
+	}
+	for id := range left {
+		return fmt.Errorf("%w: recipe %s has no patch %q", ErrSelection, s.Recipe.ID(), id)
+	}
+	return nil
 }
 
 func (s *Selection) pickVariant(want string) error {

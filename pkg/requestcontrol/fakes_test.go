@@ -2,6 +2,7 @@ package requestcontrol
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"sync"
@@ -165,29 +166,37 @@ type fakeFlow struct {
 	admitted atomic.Int64
 	released atomic.Int64
 	doubled  atomic.Int64
-	requeued atomic.Int64
+	// Placements that found no room and were run again, and those of them that named the pool full
+	held atomic.Int64
+	full atomic.Int64
 	// Tokens the last settled permit reported
 	prompt atomic.Int64
 	output atomic.Int64
 }
 
+// Runs the item's placement until it finds room, answering the configured error or the placement's own first
 func (f *fakeFlow) Admit(ctx context.Context, item *flowcontrol.Item) (flowcontrol.Permit, error) {
 	f.mu.Lock()
 	f.items = append(f.items, *item)
-	err := f.err
 	f.mu.Unlock()
-	if err != nil {
-		return nil, err
+	for {
+		f.mu.Lock()
+		err := f.err
+		f.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		switch err := item.Place(); {
+		case err == nil:
+			f.admitted.Add(1)
+			return &fakePermit{flow: f}, nil
+		case !errors.Is(err, flowcontrol.ErrNoRoom):
+			return nil, err
+		case errors.Is(err, flowcontrol.ErrPoolFull):
+			f.full.Add(1)
+		}
+		f.held.Add(1)
 	}
-	f.admitted.Add(1)
-	return &fakePermit{flow: f}, nil
-}
-
-// Releases the permit and hands out a fresh one, counting the round trip
-func (f *fakeFlow) Requeue(ctx context.Context, pm flowcontrol.Permit, item *flowcontrol.Item) (flowcontrol.Permit, error) {
-	pm.Release()
-	f.requeued.Add(1)
-	return f.Admit(ctx, item)
 }
 
 func (f *fakeFlow) Usage(string) flowcontrol.Usage { return flowcontrol.Usage{} }

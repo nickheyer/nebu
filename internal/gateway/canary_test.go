@@ -82,13 +82,15 @@ func TestCanarySplitInOnePool(t *testing.T) {
 	if _, err := h.mgr.NameRoute(ctx, slot, "foo", pools.RouteSpec{ServedName: "foo"}); err != nil {
 		t.Fatal(err)
 	}
+	occupant := mem
+	occupant.Slot = slot.ID
 	for served, srv := range map[string]string{"foo": oldSrv.URL, "foo-v2": newSrv.URL} {
 		addr, err := datalayer.ParseAddress(strings.TrimPrefix(srv, "http://"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		owner := pools.OwnerRef{Kind: pools.OwnerInstance, ID: served}
-		if err := h.mgr.Publish(ctx, owner, mem, []pools.Published{{InstanceID: served, NodeID: testNode, Address: addr, Ready: true, Labels: map[string]string{instances.LabelServed: served}}}); err != nil {
+		if err := h.mgr.Publish(ctx, owner, occupant, []pools.Published{{InstanceID: served, NodeID: testNode, Address: addr, Ready: true, Labels: map[string]string{instances.LabelServed: served}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -56,9 +56,12 @@ func ScopeOf(in Launch, cmd *Command) ArgScope {
 	return ArgScope{Name: in.Name, Host: in.Host, Port: port, Model: model, Artifacts: in.Artifacts, Params: params, Devices: devices, Install: in.Install, Seat: in.Seat}
 }
 
-// Joins a slot's extra words and a run's, the run's last so a repeated flag takes its value
-func JoinArgs(slot, run string) string {
-	return strings.TrimSpace(strings.TrimSpace(slot) + " " + strings.TrimSpace(run))
+// The extra words a run launches with, its own when it names any and its slot's otherwise
+func RunArgs(slot, run string) string {
+	if run = strings.TrimSpace(run); run != "" {
+		return run
+	}
+	return strings.TrimSpace(slot)
 }
 
 // Checks that extra words split by shell quoting and parse as templates

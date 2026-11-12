@@ -61,14 +61,14 @@ func leasedEnv(t *testing.T) (*env, *leaseSampler) {
 	return e, s
 }
 
-// The pool's ready endpoints are sampled while the request is admitted and scheduled, then its endpoint while it is in flight
+// The pool's ready endpoints are sampled before the request is admitted, then its endpoint while it is in flight
 func TestDecisionLeasesSamples(t *testing.T) {
 	e, s := leasedEnv(t)
 	dec, err := e.dir.Decide(context.Background(), inbound(t, chat("llama")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"deciding e1,e2", "schedule", "decided e1,e2", "serving e1"}
+	want := []string{"deciding e1,e2", "decided e1,e2", "schedule", "serving e1"}
 	if got := s.list(); !slices.Equal(got, want) {
 		t.Fatalf("leases %v, want %v", got, want)
 	}
@@ -77,7 +77,7 @@ func TestDecisionLeasesSamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.dir.ResponseComplete(context.Background(), dec, nil)
-	want = append(want, "deciding e1,e2", "schedule", "decided e1,e2")
+	want = append(want, "deciding e1,e2", "decided e1,e2", "schedule")
 	if got := s.list(); !slices.Equal(got, want) {
 		t.Fatalf("leases with a second request in flight on the endpoint %v, want %v", got, want)
 	}
@@ -99,7 +99,7 @@ func TestServingLeaseFollowsTheServingEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.dir.ResponseComplete(context.Background(), dec, nil)
-	want := []string{"deciding e1,e2", "schedule", "decided e1,e2", "serving e1", "served e1", "serving e2", "served e2"}
+	want := []string{"deciding e1,e2", "decided e1,e2", "schedule", "serving e1", "served e1", "serving e2", "served e2"}
 	if got := s.list(); !slices.Equal(got, want) {
 		t.Fatalf("leases %v, want %v", got, want)
 	}
@@ -116,7 +116,7 @@ func TestRefusedDecisionReleasesItsLease(t *testing.T) {
 	if _, err := e.dir.Decide(context.Background(), inbound(t, chat("llama"))); !errors.Is(err, boom) {
 		t.Fatalf("err %v, want the scheduler's", err)
 	}
-	if got, want := s.list(), []string{"deciding e1,e2", "schedule", "decided e1,e2"}; !slices.Equal(got, want) {
+	if got, want := s.list(), []string{"deciding e1,e2", "decided e1,e2", "schedule"}; !slices.Equal(got, want) {
 		t.Fatalf("leases %v, want %v", got, want)
 	}
 }

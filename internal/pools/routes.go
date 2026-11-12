@@ -439,7 +439,7 @@ func (m *Manager) putRouteLocked(ctx context.Context, name string, cur, rs *rout
 	}
 	next := &v1.Route{Name: name, Meta: meta, Spec: spec, OwnerKind: rs.owner.Kind, OwnerId: rs.owner.ID, NodeId: rs.nodeID}
 	conds := slices.Clone(rs.conds)
-	next.Status = m.routeStatusLocked(rs, next, &conds)
+	next.Status = m.routeStatusLocked(m.servingLocked(), rs, next, &conds)
 	switch {
 	case persisted(rs.owner):
 		if err := m.db.PutRoute(ctx, rs.stored(next)); err != nil {
@@ -468,7 +468,7 @@ func (m *Manager) deleteRouteLocked(ctx context.Context, name string) {
 		rs.dropped = err
 		conds := slices.Clone(rs.conds)
 		next := proto.Clone(rs.route).(*v1.Route)
-		next.Status = m.routeStatusLocked(rs, next, &conds)
+		next.Status = m.routeStatusLocked(m.servingLocked(), rs, next, &conds)
 		rs.route, rs.conds = next, conds
 		m.emitLocked(v1.EventKind_EVENT_KIND_ROUTE, v1.EventAction_EVENT_ACTION_UPDATED, name, next)
 		return
@@ -507,10 +507,11 @@ func (m *Manager) refreshRoutesLocked(ctx context.Context) {
 		delete(m.st.routes, name)
 		m.emitLocked(v1.EventKind_EVENT_KIND_ROUTE, v1.EventAction_EVENT_ACTION_DELETED, name, rs.route)
 	}
+	v := m.servingLocked()
 	for _, name := range slices.Sorted(maps.Keys(m.st.routes)) {
 		rs := m.st.routes[name]
 		conds := slices.Clone(rs.conds)
-		status := m.routeStatusLocked(rs, rs.route, &conds)
+		status := m.routeStatusLocked(v, rs, rs.route, &conds)
 		if proto.Equal(status, rs.route.GetStatus()) && !rs.dirty {
 			continue
 		}
@@ -528,12 +529,34 @@ func (m *Manager) refreshRoutesLocked(ctx context.Context) {
 	}
 }
 
-// The status a route has now, draining while every target's owner drains, ready while a target pool has a ready endpoint
-func (m *Manager) routeStatusLocked(rs *routeState, r *v1.Route, conds *[]conditions.Condition) *v1.RouteStatus {
+// Whether a ready healthy endpoint serves a target of the route, judged by the served names and holders in v
+func (m *Manager) routeReadyLocked(v *view, rs *routeState, r *v1.Route) bool {
+	for _, rr := range r.GetSpec().GetRules() {
+		c := &rule{user: rs.owner == (OwnerRef{}), targets: m.ruleTargetsLocked(rs, rr, false)}
+		for _, t := range c.targets {
+			if m.st.pools[t.pool] != nil && len(m.readyIn(v, m.ruleScope(v, c, t.pool, m.targetModel(t)))) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The served names and endpoint holders as the state holds them now, what route readiness is judged against
+func (m *Manager) servingLocked() *view {
+	v := &view{served: m.servedLocked(), holders: make(map[datalayer.EndpointID][]OwnerRef, len(m.st.endpoints))}
+	for id, owner := range m.st.endpoints {
+		v.holders[id] = m.holdersLocked(owner)
+	}
+	return v
+}
+
+// A route's status now, draining while every target's owner drains, ready while an endpoint serving a target is ready
+func (m *Manager) routeStatusLocked(v *view, rs *routeState, r *v1.Route, conds *[]conditions.Condition) *v1.RouteStatus {
 	gen := r.GetMeta().GetGeneration()
 	status := &v1.RouteStatus{ObservedGeneration: gen, Shape: rs.shape, Seats: slices.Clone(rs.seats)}
 	var missing []string
-	ready := false
+	ready := m.routeReadyLocked(v, rs, r)
 	seen := map[string]bool{}
 	for _, rule := range r.GetSpec().GetRules() {
 		for _, t := range rule.GetTargets() {
@@ -543,7 +566,6 @@ func (m *Manager) routeStatusLocked(rs *routeState, r *v1.Route, conds *[]condit
 				missing = append(missing, id)
 				continue
 			}
-			ready = ready || ps.ready > 0
 			if !seen[id] {
 				seen[id] = true
 				status.PoolIds = append(status.PoolIds, id)
@@ -565,9 +587,9 @@ func (m *Manager) routeStatusLocked(rs *routeState, r *v1.Route, conds *[]condit
 		refs.Status, refs.Reason, refs.Message = conditions.False, ReasonInvalidPoolRef, "target pools "+strings.Join(missing, ", ")+" do not exist"
 	}
 	conditions.Set(conds, refs)
-	readyCond := conditions.Condition{Type: ConditionReady, Status: conditions.True, Reason: ReasonReady, Message: "a target pool has a ready endpoint", ObservedGeneration: g}
+	readyCond := conditions.Condition{Type: ConditionReady, Status: conditions.True, Reason: ReasonReady, Message: "an endpoint serving a target is ready", ObservedGeneration: g}
 	if !ready {
-		readyCond.Status, readyCond.Reason, readyCond.Message = conditions.False, ReasonNoReadyEndpoints, "no target pool has a ready endpoint"
+		readyCond.Status, readyCond.Reason, readyCond.Message = conditions.False, ReasonNoReadyEndpoints, "no endpoint serving a target is ready"
 	}
 	conditions.Set(conds, readyCond)
 	status.Conditions = protoConditions(*conds)

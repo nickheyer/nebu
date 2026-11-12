@@ -107,7 +107,7 @@ func sampleInstance() *v1.Instance {
 		Measurements:   []*v1.Measurement{{Key: "device.weights", Bytes: 9, Line: "x"}, {Key: "device.used", Bytes: 11}},
 		Request:        &v1.RunRequest{SourceId: "hf", Repo: "org/repo", Group: "Q4", RuntimeId: "llamacpp", Name: "qwen", Params: map[string]string{"n_ctx": "8192"}, Args: "--cache-reuse 256", Snapshot: true},
 		DesiredRunning: true,
-		Template:       &v1.ChatTemplate{Source: "tokenizer.chat_template", Tools: v1.ToolSupport_TOOL_SUPPORT_NATIVE},
+		Template:       &v1.ChatTemplate{Source: "tokenizer.chat_template", Tools: v1.ToolSupport_TOOL_SUPPORT_NATIVE, Efforts: []string{"low", "medium", "xhigh"}, ReadsEffort: true, Thinking: v1.Thinking_THINKING_SWITCHED, ThinkingSwitch: "enable_thinking"},
 		Inventory:      &v1.RuntimeInventory{ContextLength: 8192, Quantization: "Q4_K_M", Accelerator: "1x NVIDIA H100 80GB HBM3", Modalities: []string{"text", "image"}, ThroughputClass: "offload"},
 	}
 }
@@ -136,7 +136,7 @@ func TestInstances(t *testing.T) {
 	in.State = v1.InstanceState_INSTANCE_STATE_STOPPED
 	in.DesiredRunning = false
 	in.Triage = nil
-	in.Template = &v1.ChatTemplate{Error: "no chat template among the model's files"}
+	in.Template = &v1.ChatTemplate{Source: "chat_template.jinja", Tools: v1.ToolSupport_TOOL_SUPPORT_EMULATED, Thinking: v1.Thinking_THINKING_UNSPECIFIED, ReasoningError: "'NoneType' object is not iterable"}
 	in.StoppedAt = timestamppb.New(time.Unix(2000, 0))
 	if err := d.PutInstance(ctx, in); err != nil {
 		t.Fatal(err)

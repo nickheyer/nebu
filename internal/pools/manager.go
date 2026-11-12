@@ -115,8 +115,8 @@ type state struct {
 type poolState struct {
 	id     datalayer.PoolID
 	owners []OwnerRef
-	// Whether an owner was woken for a request and no endpoint has joined since
-	waking bool
+	// Owners woken for a request with no endpoint serving for them joined since
+	waking map[OwnerRef]bool
 	user   *v1.PoolSpec
 	// The parsed addresses of the user spec's static endpoints in spec order
 	userAddrs []datalayer.Address

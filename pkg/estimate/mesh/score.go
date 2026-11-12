@@ -175,7 +175,7 @@ func Plan(req Request, m *Mesh) (*v1.FormationPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPlan, err)
 	}
-	if pl.params, err = runtimes.Resolve(req.Runtime, overrides); err != nil {
+	if pl.params, err = runtimes.Assume(req.Runtime, overrides); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPlan, err)
 	}
 	// Companion parts widen a diffusion descriptor before the shapes split it.

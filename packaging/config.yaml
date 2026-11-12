@@ -24,8 +24,6 @@ logging:
 #   flow_control:
 #     queue_capacity: 1024
 #     queue_timeout_ms: 30000
-#     saturation_queue_depth: 5
-#     saturation_kv_utilization: 0.8
 # telemetry:
 #   endpoint: otel-collector:4318  # OTLP over HTTP
 #   sample_ratio: 0.1

@@ -493,7 +493,7 @@ func runCard(ctx context.Context, e *env, args []string) error {
 func runInspect(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("inspect")
 	source := fs.String("source", "", "source id (default: first configured)")
-	slot := fs.String("slot", "", "slot id or name to plan inside, its devices, budget, and defaults")
+	slot := fs.String("slot", "", "slot id or name to plan inside, its devices, budget, and settings")
 	meshFit := fs.Bool("mesh", false, "the fit table across the mesh: every shape and node set for the stored groups")
 	span := fs.String("span", "", "with --mesh, the nodes the plan may use, comma separated")
 	shape := fs.String("shape", "", "with --mesh, one shape instead of every shape")
@@ -502,7 +502,7 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	fs.Var(&runtimes, "runtime", "runtime id, repeatable")
 	fs.Var(&groups, "group", "weight group name, repeatable")
 	fs.Var(&contexts, "ctx", "context length, repeatable")
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot's")
 	positional, err := e.parse(fs, args, 1, 1, "inspect <repo>[@revision] [flags]")
 	if err != nil {
 		return err
@@ -625,5 +625,5 @@ func placements(plan *v1.MemoryPlan) string {
 
 // Summarizes a plan
 func planLine(plan *v1.MemoryPlan) string {
-	return fmt.Sprintf("%s device %s host %s cache %s %s %s", loud(plan.GetVerdict()), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail())
+	return fmt.Sprintf("%s device %s host %s cache %s reserve %s %s %s", loud(plan.GetVerdict()), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), estimate.Human(plan.GetReserveBytes()), placements(plan), plan.GetDetail())
 }

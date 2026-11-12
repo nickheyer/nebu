@@ -86,7 +86,7 @@ func TestShadowProfileHandler(t *testing.T) {
 	if works.Profile != "works" || works.Err != nil || !slices.Equal(schedtest.IDs(works.Shadow.Endpoints), []string{"p"}) || schedtest.IDs(works.Primary.Endpoints)[0] != "d" {
 		t.Fatalf("working shadow outcome %+v", works)
 	}
-	if empty.Profile != "empty" || !errors.Is(empty.Err, framework.ErrNoEndpoints) || empty.Shadow != nil {
+	if empty.Profile != "empty" || !errors.Is(empty.Err, framework.ErrSaturated) || empty.Shadow != nil {
 		t.Fatalf("failing shadow outcome %+v", empty)
 	}
 

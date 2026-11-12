@@ -678,7 +678,7 @@ func TestChainWithLocalDraft(t *testing.T) {
 		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetWeightsBytes() <= 20*gib {
 			t.Fatalf("the head's plan holds the draft too: %v", s.GetMemory().GetWeightsBytes())
 		}
-		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetParams()["spec_type"] != estimate.Auto {
+		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetParams()["spec_type"] != "" {
 			t.Fatalf("the head leaves the method to llama.cpp: %v", s.GetMemory().GetParams()["spec_type"])
 		}
 	}

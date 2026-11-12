@@ -11,7 +11,7 @@
 		fetch,
 		label,
 		info,
-		placeholder,
+		message,
 		current,
 		filter = 'any',
 		disabled = false,
@@ -21,7 +21,7 @@
 		fetch: PickerFetch<string>;
 		label?: string;
 		info?: string;
-		placeholder?: string;
+		message?: string;
 		current?: string;
 		filter?: BrowseFilter;
 		disabled?: boolean;
@@ -44,5 +44,24 @@
 	</NeoButton>
 {/snippet}
 
-<Picker value={value || undefined} {fetch} {label} {info} {placeholder} {disabled} {current} clearable trailing={browse} onchange={set} />
+<div class="part">
+	<Picker value={value || undefined} {fetch} {label} {info} {message} {disabled} {current} clearable trailing={browse} onchange={set} />
+</div>
 <DirectoryBrowser bind:open {start} {filter} onpick={set} />
+
+<style>
+	/* The browse button fits inside a box as tall as a select beside it */
+	.part {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+	.part :global(.neo-input-after) {
+		padding-top: 0;
+		padding-bottom: 0;
+	}
+	.part :global(.neo-input-after .neo-button) {
+		--neo-btn-min-width: 2rem;
+		--neo-btn-padding-empty: 0.375rem;
+	}
+</style>

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/instances/fake"
 	"github.com/nickheyer/nebu/internal/pools"
+	"github.com/nickheyer/nebu/pkg/chattemplate"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/runtimes"
@@ -107,5 +108,30 @@ func TestBootstrapPortLabel(t *testing.T) {
 				t.Fatalf("bootstrap port label %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// Every relay seat's endpoint carries the reasoning settings of the template the decode head recorded
+func TestSeatTemplateReasoningLabels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := argsConductor(t, ctx)
+	f := &v1.Formation{Id: "f1", Name: "f", Shape: v1.Shape_SHAPE_RELAY}
+	tpl := &v1.ChatTemplate{Efforts: []string{"low", "medium", "xhigh"}, ReadsEffort: true, Thinking: v1.Thinking_THINKING_SWITCHED, ThinkingSwitch: "enable_thinking"}
+	prefill := &v1.Instance{Id: "p", Endpoint: "http://127.0.0.1:30000", Seat: &v1.SeatSpec{Shape: v1.Shape_SHAPE_RELAY, Role: runtimes.RolePrefill}}
+	decode := &v1.Instance{Id: "d", Endpoint: "http://127.0.0.1:30001", Seat: &v1.SeatSpec{Shape: v1.Shape_SHAPE_RELAY, Role: runtimes.RoleDecode}, Template: tpl}
+	var eps []pools.Published
+	for _, in := range []*v1.Instance{prefill, decode} {
+		seatEps, err := m.seatPublished(f, runtimes.LlamaCpp{}, &v1.Seat{NodeId: m.self(), Role: in.GetSeat().GetRole(), InstanceId: in.GetId()}, in)
+		if err != nil || len(seatEps) != 1 {
+			t.Fatalf("published %v %v", seatEps, err)
+		}
+		eps = append(eps, seatEps...)
+	}
+	labelReasoning(eps, []*v1.Instance{prefill, decode})
+	for _, ep := range eps {
+		if got := chattemplate.FromLabels(ep.Labels); !proto.Equal(got, tpl) {
+			t.Fatalf("%s labels %v read back %v", ep.InstanceID, ep.Labels, got)
+		}
 	}
 }

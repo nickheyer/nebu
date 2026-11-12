@@ -9,7 +9,7 @@ func queue(b *band, fairness string, costs ...int) []*waiter {
 	var ws []*waiter
 	for _, c := range costs {
 		w := &waiter{item: &Item{Cost: c}, cost: chargeOf(&Item{Cost: c})}
-		b.add(w, fairness, false)
+		b.add(w, fairness)
 		ws = append(ws, w)
 	}
 	return ws
@@ -99,5 +99,24 @@ func TestBandSkipsHeldItemsAndResetsIdleCredit(t *testing.T) {
 	b.remove(free[0])
 	if w := b.pick(notHeld); w != nil {
 		t.Fatalf("picked %+v with every item held", w)
+	}
+}
+
+// A pick whose waiter is not dispatched gives back the turn and every credit change it made
+func TestUnpickRestoresTurnAndCredit(t *testing.T) {
+	b := newBand(0)
+	held := queue(b, "a", 4)
+	free := queue(b, "b", 4)
+	b.flows["a"].deficit = 3
+	notHeld := func(w *waiter) bool { return !slices.Contains(held, w) }
+	if w := b.pick(notHeld); w != free[0] {
+		t.Fatalf("picked %+v, want the only eligible item", w)
+	}
+	b.unpick()
+	if a, f := b.flows["a"], b.flows["b"]; a.deficit != 3 || f.deficit != 0 || f.granted || b.cur != a {
+		t.Fatalf("after unpick flow a credit %d, flow b credit %d granted %v, turn on a %v", a.deficit, f.deficit, f.granted, b.cur == a)
+	}
+	if w := b.pick(func(*waiter) bool { return false }); w != nil || b.flows["a"].deficit != 3 || b.cur != b.flows["a"] {
+		t.Fatalf("a pick finding nothing changed credit to %d or moved the turn", b.flows["a"].deficit)
 	}
 }

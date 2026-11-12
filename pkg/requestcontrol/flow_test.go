@@ -55,8 +55,8 @@ func TestSubsetFilteredBeforeScheduler(t *testing.T) {
 	}
 }
 
-// A saturated answer from the scheduler sends the request back through flow control until an endpoint has room
-func TestSaturatedSchedulerRequeues(t *testing.T) {
+// A saturated answer from the scheduler keeps the request in flow control until a pick finds room
+func TestSaturatedSchedulerWaitsInFlowControl(t *testing.T) {
 	cases := []struct {
 		name      string
 		saturated int
@@ -79,14 +79,14 @@ func TestSaturatedSchedulerRequeues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if dec.FailedOpen || e.flow.requeued.Load() != int64(c.saturated) || e.sched.calls.Load() != int64(c.saturated)+1 {
-				t.Fatalf("failed open %v requeued %d scheduler calls %d", dec.FailedOpen, e.flow.requeued.Load(), e.sched.calls.Load())
+			if dec.FailedOpen || e.flow.held.Load() != int64(c.saturated) || e.sched.calls.Load() != int64(c.saturated)+1 {
+				t.Fatalf("failed open %v held %d scheduler calls %d", dec.FailedOpen, e.flow.held.Load(), e.sched.calls.Load())
 			}
 			e.dir.ResponseComplete(context.Background(), dec, nil)
 			e.settled(t)
 		})
 	}
-	t.Run("requeue refusal is shed", func(t *testing.T) {
+	t.Run("a queue timeout while waiting is shed", func(t *testing.T) {
 		e := newEnv(t)
 		e.sched.fn = func(context.Context, *framework.Request, []datalayer.Endpoint) (*framework.Result, error) {
 			e.flow.mu.Lock()
@@ -100,6 +100,46 @@ func TestSaturatedSchedulerRequeues(t *testing.T) {
 		}
 		e.settled(t)
 	})
+}
+
+// A saturated pick names the pool full only while every ready endpoint is at its request capacity
+func TestSaturatedPickNamesAFullPool(t *testing.T) {
+	cases := []struct {
+		name     string
+		capacity int
+		assumed  map[datalayer.EndpointID]int
+		full     int64
+	}{
+		{"every endpoint at capacity", 2, map[datalayer.EndpointID]int{"e1": 2, "e2": 2}, 1},
+		{"one endpoint under capacity", 2, map[datalayer.EndpointID]int{"e1": 2, "e2": 1}, 0},
+		{"endpoints without a capacity", 0, map[datalayer.EndpointID]int{"e1": 9, "e2": 9}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			for id, n := range c.assumed {
+				e.store.SetAttribute(id, datalayer.CollectorAssumed, n)
+				if c.capacity > 0 {
+					e.store.SetAttribute(id, datalayer.CollectorCapacity, c.capacity)
+				}
+			}
+			e.sched.fn = func(ctx context.Context, req *framework.Request, cands []datalayer.Endpoint) (*framework.Result, error) {
+				if e.sched.calls.Load() == 1 {
+					return nil, fmt.Errorf("capacity-filter: %w", framework.ErrSaturated)
+				}
+				return pickAll(ctx, req, cands)
+			}
+			dec, err := e.dir.Decide(context.Background(), inbound(t, chat("llama")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.flow.held.Load() != 1 || e.flow.full.Load() != c.full {
+				t.Fatalf("held %d named full %d, want 1 and %d", e.flow.held.Load(), e.flow.full.Load(), c.full)
+			}
+			e.dir.ResponseComplete(context.Background(), dec, nil)
+			e.settled(t)
+		})
+	}
 }
 
 // A pool with no ready endpoint answers 503 before flow control sees the request, whatever its band

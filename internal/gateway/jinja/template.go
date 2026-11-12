@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/chattemplate/source"
 	"github.com/nickheyer/nebu/pkg/transcode/vllm"
 )
 
@@ -33,7 +33,7 @@ type program struct {
 }
 
 // Compiles the template text and its tool use variant
-func Compile(t *chattemplate.Template) (*Template, error) {
+func Compile(t *source.Template) (*Template, error) {
 	if t == nil {
 		return nil, errors.New("no chat template to compile")
 	}

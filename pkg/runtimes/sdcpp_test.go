@@ -70,9 +70,15 @@ func TestSDCppLaunch(t *testing.T) {
 	if cmd.Command != "/bin/sd-server" || !strings.HasPrefix(line, "--listen-ip 127.0.0.1 --listen-port 9 --diffusion-model /store/wan.gguf") {
 		t.Fatalf("launch %s", line)
 	}
-	for _, want := range []string{"--vae /store/vae.safetensors", "--t5xxl /store/umt5.gguf", "--width 832", "--height 480", "--log-level debug", "--lora-model-dir " + filepath.Join(prepared, "loras")} {
+	for _, want := range []string{"--vae /store/vae.safetensors", "--t5xxl /store/umt5.gguf", "--width 832", "--height 480", "--lora-model-dir " + filepath.Join(prepared, "loras")} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
+		}
+	}
+	// What the launch leaves unset carries no flag, sd-server keeping its own
+	for _, unset := range []string{"--log-level", "--seed", "--steps", "--sampling-method", "--scheduler", "--cfg-scale", "--threads", "--batch-count", "--strength"} {
+		if strings.Contains(line, unset+" ") {
+			t.Errorf("%s was not set and is passed: %s", unset, line)
 		}
 	}
 	// Link stored LoRAs by group name.
@@ -82,18 +88,25 @@ func TestSDCppLaunch(t *testing.T) {
 	if target, err := os.Readlink(filepath.Join(prepared, "loras", "TaoMate-H3.safetensors")); err != nil || target != adapter.Artifacts[0].Path {
 		t.Fatalf("adapter link %q %v", target, err)
 	}
-	// Full device placement disables offload. Unresolved file parameters emit no flag.
-	if strings.Contains(line, "--offload-to-cpu") || strings.Contains(line, "--clip_l") || strings.Contains(line, "--offload ") || cmd.Params["offload"] != "off" {
+	// Every part counted on device passes no offload, and unresolved file parameters emit no flag
+	if _, recorded := cmd.Params["offload"]; recorded || strings.Contains(line, "--offload-to-cpu") || strings.Contains(line, "--clip_l") || strings.Contains(line, "--offload ") {
 		t.Fatalf("offload %s %v", line, cmd.Params)
 	}
 	if cmd.Env["CUDA_VISIBLE_DEVICES"] != "GPU-1" {
 		t.Fatalf("env %v", cmd.Env)
 	}
-	// Partial device placement or an explicit request enables offload.
-	params["on_device"] = "0"
+	// A set count leaving parts off the device, or offload set on, passes offload, and neither set passes none
+	params["on_device"] = int64(0)
 	cmd, err = rt.Launch(Launch{Name: "wan", Params: params, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false)})
 	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--offload-to-cpu") || cmd.Params["offload"] != "on" {
-		t.Fatalf("offload from the plan %v %v", cmd, err)
+		t.Fatalf("offload from a set part count %v %v", cmd, err)
+	}
+	for setting, want := range map[string]bool{"on": true, "off": false, "": false} {
+		asked, _ := Resolve(rt, map[string]string{"offload": setting})
+		cmd, err = rt.Launch(Launch{Name: "wan", Params: asked, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false)})
+		if err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--offload-to-cpu") != want || cmd.Params["offload"] != setting {
+			t.Fatalf("offload %q: %v %v", setting, cmd, err)
+		}
 	}
 	// Bundled checkpoints use --model.
 	params, _ = Resolve(rt, nil)
@@ -183,7 +196,7 @@ func TestSDCppLaunchPipeline(t *testing.T) {
 
 func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	rt := SDCpp{}
-	params, _ := Resolve(rt, nil)
+	params, _ := Assume(rt, nil)
 	companions := []*v1.StoredModel{
 		stored("black-forest-labs/FLUX.1-dev", "ae", "vae", v1.ModelKind_MODEL_KIND_COMPONENT, "ae.safetensors"),
 		stored("Comfy-Org/Wan_2.2", "wan_2.1_vae", "vae", v1.ModelKind_MODEL_KIND_COMPONENT, "vae/wan_2.1_vae.safetensors"),
@@ -209,7 +222,7 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	if !s.Params.IsAuto("clip_l") || !s.Params.IsAuto("audio_encoder") || !s.Params.IsAuto("tokenizer") || !s.Params.IsAuto("llm") || !s.Params.IsAuto("llm_vision") {
 		t.Fatal("parts the blueprint does not list stay auto")
 	}
-	if _, refusal := rt.Policy().States(s); refusal != "" {
+	if refusal := rt.Policy().Warning(s); refusal != "" {
 		t.Fatalf("wan with its parts should run: %s", refusal)
 	}
 	// Select the required language encoder and its projector.
@@ -226,19 +239,19 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	// Missing encoders warn with source information
 	bare := &estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone(), Companions: companions[:2], Repo: "Comfy-Org/Wan_2.2"}
 	rt.Policy().Solve(bare)
-	if _, refusal := rt.Policy().States(bare); !strings.Contains(refusal, "t5xxl") || !strings.Contains(refusal, "UMT5-XXL") || !strings.Contains(refusal, "city96/umt5-xxl-encoder-gguf") || strings.Contains(refusal, "vae (") || strings.Contains(refusal, "high_noise_model") {
+	if refusal := rt.Policy().Warning(bare); !strings.Contains(refusal, "t5xxl") || !strings.Contains(refusal, "UMT5-XXL") || !strings.Contains(refusal, "city96/umt5-xxl-encoder-gguf") || strings.Contains(refusal, "vae (") || strings.Contains(refusal, "high_noise_model") {
 		t.Fatalf("refusal %q", refusal)
 	}
 	if missing := sdMissing(bare); len(missing) != 1 || missing[0].Param != "t5xxl" || missing[0].Slot != "text_encoder.t5" {
 		t.Fatalf("missing %+v", missing)
 	}
 	// Bundled checkpoints need no companions, and a standalone component plans without a word
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params.Clone()}); refusal != "" {
+	if refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params.Clone()}); refusal != "" {
 		t.Fatalf("sdxl bundles everything: %s", refusal)
 	}
 	part := sdDescriptor("t5", false, false)
 	part.Kind = v1.ModelKind_MODEL_KIND_COMPONENT
-	if _, warning := rt.Policy().States(&estimate.Scope{Descriptor: part, Params: params.Clone()}); warning != "" {
+	if warning := rt.Policy().Warning(&estimate.Scope{Descriptor: part, Params: params.Clone()}); warning != "" {
 		t.Fatalf("component warning %q", warning)
 	}
 }
@@ -255,7 +268,11 @@ func TestSDCppLaunchUndetectedFamily(t *testing.T) {
 	d := &v1.Descriptor{FormatId: "gguf", Group: "Q8_0", Architecture: "qwen_image21_future", Kind: v1.ModelKind_MODEL_KIND_DIFFUSION, Metadata: map[string]string{diffusion.KeyDetected: "false"}, Params: map[string]float64{"n_embd": 4096}}
 	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "diffusion", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, Layer: -1, Bytes: 7 << 30})
 	launch := Launch{Name: "q", Params: params, Artifacts: map[string]string{"weights": "/store/q8.gguf", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone()}); !strings.Contains(refusal, "Q8_0") || !strings.Contains(refusal, "sd-server will try it") {
+	assumed, err := Assume(rt, map[string]string{"vae": "/store/qwen_image_2.1_vae_bf16.safetensors", "llm": "/store/qwen3vl_8b_bf16.safetensors"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: d, Params: assumed}); !strings.Contains(refusal, "Q8_0") || !strings.Contains(refusal, "sd-server will try it") {
 		t.Fatalf("the plan says sd-server judges it: %q", refusal)
 	}
 	cmd, err := rt.Launch(launch)
@@ -271,7 +288,7 @@ func TestSDCppLaunchUndetectedFamily(t *testing.T) {
 // Qwen-Image 2.1 resolves its parts and sampling defaults.
 func TestSDCppQwenImage21(t *testing.T) {
 	rt := SDCpp{}
-	params, err := Resolve(rt, nil)
+	params, err := Assume(rt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +304,7 @@ func TestSDCppQwenImage21(t *testing.T) {
 	if s.Params.Str("vae") != "/store/vae/qwen_image_2.1_vae_bf16.safetensors" || s.Params.Str("llm") != "/store/text_encoders/qwen3vl_8b_bf16.safetensors" {
 		t.Fatalf("vae %q llm %q", s.Params.Str("vae"), s.Params.Str("llm"))
 	}
-	if _, refusal := rt.Policy().States(s); refusal != "" {
+	if refusal := rt.Policy().Warning(s); refusal != "" {
 		t.Fatalf("qwen image 2.1 with its parts should run: %s", refusal)
 	}
 	if s.Params.Int("steps") != 40 || s.Params.Str("scheduler") != "flux" || s.Params.Str("sampling_method") != "euler" {
@@ -299,19 +316,19 @@ func TestSDCppHiresUpscaler(t *testing.T) {
 	rt := SDCpp{}
 	esrgan := stored("ai-forever/Real-ESRGAN", "RealESRGAN_x4plus", "upscaler", v1.ModelKind_MODEL_KIND_COMPONENT, "RealESRGAN_x4plus.pth")
 	for _, name := range []string{"Latent", "Lanczos", "RealESRGAN_x4plus"} {
-		params, err := Resolve(rt, map[string]string{"hires_upscaler": name})
+		params, err := Assume(rt, map[string]string{"hires_upscaler": name})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params, Companions: []*v1.StoredModel{esrgan}}); refusal != "" {
+		if refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params, Companions: []*v1.StoredModel{esrgan}}); refusal != "" {
 			t.Fatalf("%s: %s", name, refusal)
 		}
 	}
-	params, err := Resolve(rt, map[string]string{"hires_upscaler": "RealESRGAN_x4plus"})
+	params, err := Assume(rt, map[string]string{"hires_upscaler": "RealESRGAN_x4plus"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params}); !strings.Contains(refusal, "RealESRGAN_x4plus") {
+	if refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params}); !strings.Contains(refusal, "RealESRGAN_x4plus") {
 		t.Fatalf("refusal %q", refusal)
 	}
 	launch := Launch{Name: "sdxl", Params: params, Artifacts: map[string]string{"weights": "/store/sd_xl_base_1.0.safetensors", "prepared_dir": t.TempDir()}, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("sdxl", true, false)}
@@ -327,7 +344,7 @@ func TestSDCppHiresUpscaler(t *testing.T) {
 
 func TestSDCppPlan(t *testing.T) {
 	rt := SDCpp{}
-	params, _ := Resolve(rt, nil)
+	params, _ := Assume(rt, nil)
 	d := sdDescriptor("wan", true, false)
 	h := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 24 << 30}, {Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30}}}
 	plan, err := rt.Policy().Plan(estimate.Input{Descriptor: d, Host: h, Params: params})
@@ -339,7 +356,7 @@ func TestSDCppPlan(t *testing.T) {
 	}
 	// Keep the denoiser and VAE on device when the encoder does not fit.
 	d.Groups[2].Bytes = 4 << 30
-	small := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 20 << 30}, {Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30}}}
+	small := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 19 << 30}, {Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30}}}
 	plan, err = rt.Policy().Plan(estimate.Input{Descriptor: d, Host: small, Params: params})
 	if err != nil {
 		t.Fatal(err)
@@ -453,7 +470,7 @@ func TestRuntimeBits(t *testing.T) {
 // index stay unresolved, and the plan says so
 func TestSDCppShardedCompanions(t *testing.T) {
 	rt := SDCpp{}
-	params, _ := Resolve(rt, nil)
+	params, _ := Assume(rt, nil)
 	file := func(p string, role v1.ArtifactRole, size uint64) *v1.StoredArtifact {
 		return &v1.StoredArtifact{Artifact: &v1.Artifact{Path: p, Role: role, SizeBytes: size}, Path: "/store/" + p}
 	}
@@ -478,7 +495,7 @@ func TestSDCppShardedCompanions(t *testing.T) {
 	if planned != 4<<20 {
 		t.Fatalf("the plan counts every shard, got %d", planned)
 	}
-	if _, refusal := rt.Policy().States(s); refusal != "" {
+	if refusal := rt.Policy().Warning(s); refusal != "" {
 		t.Fatalf("sharded parts with an index run: %s", refusal)
 	}
 	if p, err := companionWeights(vae); err != nil || p != "/store/vae/diffusion_pytorch_model.safetensors.index.json" {
@@ -492,7 +509,7 @@ func TestSDCppShardedCompanions(t *testing.T) {
 	if !s.Params.IsAuto("vae") {
 		t.Fatalf("no shard loads alone, got %q", s.Params.Str("vae"))
 	}
-	_, refusal := rt.Policy().States(s)
+	refusal := rt.Policy().Warning(s)
 	if !strings.Contains(refusal, "vae (") || !strings.Contains(refusal, "Comfy-Org/Wan_2.2/wan_2.1_vae is split into 2 shards and holds no index") {
 		t.Fatalf("refusal %q", refusal)
 	}
@@ -526,11 +543,11 @@ func TestSDCppShardedCompanions(t *testing.T) {
 // layout stable-diffusion.cpp loads is published.
 func TestSDCppUndetected(t *testing.T) {
 	rt := SDCpp{}
-	params, _ := Resolve(rt, nil)
+	params, _ := Assume(rt, nil)
 	d := sdDescriptor("minimax_h3", false, true)
 	d.Group = "transformer"
 	d.Metadata[diffusion.KeyDetected] = "false"
-	_, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"})
+	refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"})
 	for _, want := range []string{"transformer's tensor names are not the MiniMax-H3 layout", "Comfy-Org/MiniMax-H3 or leejet/MiniMax-H3-GGUF", "sd-server will try it"} {
 		if !strings.Contains(refusal, want) {
 			t.Errorf("refusal %q lacks %q", refusal, want)
@@ -540,10 +557,10 @@ func TestSDCppUndetected(t *testing.T) {
 		t.Fatalf("launch %v", err)
 	}
 	d.Metadata[diffusion.KeyDetected] = "true"
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone()}); strings.Contains(refusal, "tensor names") {
+	if refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: d, Params: params.Clone()}); strings.Contains(refusal, "tensor names") {
 		t.Fatalf("identified names pass to the missing parts check: %q", refusal)
 	}
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone()}); strings.Contains(refusal, "tensor names") {
+	if refusal := rt.Policy().Warning(&estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone()}); strings.Contains(refusal, "tensor names") {
 		t.Fatalf("no record refuses nothing: %q", refusal)
 	}
 }
@@ -551,7 +568,7 @@ func TestSDCppUndetected(t *testing.T) {
 // The pipeline's scheduler config sets the flow shift over the family default.
 func TestSDCppFlowShift(t *testing.T) {
 	rt := SDCpp{}
-	params, _ := Resolve(rt, nil)
+	params, _ := Assume(rt, nil)
 	d := sdDescriptor("minimax_h3", false, true)
 	s := &estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"}
 	rt.Policy().Solve(s)

@@ -50,14 +50,18 @@ func (m *Manager) meshRun(s *v1.Slot, run *v1.RunRequest) bool {
 	return false
 }
 
-// A slot's formation request, slot runtime and params under the request's, its devices as the default span
+// A slot's formation request carrying every setting it launches with, the run's over the slot's, its devices the default span
 func (m *Manager) meshRequest(s *v1.Slot, run *v1.RunRequest) *v1.RunRequest {
 	out := proto.Clone(run).(*v1.RunRequest)
 	out.SlotId, out.Name = s.GetId(), s.GetName()
-	if out.RuntimeId == "" {
-		out.RuntimeId = s.GetRuntimeId()
+	if !out.GetExact() {
+		if out.RuntimeId == "" {
+			out.RuntimeId = s.GetRuntimeId()
+		}
+		out.Params = runtimes.Merge(s.GetParams(), run.GetParams())
+		out.Args = runtimes.RunArgs(s.GetArgs(), run.GetArgs())
+		out.Exact = true
 	}
-	out.Params = runtimes.Merge(s.GetParams(), run.GetParams())
 	if len(out.Span) == 0 && len(s.GetDeviceIds()) > 0 {
 		for _, id := range s.GetDeviceIds() {
 			node, device := m.splitDevice(id)
@@ -65,6 +69,14 @@ func (m *Manager) meshRequest(s *v1.Slot, run *v1.RunRequest) *v1.RunRequest {
 		}
 	}
 	return out
+}
+
+// Settles the slot on its formation's settings and keeps the formation's model and route as its request
+func settleFormation(sl *v1.Slot, run *v1.RunRequest) {
+	if settle(sl, run, true) {
+		bump(sl)
+	}
+	sl.Request = held(run)
 }
 
 // The slot's live formation, nil when none
@@ -93,7 +105,8 @@ func (m *Manager) launchFormation(ctx context.Context, s *v1.Slot, run *v1.RunRe
 		return nil, nil, err
 	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
-		sl.InstanceId, sl.FormationId, sl.State, sl.Error, sl.TaskId, sl.Request, sl.DesiredRunning = "", f.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), f.GetRequest(), true
+		sl.InstanceId, sl.FormationId, sl.State, sl.Error, sl.TaskId, sl.DesiredRunning = "", f.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), true
+		settleFormation(sl, f.GetRequest())
 	})
 	if err := m.claimRoutes(ctx, next, occupant{f: f}); err != nil {
 		m.Log.Warn("slot routes not named", "slot", next.GetName(), "err", err)
@@ -177,7 +190,7 @@ func (m *Manager) OnFormation(f *v1.Formation) {
 		s = m.update(s.GetId(), func(sl *v1.Slot) {
 			sl.FormationId, sl.InstanceId, sl.DesiredRunning = f.GetId(), "", true
 			if f.GetRequest() != nil {
-				sl.Request = f.GetRequest()
+				settleFormation(sl, f.GetRequest())
 			}
 		})
 	}

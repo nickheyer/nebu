@@ -154,12 +154,13 @@ func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*buil
 		return nil, nil, err
 	}
 	sel, err := build.Select(rc, profile, build.Options{
-		Variant:  req.GetVariant(),
-		Vars:     req.GetVars(),
-		Sandbox:  req.GetSandbox(),
-		Image:    req.GetImage(),
-		Ref:      req.GetRef(),
-		Defaults: m.Defaults,
+		Variant:     req.GetVariant(),
+		Vars:        req.GetVars(),
+		Sandbox:     req.GetSandbox(),
+		Image:       req.GetImage(),
+		Ref:         req.GetRef(),
+		SkipPatches: req.GetSkipPatches(),
+		Defaults:    m.Defaults,
 	})
 	if err != nil {
 		return nil, nil, err

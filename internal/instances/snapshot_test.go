@@ -96,6 +96,10 @@ func (*conditionLog) Reservation(context.Context, string) (*Reservation, error) 
 
 func (*conditionLog) Owns(string) bool { return false }
 
+func (*conditionLog) Settle(string, *v1.RunRequest) error {
+	return errors.New("the test holds no slots")
+}
+
 func (c *conditionLog) OnInstance(rec *v1.Instance) {
 	cond := ConditionOf(rec.GetConditions(), CondSnapshot)
 	if cond == nil {

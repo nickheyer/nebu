@@ -10,17 +10,14 @@ import (
 // Request fields only the anthropic protocol defines, read here and kept from a runtime speaking another protocol
 var antOnly = []string{"thinking", "output_config", "output_format", "metadata", "context_management", "safeguards"}
 
-// Thinking budgets at or above which a chat completions runtime is asked for low, medium and high effort
-const (
-	effortLowBudget    = 1024
-	effortMediumBudget = 2048
-	effortHighBudget   = 4096
-)
-
-// Rewrites what only the client's protocol defines into what a runtime speaking another protocol reads
-func Cross(req *Request, from v1.ApiFlavor) {
+// Rewrites what only the client's protocol defines into what a runtime speaking another protocol reads, reasoning fit to the template
+func Cross(req *Request, from v1.ApiFlavor, tpl *v1.ChatTemplate) error {
 	if from != v1.ApiFlavor_API_FLAVOR_ANTHROPIC {
-		return
+		return nil
+	}
+	mapped, err := antReasoning(req, tpl)
+	if err != nil {
+		return err
 	}
 	req.Messages = leadSystem(req.Messages)
 	for i := range req.Messages {
@@ -31,10 +28,6 @@ func Cross(req *Request, from v1.ApiFlavor) {
 	}
 	for i := range req.Tools {
 		delete(req.Tools[i].Extra, "cache_control")
-	}
-	mapped := map[string]json.RawMessage{}
-	if effort := antEffort(req.Extra["thinking"], req.Extra["output_config"]); effort != "" {
-		mapped["reasoning_effort"] = appendStr(nil, effort)
 	}
 	if format := antFormat(req.Extra["output_format"], req.Extra["output_config"]); format != nil {
 		mapped["response_format"] = format
@@ -50,6 +43,7 @@ func Cross(req *Request, from v1.ApiFlavor) {
 		delete(req.Extra, k)
 	}
 	req.Extra = mergeExtra(req.Extra, mapped)
+	return nil
 }
 
 // The line Claude Code leads its system prompt with, its cch field stamped anew on every request
@@ -136,36 +130,6 @@ func hasContent(parts []Part) bool {
 		}
 	}
 	return false
-}
-
-// The reasoning effort a thinking setting and an output effort ask for, empty when the request sets neither
-func antEffort(thinking, output json.RawMessage) string {
-	var th struct {
-		Type   string  `json:"type"`
-		Budget float64 `json:"budget_tokens"`
-	}
-	var out struct {
-		Effort string `json:"effort"`
-	}
-	json.Unmarshal(thinking, &th)
-	json.Unmarshal(output, &out)
-	switch {
-	case th.Type == "disabled":
-		return "none"
-	case out.Effort != "":
-		return out.Effort
-	case th.Type == "adaptive":
-		return "high"
-	case th.Type != "enabled":
-		return ""
-	case th.Budget >= effortHighBudget:
-		return "high"
-	case th.Budget >= effortMediumBudget:
-		return "medium"
-	case th.Budget >= effortLowBudget:
-		return "low"
-	}
-	return "minimal"
 }
 
 // The chat completions response_format of an output format naming a JSON schema, the older top level field first

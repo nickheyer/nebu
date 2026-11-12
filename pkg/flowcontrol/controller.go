@@ -14,10 +14,9 @@ import (
 	"github.com/nickheyer/nebu/pkg/datalayer"
 )
 
-// Admits requests per pool under strict priority between bands and deficit round robin between flows
+// Admits requests per pool by band priority and deficit round robin, dispatching each once its placement finds room
 type FlowController struct {
 	cfg      Config
-	detector SaturationDetector
 	observer Observer
 	meter    *meter
 	limits   *limits
@@ -32,7 +31,7 @@ type FlowController struct {
 var _ Controller = (*FlowController)(nil)
 
 // Builds a controller after checking the config, a nil observer meaning no admission reports
-func NewController(cfg Config, detector SaturationDetector, observer Observer) (*FlowController, error) {
+func NewController(cfg Config, observer Observer) (*FlowController, error) {
 	switch {
 	case cfg.QueueCapacity < 1:
 		return nil, fmt.Errorf("flowcontrol: queue capacity must be at least 1, got %d", cfg.QueueCapacity)
@@ -40,8 +39,6 @@ func NewController(cfg Config, detector SaturationDetector, observer Observer) (
 		return nil, fmt.Errorf("flowcontrol: queue timeout must be positive, got %s", cfg.QueueTimeout)
 	case cfg.Tick <= 0:
 		return nil, fmt.Errorf("flowcontrol: tick must be positive, got %s", cfg.Tick)
-	case detector == nil:
-		return nil, errors.New("flowcontrol: a saturation detector is required")
 	}
 	m, err := newMeter(cfg)
 	if err != nil {
@@ -49,7 +46,6 @@ func NewController(cfg Config, detector SaturationDetector, observer Observer) (
 	}
 	return &FlowController{
 		cfg:      cfg,
-		detector: detector,
 		observer: observer,
 		meter:    m,
 		limits:   &limits{inflight: map[string]int{}},
@@ -58,8 +54,11 @@ func NewController(cfg Config, detector SaturationDetector, observer Observer) (
 	}, nil
 }
 
-// Dispatches at once when allowed, otherwise sheds, refuses, or waits for dispatch, timeout, ctx end or close
+// Dispatches once the item's placement finds room, otherwise sheds, refuses, or waits for room, timeout, ctx end or close
 func (c *FlowController) Admit(ctx context.Context, item *Item) (Permit, error) {
+	if item.Place == nil {
+		return nil, errors.New("flowcontrol: the item carries no placement")
+	}
 	if err := ctx.Err(); err != nil {
 		c.observe(item, 0, OutcomeCanceled)
 		return nil, err
@@ -86,30 +85,7 @@ func (c *FlowController) Admit(ctx context.Context, item *Item) (Permit, error) 
 	return c.wait(ctx, p, w)
 }
 
-// Returns the dispatched item to the head of its flow, held for the pass its release wakes, and waits again
-func (c *FlowController) Requeue(ctx context.Context, pm Permit, item *Item) (Permit, error) {
-	held, ok := pm.(*permit)
-	if !ok || held.item != item {
-		return nil, errors.New("flowcontrol: the permit was not issued for the item")
-	}
-	if !held.done.CompareAndSwap(false, true) {
-		return nil, errors.New("flowcontrol: the permit was already released")
-	}
-	w, err := held.pool.requeue(item)
-	if err != nil {
-		c.observe(item, time.Since(item.EnqueuedAt), OutcomeClosed)
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		if held.pool.abandon(w) {
-			c.observe(item, time.Since(item.EnqueuedAt), OutcomeCanceled)
-			return nil, err
-		}
-	}
-	return c.wait(ctx, held.pool, w)
-}
-
-// Blocks until the waiter resolves, pulling it from its queue when ctx ends or the timeout passes
+// Blocks until the waiter resolves, abandoning it when ctx ends or the timeout passes unless its placement is under way
 func (c *FlowController) wait(ctx context.Context, p *poolQueue, w *waiter) (Permit, error) {
 	timer := time.NewTimer(c.cfg.QueueTimeout - time.Since(w.item.EnqueuedAt))
 	defer timer.Stop()
@@ -117,34 +93,34 @@ func (c *FlowController) wait(ctx context.Context, p *poolQueue, w *waiter) (Per
 	var outcome string
 	select {
 	case <-w.done:
-		return c.settle(w)
+		return c.settle(w, nil, "")
 	case <-ctx.Done():
 		cause, outcome = ctx.Err(), OutcomeCanceled
 	case <-timer.C:
 		cause, outcome = ErrQueueTimeout, OutcomeTimeout
 	}
-	if p.abandon(w) {
-		c.observe(w.item, time.Since(w.item.EnqueuedAt), outcome)
-		return nil, cause
+	if !p.abandon(w) {
+		<-w.done
 	}
-	if w.state == stateDispatched && outcome == OutcomeCanceled {
-		w.permit.Release()
-		c.observe(w.item, w.permit.waited, OutcomeCanceled)
-		return nil, cause
-	}
-	return c.settle(w)
+	return c.settle(w, cause, outcome)
 }
 
-// Turns a resolved waiter into its permit, ErrShed when displaced, or context canceled when close failed it
-func (c *FlowController) settle(w *waiter) (Permit, error) {
+// Turns a resolved waiter into its permit or its error, an abandoned one answering the cause given
+func (c *FlowController) settle(w *waiter, cause error, outcome string) (Permit, error) {
 	waited := time.Since(w.item.EnqueuedAt)
 	switch w.state {
 	case stateDispatched:
 		c.observe(w.item, w.permit.waited, OutcomeDispatched)
 		return w.permit, nil
+	case stateAbandoned:
+		c.observe(w.item, waited, outcome)
+		return nil, cause
 	case stateShed:
 		c.observe(w.item, waited, OutcomeShed)
-		return nil, fmt.Errorf("%w: displaced by a higher priority band", ErrShed)
+		return nil, w.err
+	case stateUnplaced:
+		c.observe(w.item, waited, OutcomeUnplaced)
+		return nil, w.err
 	}
 	c.observe(w.item, waited, OutcomeClosed)
 	return nil, context.Canceled
@@ -165,7 +141,7 @@ func (c *FlowController) pool(id datalayer.PoolID) *poolQueue {
 	}
 	p := c.pools[id]
 	if p == nil {
-		p = &poolQueue{id: id, cfg: c.cfg, detector: c.detector, meter: c.meter, limits: c.limits, wakeAll: c.wakeAll, wake: make(chan struct{}, 1), debts: map[FlowKey]int{}}
+		p = &poolQueue{id: id, cfg: c.cfg, meter: c.meter, limits: c.limits, wakeAll: c.wakeAll, wake: make(chan struct{}, 1), round: 1, debts: map[FlowKey]int{}}
 		c.pools[id] = p
 		c.wg.Go(func() { p.run(c.stop) })
 	}
@@ -178,12 +154,12 @@ func (c *FlowController) lookup(id datalayer.PoolID) *poolQueue {
 	return c.pools[id]
 }
 
-// Wakes every pool dispatcher, after a route slot freed that any pool's waiters may take
+// Starts a new round on every pool, after a route slot freed that any pool's waiters may take
 func (c *FlowController) wakeAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, p := range c.pools {
-		p.signal()
+		p.advance()
 	}
 }
 
@@ -235,8 +211,6 @@ func (c *FlowController) Close() {
 	}
 }
 
-func hasObjective(item *Item) bool { return item.TTFT > 0 || item.TPOT > 0 }
-
 // Items in flight per route across every pool, taken before dispatch and given back on release
 type limits struct {
 	mu       sync.Mutex
@@ -283,69 +257,97 @@ func (l *limits) release(item *Item) {
 
 // The bands, counters and dispatcher of one pool
 type poolQueue struct {
-	id       datalayer.PoolID
-	cfg      Config
-	detector SaturationDetector
-	meter    *meter
-	limits   *limits
-	wakeAll  func()
-	wake     chan struct{}
+	id      datalayer.PoolID
+	cfg     Config
+	meter   *meter
+	limits  *limits
+	wakeAll func()
+	wake    chan struct{}
 
 	mu sync.Mutex
 	// Bands holding waiting items, highest priority first
 	bands    []*band
 	waiting  int
 	inflight int
-	pass     uint64
+	// Counts releases and ticks, the only events after which an item refused room is placed again
+	round uint64
+	// The round a placement found the pool full in, nothing placed for the rest of it
+	full uint64
+	pass uint64
 	// Token overruns of flows that left their band, charged when the flow returns
 	debts  map[FlowKey]int
 	closed bool
 }
 
-// Grants, sheds, refuses or queues one item under the pool lock
+// The route cap refusing an item, room like any other
+var errRouteFull = fmt.Errorf("%w: its route is at the in flight limit", ErrNoRoom)
+
+// Takes the item's route slot and runs its placement with the pool unlocked, answering the round it began in
+func (p *poolQueue) placeLocked(item *Item) (uint64, error) {
+	round := p.round
+	if !p.limits.take(item) {
+		return round, errRouteFull
+	}
+	p.mu.Unlock()
+	err := item.Place()
+	p.mu.Lock()
+	if err != nil {
+		p.limits.release(item)
+	}
+	return round, err
+}
+
+// Runs the placement and records a full pool, answering the round an item refused alone sits out
+func (p *poolQueue) tryLocked(item *Item) (uint64, error) {
+	began, err := p.placeLocked(item)
+	if errors.Is(err, ErrPoolFull) {
+		p.full = began
+		return 0, err
+	}
+	return began, err
+}
+
+// Places an item nothing waits ahead of, grants it on room, and otherwise sheds, refuses or queues it
 func (p *poolQueue) admit(item *Item) (*waiter, *permit, string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return nil, nil, OutcomeClosed, context.Canceled
 	}
-	hard := p.detector.HardSaturated(p.id, item)
-	capped := p.limits.full(item)
-	if !hard && !capped && !p.waitingAtOrAbove(item.Priority) && !(hasObjective(item) && p.detector.SoftSaturated(p.id, item)) && p.limits.take(item) {
-		return nil, p.grantLocked(item, 0, time.Now()), OutcomeDispatched, nil
-	}
-	if (hard || capped) && item.Priority <= p.cfg.SheddableBelow {
-		return nil, nil, OutcomeShed, ErrShed
+	sheddable := item.Priority <= p.cfg.SheddableBelow
+	var held uint64
+	switch {
+	case p.full == p.round:
+		if sheddable {
+			return nil, nil, OutcomeShed, fmt.Errorf("%w: %w", ErrShed, ErrPoolFull)
+		}
+	case !p.waitingAtOrAbove(item.Priority):
+		began, err := p.tryLocked(item)
+		switch {
+		case err == nil:
+			return nil, p.grantLocked(item, 0, time.Now()), OutcomeDispatched, nil
+		case !errors.Is(err, ErrNoRoom):
+			return nil, nil, OutcomeUnplaced, err
+		case sheddable:
+			return nil, nil, OutcomeShed, fmt.Errorf("%w: %w", ErrShed, err)
+		case p.closed:
+			return nil, nil, OutcomeClosed, context.Canceled
+		}
+		held = began
 	}
 	if p.waiting >= p.cfg.QueueCapacity && !p.displaceLocked(item.Priority) {
 		return nil, nil, OutcomeQueueFull, ErrQueueFull
 	}
-	w := &waiter{item: item, cost: chargeOf(item), done: make(chan struct{})}
-	p.enqueueLocked(w, false)
+	w := &waiter{item: item, cost: chargeOf(item), held: held, done: make(chan struct{})}
+	p.enqueueLocked(w)
 	p.signal()
 	return w, nil, "", nil
 }
 
-// Gives the item's capacity back and queues it at the head of its flow, held through the pass the release wakes
-func (p *poolQueue) requeue(item *Item) (*waiter, error) {
-	p.mu.Lock()
-	p.releaseLocked(item)
-	if p.closed {
-		p.mu.Unlock()
-		p.wakeAfterRelease(item)
-		return nil, context.Canceled
-	}
-	w := &waiter{item: item, cost: chargeOf(item), done: make(chan struct{}), heldPass: p.pass + 1}
-	p.enqueueLocked(w, true)
-	p.mu.Unlock()
-	p.wakeAfterRelease(item)
-	return w, nil
-}
-
 // Links the waiter into its band's flow, a returning flow starting with its debt capped at one quantum
-func (p *poolQueue) enqueueLocked(w *waiter, front bool) {
+func (p *poolQueue) enqueueLocked(w *waiter) {
 	b := p.band(w.item.Priority, true)
-	f, created := b.add(w, w.item.Flow.FairnessID, front)
+	f, created := b.add(w, w.item.Flow.FairnessID)
 	if created {
 		if d := p.debts[w.item.Flow]; d > 0 {
 			f.deficit = -min(d, b.quantum())
@@ -355,7 +357,7 @@ func (p *poolQueue) enqueueLocked(w *waiter, front bool) {
 	p.waiting++
 }
 
-// Sheds the newest item of the lowest band when that band ranks below the arriving priority
+// Sheds the newest item of the lowest band not being placed when that band ranks below the arriving priority
 func (p *poolQueue) displaceLocked(priority int) bool {
 	if len(p.bands) == 0 {
 		return false
@@ -366,12 +368,19 @@ func (p *poolQueue) displaceLocked(priority int) bool {
 	}
 	var newest *waiter
 	for _, f := range low.flows {
-		if f.tail != nil && (newest == nil || f.tail.item.EnqueuedAt.After(newest.item.EnqueuedAt)) {
-			newest = f.tail
+		w := f.tail
+		for w != nil && w.state != stateWaiting {
+			w = w.prev
+		}
+		if w != nil && (newest == nil || w.item.EnqueuedAt.After(newest.item.EnqueuedAt)) {
+			newest = w
 		}
 	}
+	if newest == nil {
+		return false
+	}
 	p.unlinkLocked(newest)
-	newest.state = stateShed
+	newest.state, newest.err = stateShed, fmt.Errorf("%w: displaced by a higher priority band", ErrShed)
 	close(newest.done)
 	return true
 }
@@ -406,46 +415,46 @@ func (p *poolQueue) unlinkLocked(w *waiter) {
 	}
 }
 
-// Pulls a still waiting item out of its queue, false when it already resolved
+// Pulls a waiting item out of its queue, false when it resolved or its placement will resolve it
 func (p *poolQueue) abandon(w *waiter) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if w.state != stateWaiting {
-		return false
+	switch w.state {
+	case stateWaiting:
+		p.unlinkLocked(w)
+		w.state = stateAbandoned
+		return true
+	case statePlacing:
+		w.quit = true
 	}
-	p.unlinkLocked(w)
-	w.state = stateAbandoned
-	return true
+	return false
 }
 
-// Counts the item in flight, meters its request and tells the detector it now holds capacity
+// Counts the item in flight and meters its request
 func (p *poolQueue) grantLocked(item *Item, charged int, now time.Time) *permit {
 	p.inflight++
-	p.detector.Dispatched(p.id, item)
 	p.meter.count(item.Flow.FairnessID, now)
 	return &permit{pool: p, item: item, charged: charged, waited: now.Sub(item.EnqueuedAt)}
 }
 
-// Gives back the capacity of a dispatched item and wakes the dispatchers its route slot may unblock
+// Gives back a dispatched item's room and starts a new round, on every pool when a route slot freed
 func (p *poolQueue) release(item *Item) {
 	p.mu.Lock()
-	p.releaseLocked(item)
-	p.mu.Unlock()
-	p.wakeAfterRelease(item)
-}
-
-func (p *poolQueue) releaseLocked(item *Item) {
 	p.inflight--
-	p.detector.Released(p.id, item)
 	p.limits.release(item)
-}
-
-// Wakes every pool after a routed item freed its slot, this pool alone otherwise
-func (p *poolQueue) wakeAfterRelease(item *Item) {
+	p.mu.Unlock()
 	if item.RouteLimit > 0 {
 		p.wakeAll()
 		return
 	}
+	p.advance()
+}
+
+// Starts a new round and wakes the dispatcher
+func (p *poolQueue) advance() {
+	p.mu.Lock()
+	p.round++
+	p.mu.Unlock()
 	p.signal()
 }
 
@@ -473,19 +482,24 @@ func (p *poolQueue) signal() {
 	}
 }
 
-// Runs a dispatch pass on every wake and on each tick while items wait, until stop closes
+// Runs a dispatch pass on every wake and a new round on each tick while items wait, until stop closes
 func (p *poolQueue) run(stop <-chan struct{}) {
 	ticker := time.NewTicker(p.cfg.Tick)
 	defer ticker.Stop()
 	var tick <-chan time.Time
 	for {
+		ticked := false
 		select {
 		case <-stop:
 			return
 		case <-p.wake:
 		case <-tick:
+			ticked = true
 		}
 		p.mu.Lock()
+		if ticked {
+			p.round++
+		}
 		p.dispatchLocked()
 		tick = nil
 		if p.waiting > 0 {
@@ -495,32 +509,44 @@ func (p *poolQueue) run(stop <-chan struct{}) {
 	}
 }
 
-// Dispatches highest band first until the pool hard saturates or every remaining item is held
+// Places waiting items highest band first until the pool is full, starting over from the top when a round begins
 func (p *poolQueue) dispatchLocked() {
 	p.pass++
-	for p.waiting > 0 {
-		if p.detector.HardSaturated(p.id, p.front()) {
-			return
+	for round := p.round; p.waiting > 0 && p.full != p.round; {
+		if round != p.round {
+			round = p.round
+			p.pass++
 		}
 		w := p.next()
 		if w == nil {
 			return
 		}
-		if !p.limits.take(w.item) {
-			w.heldPass = p.pass
+		w.state = statePlacing
+		began, err := p.tryLocked(w.item)
+		if err != nil {
+			w.flow.band.unpick()
+		}
+		switch {
+		case err == nil:
+			w.flow.deficit -= w.cost
+			p.unlinkLocked(w)
+			w.permit = p.grantLocked(w.item, w.cost, time.Now())
+			w.state = stateDispatched
+		case !errors.Is(err, ErrNoRoom):
+			p.unlinkLocked(w)
+			w.state, w.err = stateUnplaced, err
+		case w.quit:
+			p.unlinkLocked(w)
+			w.state = stateAbandoned
+		case w.item.Priority <= p.cfg.SheddableBelow:
+			p.unlinkLocked(w)
+			w.state, w.err = stateShed, fmt.Errorf("%w: %w", ErrShed, err)
+		default:
+			w.state, w.held = stateWaiting, began
 			continue
 		}
-		w.flow.deficit -= w.cost
-		p.unlinkLocked(w)
-		w.permit = p.grantLocked(w.item, w.cost, time.Now())
-		w.state = stateDispatched
 		close(w.done)
 	}
-}
-
-// The oldest item of the highest band's current flow, the pool's next candidate before fairness and holds apply
-func (p *poolQueue) front() *Item {
-	return p.bands[0].cur.head.item
 }
 
 // The next item by strict priority between bands, skipping bands already found fully held this pass
@@ -537,19 +563,9 @@ func (p *poolQueue) next() *waiter {
 	return nil
 }
 
-// Whether the item can go now, a capped route or an objective no endpoint meets holding it back
+// Whether the item may be placed, one its own placement refused sitting out the round it was refused in
 func (p *poolQueue) eligible(w *waiter) bool {
-	if w.heldPass >= p.pass {
-		return false
-	}
-	if p.limits.full(w.item) {
-		return false
-	}
-	if hasObjective(w.item) && p.detector.SoftSaturated(p.id, w.item) {
-		w.heldPass = p.pass
-		return false
-	}
-	return true
+	return w.held < p.round
 }
 
 // Fails every waiting item with context canceled and refuses later admissions
@@ -569,7 +585,7 @@ func (p *poolQueue) shut() {
 	p.waiting = 0
 }
 
-// Capacity a dispatched item holds until released or requeued once
+// Room a dispatched item holds until released
 type permit struct {
 	pool *poolQueue
 	item *Item

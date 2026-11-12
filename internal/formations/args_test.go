@@ -149,7 +149,7 @@ func argsConductor(t *testing.T, ctx context.Context) *Manager {
 	}
 }
 
-// A formation's seats get the slot's words then the run's in their block, and bad words are refused
+// A formation's seats get the run's words in their block, the slot's when the run names none or all when it is exact, and bad words are refused
 func TestFormationArgs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -170,8 +170,17 @@ func TestFormationArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "--cache-reuse 256 --cache-reuse 512"; p.args != want {
+	if want := "--cache-reuse 512"; p.args != want {
 		t.Fatalf("a run in a slot: %q, want %q", p.args, want)
+	}
+	wordless := proto.Clone(inSlot).(*v1.RunRequest)
+	wordless.Args = ""
+	if q, err := m.plan(ctx, wordless); err != nil || q.args != "--cache-reuse 256" {
+		t.Fatalf("a run naming no words in a slot: %v %v", q, err)
+	}
+	wordless.Exact = true
+	if q, err := m.plan(ctx, wordless); err != nil || q.args != "" {
+		t.Fatalf("an exact run naming no words in a slot: %v %v", q, err)
 	}
 
 	seat := &v1.Seat{NodeId: m.self(), Role: runtimes.RoleHead}

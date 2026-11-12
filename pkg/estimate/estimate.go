@@ -164,8 +164,12 @@ type Policy struct {
 	ContextMax func(s *Scope) int64
 	// Sequences the context splits over, scaling its bounds and step, nil for one
 	ContextScale func(s *Scope) int64
-	// Auto params the runtime picks itself, each read back from its log once it runs
+	// Whether the runtime cuts an unset context to fit memory, one that does not running the trained length
+	ContextFits func(s *Scope) bool
+	// Params the runtime picks when unset and always logs, each read back from its log once it runs
 	Deferred map[string]func(lines []string) (string, bool)
+	// Params the runtime picks when unset and logs only at some verbosity, each read back when its log states it
+	Stated map[string]func(lines []string) (string, bool)
 	// Cache a group outside the layers keeps beside its weights, such as a draft context's
 	GroupCache func(s *Scope, g *v1.TensorGroup) (uint64, error)
 	// Device count parameter. Limits capacity to the largest selected pools. Empty uses all devices.
@@ -178,8 +182,10 @@ type Policy struct {
 	Shape func(p Params) archs.Run
 	// Resolves auto parameters before context sizing. May extend the descriptor with companion groups.
 	Solve func(s *Scope)
-	// Parameter bounds and what the plan could not account for under resolved values
-	States func(s *Scope) ([]*v1.ParamState, string)
+	// What the plan could not account for under resolved values
+	Warning func(s *Scope) string
+	// Host memory the run fills as it serves, given the host bytes its plan leaves
+	HostReserve func(params Params, plan *v1.MemoryPlan, room uint64) uint64
 	// Required companion slots left unresolved. Nil when the runtime has no companion files.
 	Missing func(s *Scope) []Missing
 }
@@ -213,6 +219,8 @@ type Input struct {
 	DraftFamily archs.Arch
 	// Part of a run whose files the policy already counted, a seat's share or a draft on its node
 	Part bool
+	// Sizes an unset context to the largest that fits, what a host can reach, instead of what the runtime picks
+	Reach bool
 }
 
 // Reports header fields required for memory planning.
@@ -249,14 +257,18 @@ func (p *Policy) scope(in Input, params Params) *Scope {
 	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params, Companions: in.Companions, Repo: in.Repo, Draft: in.Draft, DraftFamily: in.DraftFamily, Part: in.Part}
 }
 
-// Plans model placement and resolves auto parameters, using the largest context that fits.
+// Plans placement at the values the runtime will pick for unset params, the context it fits or the trained length
 func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	s := p.scope(in, in.Params.Clone())
 	if p.Solve != nil {
 		p.Solve(s)
 	}
 	if p.ContextParam != "" && s.Params.IsAuto(p.ContextParam) {
-		return p.solveContext(in, s)
+		if in.Reach || p.ContextFits != nil && p.ContextFits(s) {
+			return p.solveContext(in, s)
+		}
+		_, trained, _ := p.ContextBounds(s)
+		s.Params[p.ContextParam] = trained
 	}
 	return p.plan(in, s)
 }
@@ -347,12 +359,12 @@ func (p *Policy) ContextBounds(s *Scope) (lo, hi, step int64) {
 	return lo, hi, step
 }
 
-// Parameter bounds and what the plan could not account for under resolved values
-func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, string) {
-	if p.States == nil {
-		return nil, ""
+// What the plan could not account for under resolved values
+func (p *Policy) PlanWarning(in Input, plan *v1.MemoryPlan) string {
+	if p.Warning == nil {
+		return ""
 	}
-	return p.States(p.solvedScope(in, plan))
+	return p.Warning(p.solvedScope(in, plan))
 }
 
 // Returns companion slots left unresolved by the plan.
@@ -505,16 +517,67 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	ranks := p.rankCount(s.Params)
 	groups := p.rankGroups(primary, s.Params, ranks)
 	plan, err := p.planRank(in, s, groups[len(groups)-1], host, ranks)
-	if err != nil || ranks == 1 {
+	if err != nil {
 		return plan, err
 	}
-	spread(plan, groups, host, ranks, in.Free)
-	if len(groups) < ranks {
-		per := len(groups[0])
-		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
-		plan.Detail = fmt.Sprintf("%d data parallel ranks of %d devices each need %d devices, the host holds %d", ranks, per, ranks*per, len(primary))
+	if ranks > 1 {
+		spread(plan, groups, host, ranks, in.Free)
+		if len(groups) < ranks {
+			per := len(groups[0])
+			plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+			plan.Detail = fmt.Sprintf("%d data parallel ranks of %d devices each need %d devices, the host holds %d", ranks, per, ranks*per, len(primary))
+		}
+	}
+	if !s.Part {
+		p.Reserve(plan, s.Params, in.Host, in.Free)
 	}
 	return plan, nil
+}
+
+// Adds the host memory the run fills as it serves to the plan's host pools, failing a fit they cannot hold
+func (p *Policy) Reserve(plan *v1.MemoryPlan, params Params, h *v1.HostProfile, free bool) {
+	if p.HostReserve == nil {
+		return
+	}
+	_, host := pools(h)
+	holds := map[string]uint64{}
+	for _, pl := range host {
+		holds[pl.GetId()] = uint64(float64(capacity(pl, free)) * (1 - p.Margin))
+	}
+	var hosted []*v1.PoolUsage
+	var capacityBytes, used uint64
+	for _, pu := range plan.GetPools() {
+		if _, ok := holds[pu.GetPoolId()]; ok {
+			hosted = append(hosted, pu)
+			used += pu.GetUsedBytes()
+		}
+	}
+	for _, n := range holds {
+		capacityBytes += n
+	}
+	// A host whose memory was not probed bounds nothing, as it bounds no weights
+	room := uint64(math.MaxUint64)
+	if len(host) > 0 {
+		room = capacityBytes - min(used, capacityBytes)
+	}
+	bytes := p.HostReserve(params, plan, room)
+	plan.ReserveBytes = bytes
+	if bytes == 0 || len(hosted) == 0 {
+		return
+	}
+	left := bytes
+	for i, pu := range hosted {
+		take := left
+		if i < len(hosted)-1 {
+			take = min(left, holds[pu.GetPoolId()]-min(pu.GetUsedBytes(), holds[pu.GetPoolId()]))
+		}
+		pu.UsedBytes += take
+		left -= take
+	}
+	if bytes > room && plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO {
+		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+		plan.Detail = fmt.Sprintf("keeps %s in host memory as it serves, %s more than the %s its plan leaves there", Human(bytes), Human(bytes-room), Human(room))
+	}
 }
 
 // Data parallel ranks the params run, at least one

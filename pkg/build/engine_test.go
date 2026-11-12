@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -104,7 +105,7 @@ func engineRecipe(base string) fakeRecipe {
 		patches: []recipes.Patch{
 			{ID: "inline", Content: []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,2 +1,3 @@\n hello\n+patched\n world\n")},
 			{ID: "fromurl", URL: base + "/extra.patch"},
-			{ID: "skipped", Applies: func(b *recipes.Build) bool { return b.Variant == "gpu" }, Content: []byte("--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+never\n")},
+			{ID: "optional", Content: []byte("--- /dev/null\n+++ b/optional.txt\n@@ -0,0 +1 @@\n+opted in\n")},
 		},
 		steps: func(b *recipes.Build) []recipes.Step {
 			steps := []recipes.Step{
@@ -129,7 +130,8 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	rc := engineRecipe(srv.URL)
 	root := t.TempDir()
 	e := &Engine{Root: root, Jobs: 3, Sources: githubRegistry(t, srv.URL), Fetcher: transfer.New(0, 0, 0, slog.Default())}
-	sel, err := Select(rc, &v1.HostProfile{Os: "linux", Arch: "amd64", Facts: map[string]string{}}, Options{})
+	host := &v1.HostProfile{Os: "linux", Arch: "amd64", Facts: map[string]string{}}
+	sel, err := Select(rc, host, Options{SkipPatches: []string{"optional"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,13 +163,16 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 		t.Fatalf("patches applied in order: %q", notes)
 	}
 	text := out.String()
-	for _, want := range []string{"commit=c0ffee jobs=3", "root=" + b.GetDir(), "dir=" + filepath.Join(b.GetDir(), "src"), "patch inline applied", "patch fromurl applied"} {
+	for _, want := range []string{"commit=c0ffee jobs=3", "root=" + b.GetDir(), "dir=" + filepath.Join(b.GetDir(), "src"), "patch inline applied", "patch fromurl applied", "patch optional left out"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("transcript missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "patch skipped") || strings.Contains(text, "conditional") {
-		t.Error("the gpu only patch and step must not run on the cpu variant")
+	if strings.Contains(text, "patch optional applied") || strings.Contains(text, "conditional") {
+		t.Error("the patch left out and the gpu only step must not run")
+	}
+	if _, err := os.Stat(filepath.Join(b.GetDir(), "src", "optional.txt")); !os.IsNotExist(err) {
+		t.Errorf("the patch left out touched the tree: %v", err)
 	}
 	if steps[len(steps)-1] != "done" || len(steps) < 5 {
 		t.Errorf("progress %v", steps)
@@ -180,6 +185,30 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	}
 	if *downloads != 1 {
 		t.Fatal("archive cache should be reused")
+	}
+	// Every patch applies unless left out, a different patch set is a different build, and an unknown id is refused
+	full, err := Select(rc, host, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb := full.Build()
+	if err := e.Resolve(context.Background(), full, fb); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fb.GetPatches(), ",") != "inline,fromurl,optional" || fb.GetId() == b.GetId() {
+		t.Fatalf("full build %v beside %s", fb, b.GetId())
+	}
+	if err := e.Run(context.Background(), full, fb, &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if opted, _ := os.ReadFile(filepath.Join(fb.GetDir(), "src", "optional.txt")); string(opted) != "opted in\n" {
+		t.Fatalf("optional patch not applied: %q", opted)
+	}
+	if _, err := Select(rc, host, Options{SkipPatches: []string{"nope"}}); !errors.Is(err, ErrSelection) {
+		t.Fatalf("unknown patch: %v", err)
+	}
+	if got := Describe(rc, host).GetPatches(); len(got) != 3 || got[2].GetId() != "optional" {
+		t.Fatalf("described patches %v", got)
 	}
 }
 

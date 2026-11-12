@@ -18,9 +18,8 @@ import (
 const testPool datalayer.PoolID = "p"
 
 type harness struct {
-	c     *FlowController
-	store *fakeStore
-	pred  *fakePredictor
+	c     *seated
+	seats *seats
 	obs   *recorder
 }
 
@@ -30,19 +29,14 @@ func baseConfig() Config {
 
 func newHarness(t *testing.T, cfg Config, limit int) *harness {
 	t.Helper()
-	store := &fakeStore{eps: []*fakeEndpoint{endpoint("e1", true, nil)}}
-	pred := newFakePredictor()
-	det, err := newStaticDetector(limit, store, pred, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
 	obs := &recorder{}
-	c, err := NewController(cfg, det, obs)
+	c, err := NewController(cfg, obs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(c.Close)
-	return &harness{c: c, store: store, pred: pred, obs: obs}
+	room := &seats{limit: limit, used: map[datalayer.PoolID]int{}}
+	return &harness{c: &seated{FlowController: c, seats: room}, seats: room, obs: obs}
 }
 
 func newItem(id, fairness string, priority, cost int) *Item {
@@ -103,27 +97,21 @@ func receive(t *testing.T, out <-chan result) result {
 }
 
 func TestNewControllerRejectsInvalidConfig(t *testing.T) {
-	det, err := newStaticDetector(1, &fakeStore{}, newFakePredictor(), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
 	cases := []struct {
 		name string
 		cfg  func(*Config)
-		det  SaturationDetector
 	}{
-		{"zero capacity", func(c *Config) { c.QueueCapacity = 0 }, det},
-		{"zero timeout", func(c *Config) { c.QueueTimeout = 0 }, det},
-		{"zero tick", func(c *Config) { c.Tick = 0 }, det},
-		{"nil detector", func(*Config) {}, nil},
-		{"negative quota", func(c *Config) { c.Quota = Quota{Tokens: -1, Window: time.Hour} }, det},
-		{"limited quota without a window", func(c *Config) { c.Quotas = map[string]Quota{"a": {Requests: 1}} }, det},
+		{"zero capacity", func(c *Config) { c.QueueCapacity = 0 }},
+		{"zero timeout", func(c *Config) { c.QueueTimeout = 0 }},
+		{"zero tick", func(c *Config) { c.Tick = 0 }},
+		{"negative quota", func(c *Config) { c.Quota = Quota{Tokens: -1, Window: time.Hour} }},
+		{"limited quota without a window", func(c *Config) { c.Quotas = map[string]Quota{"a": {Requests: 1}} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseConfig()
 			tc.cfg(&cfg)
-			if _, err := NewController(cfg, tc.det, nil); err == nil {
+			if _, err := NewController(cfg, nil); err == nil {
 				t.Fatal("want an error")
 			}
 		})
@@ -134,17 +122,14 @@ func TestAdmitDispatchesImmediatelyWhenIdle(t *testing.T) {
 	cases := []struct {
 		name string
 		item *Item
-		ttft time.Duration
 	}{
-		{"default band", newItem("a", "", 0, 10), 0},
-		{"high band", newItem("b", "user-1", 9, 500), 0},
-		{"sheddable band while not saturated", newItem("c", "user-2", -200, 10), 0},
-		{"objective met", &Item{ID: "d", Pool: testPool, Priority: 1, Cost: 10, TTFT: 200 * time.Millisecond}, 50 * time.Millisecond},
+		{"default band", newItem("a", "", 0, 10)},
+		{"high band", newItem("b", "user-1", 9, 500)},
+		{"sheddable band while there is room", newItem("c", "user-2", -200, 10)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, baseConfig(), 4)
-			h.pred.setTTFT("e1", tc.ttft, 0)
 			start := time.Now()
 			pm, err := h.c.Admit(context.Background(), tc.item)
 			if err != nil {
@@ -466,39 +451,19 @@ func TestContextEndRemovesQueuedItem(t *testing.T) {
 	}
 }
 
-func TestSoftSaturationHoldsObjectiveItems(t *testing.T) {
+// An item its own placement refuses room waits while others pass it, placed on a later round or timed out
+func TestRefusedPlacementHoldsItemWhileOthersPass(t *testing.T) {
 	cases := []struct {
 		name    string
-		item    *Item
-		slow    func(*fakePredictor)
-		fast    func(*fakePredictor)
+		opens   bool
 		timeout time.Duration
-		// Band of an item without objective that must pass the held one
+		// Band of an item with room that must pass the held one
 		plainBand int
 		want      error
 	}{
-		{
-			name:      "TTFT held until predictions recover",
-			plainBand: 1,
-			item:      &Item{ID: "x", Flow: FlowKey{FairnessID: "f"}, Pool: testPool, Priority: 1, Cost: 10, TTFT: 100 * time.Millisecond},
-			slow:      func(p *fakePredictor) { p.setTTFT("e1", 80*time.Millisecond, 30*time.Millisecond) },
-			fast:      func(p *fakePredictor) { p.setTTFT("e1", 50*time.Millisecond, 10*time.Millisecond) },
-		},
-		{
-			name:      "TPOT held until predictions recover while a lower band dispatches",
-			plainBand: 0,
-			item:      &Item{ID: "x", Flow: FlowKey{FairnessID: "f"}, Pool: testPool, Priority: 1, Cost: 10, TPOT: 20 * time.Millisecond},
-			slow:      func(p *fakePredictor) { p.setTPOT("e1", 25*time.Millisecond, 0) },
-			fast:      func(p *fakePredictor) { p.setTPOT("e1", 15*time.Millisecond, 2*time.Millisecond) },
-		},
-		{
-			name:      "held until queue timeout",
-			plainBand: 1,
-			item:      &Item{ID: "x", Flow: FlowKey{FairnessID: "f"}, Pool: testPool, Priority: 1, Cost: 10, TTFT: 100 * time.Millisecond},
-			slow:      func(p *fakePredictor) { p.setTTFT("e1", 200*time.Millisecond, 0) },
-			timeout:   60 * time.Millisecond,
-			want:      ErrQueueTimeout,
-		},
+		{name: "held until its placement finds room", opens: true, plainBand: 1},
+		{name: "held while a lower band dispatches", opens: true, plainBand: 0},
+		{name: "held until queue timeout", plainBand: 1, timeout: 60 * time.Millisecond, want: ErrQueueTimeout},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -507,14 +472,21 @@ func TestSoftSaturationHoldsObjectiveItems(t *testing.T) {
 				cfg.QueueTimeout = tc.timeout
 			}
 			h := newHarness(t, cfg, 8)
-			tc.slow(h.pred)
+			var open atomic.Bool
+			x := newItem("x", "f", 1, 10)
+			x.Place = func() error {
+				if !open.Load() {
+					return ErrNoRoom
+				}
+				return h.seats.take(testPool)
+			}
 			out := make(chan result, 1)
-			h.admitAsync(context.Background(), tc.item, out)
-			waitFor(t, "objective item held", func() bool { return h.waiting() == 1 })
+			h.admitAsync(context.Background(), x, out)
+			waitFor(t, "refused item held", func() bool { return h.waiting() == 1 })
 
 			plain, err := h.c.Admit(context.Background(), newItem("plain", "f", tc.plainBand, 10))
 			if err != nil {
-				t.Fatalf("item without objective: %v", err)
+				t.Fatalf("item with room: %v", err)
 			}
 			plain.Release()
 			if h.waiting() != 1 {
@@ -522,9 +494,9 @@ func TestSoftSaturationHoldsObjectiveItems(t *testing.T) {
 			}
 
 			const hold = 30 * time.Millisecond
-			if tc.fast != nil {
+			if tc.opens {
 				time.Sleep(hold)
-				tc.fast(h.pred)
+				open.Store(true)
 			}
 			r := receive(t, out)
 			if !errors.Is(r.err, tc.want) {
@@ -541,6 +513,82 @@ func TestSoftSaturationHoldsObjectiveItems(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A full pool runs one placement a round however many items wait, a release starting the next round
+func TestFullPoolRunsOnePlacementARound(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Tick = time.Hour
+	h := newHarness(t, cfg, 1)
+	blocker := h.block(t)
+	const waiters = 3
+	var calls atomic.Int64
+	out := make(chan result, waiters)
+	for i := range waiters {
+		it := newItem(fmt.Sprint(i), fmt.Sprint("f", i), 1, 10)
+		it.Place = func() error {
+			calls.Add(1)
+			return h.seats.take(testPool)
+		}
+		h.admitAsync(context.Background(), it, out)
+		waitFor(t, "item queued", func() bool { return h.waiting() == i+1 })
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("%d placements against a full pool with no release, want 1", n)
+	}
+	blocker.Release()
+	first := receive(t, out)
+	if first.err != nil {
+		t.Fatal(first.err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := calls.Load(); n != 3 {
+		t.Fatalf("%d placements after one release, want the 1 before it, the 1 that took the seat and the 1 that found the pool full again", n)
+	}
+	if h.waiting() != waiters-1 {
+		t.Fatalf("depth %v after one release", h.c.Depth(testPool))
+	}
+	first.permit.Release()
+}
+
+// A placement failing for a reason other than room ends the admission with its error
+func TestPlacementErrorEndsAdmission(t *testing.T) {
+	boom := errors.New("no endpoint serves the model")
+	failing := func(id string) *Item {
+		it := newItem(id, "f", 1, 10)
+		it.Place = func() error { return boom }
+		return it
+	}
+	h := newHarness(t, baseConfig(), 1)
+	if _, err := h.c.Admit(context.Background(), failing("idle")); !errors.Is(err, boom) {
+		t.Fatalf("got %v, want the placement's error", err)
+	}
+	blocker := h.block(t)
+	out := make(chan result, 2)
+	h.admitAsync(context.Background(), newItem("ahead", "f", 1, 10), out)
+	waitFor(t, "an item queued ahead", func() bool { return h.waiting() == 1 })
+	h.admitAsync(context.Background(), failing("queued"), out)
+	waitFor(t, "the failing item queued", func() bool { return h.waiting() == 2 })
+	blocker.Release()
+	var placed result
+	for range 2 {
+		switch r := receive(t, out); r.item.ID {
+		case "ahead":
+			placed = r
+		default:
+			if !errors.Is(r.err, boom) {
+				t.Fatalf("queued item got %v, want the placement's error", r.err)
+			}
+		}
+	}
+	if placed.err != nil {
+		t.Fatal(placed.err)
+	}
+	if h.obs.count(OutcomeUnplaced) != 2 || h.waiting() != 0 || h.c.InFlight(testPool) != 1 {
+		t.Fatalf("unplaced reports %d depth %v in flight %d", h.obs.count(OutcomeUnplaced), h.c.Depth(testPool), h.c.InFlight(testPool))
+	}
+	placed.permit.Release()
 }
 
 func TestCloseFailsWaiters(t *testing.T) {
@@ -649,52 +697,6 @@ func TestConcurrentAdmitAndRelease(t *testing.T) {
 			}
 			if tc.cancelEvery == 0 && dispatched.Load() != goroutines*rounds {
 				t.Fatalf("dispatched %d, want %d", dispatched.Load(), goroutines*rounds)
-			}
-		})
-	}
-}
-
-func TestMetricsRefreshDispatchesOnlyHeadroom(t *testing.T) {
-	cases := []struct {
-		name   string
-		queued int
-		want   int
-	}{
-		{"room for two", 3, 2},
-		{"room for four", 1, 4},
-	}
-	const waiting = 6
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := &fakeStore{eps: []*fakeEndpoint{endpoint("a", true, map[string]any{datalayer.CollectorMetrics: fresh(5, 0.1)})}}
-			det, err := NewMetricsDetector(store, newFakePredictor(), testStaleness, testThresholds)
-			if err != nil {
-				t.Fatal(err)
-			}
-			c, err := NewController(baseConfig(), det, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer c.Close()
-			out := make(chan result, waiting)
-			h := &harness{c: c}
-			for i := range waiting {
-				h.admitAsync(context.Background(), newItem(fmt.Sprint(i), "f", 1, 10), out)
-			}
-			waitFor(t, "all queued while saturated", func() bool { return h.waiting() == waiting })
-			store.set("a", datalayer.CollectorMetrics, fresh(tc.queued, 0.1))
-			var permits []Permit
-			for range tc.want {
-				permits = append(permits, receive(t, out).permit)
-			}
-			time.Sleep(20 * baseConfig().Tick)
-			if got := h.waiting(); got != waiting-tc.want {
-				t.Fatalf("waiting %d after refresh, want %d", got, waiting-tc.want)
-			}
-			permits[0].Release()
-			receive(t, out)
-			if got := h.waiting(); got != waiting-tc.want-1 {
-				t.Fatalf("waiting %d after one release, want %d", got, waiting-tc.want-1)
 			}
 		})
 	}
@@ -839,113 +841,7 @@ func TestQuotaRefusesOverUsedFairnessID(t *testing.T) {
 	}
 	bad := baseConfig()
 	bad.Quota = Quota{Tokens: 10}
-	if _, err := NewController(bad, h.c.detector, nil); err == nil {
+	if _, err := NewController(bad, nil); err == nil {
 		t.Fatal("a limited quota without a window must be refused")
-	}
-}
-
-// A requeued item gives its capacity back, lets the next waiter go, and keeps its original queue timeout
-func TestRequeueReturnsItemToQueue(t *testing.T) {
-	t.Run("dispatches again on the next pass", func(t *testing.T) {
-		h := newHarness(t, baseConfig(), 2)
-		x := newItem("x", "f", 1, 10)
-		pm, err := h.c.Admit(context.Background(), x)
-		if err != nil {
-			t.Fatal(err)
-		}
-		again, err := h.c.Requeue(context.Background(), pm, x)
-		if err != nil {
-			t.Fatalf("requeue: %v", err)
-		}
-		pm.Release()
-		if h.c.InFlight(testPool) != 1 || h.waiting() != 0 {
-			t.Fatalf("in flight %d waiting %d after requeue", h.c.InFlight(testPool), h.waiting())
-		}
-		if _, err := h.c.Requeue(context.Background(), pm, x); err == nil {
-			t.Fatal("a consumed permit must not requeue")
-		}
-		again.Release()
-		if h.c.InFlight(testPool) != 0 || h.obs.count(OutcomeDispatched) != 2 {
-			t.Fatalf("in flight %d dispatched reports %d", h.c.InFlight(testPool), h.obs.count(OutcomeDispatched))
-		}
-	})
-	t.Run("waiter of another flow goes first", func(t *testing.T) {
-		h := newHarness(t, baseConfig(), 1)
-		x := newItem("x", "f", 1, 10)
-		pm, err := h.c.Admit(context.Background(), x)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := make(chan result, 2)
-		h.admitAsync(context.Background(), newItem("y", "g", 1, 10), out)
-		waitFor(t, "y queued", func() bool { return h.waiting() == 1 })
-		go func() {
-			again, err := h.c.Requeue(context.Background(), pm, x)
-			out <- result{item: x, permit: again, err: err}
-		}()
-		y := receive(t, out)
-		if y.err != nil || y.item.ID != "y" {
-			t.Fatalf("first dispatched %s with %v, want y", y.item.ID, y.err)
-		}
-		y.permit.Release()
-		back := receive(t, out)
-		if back.err != nil || back.item.ID != "x" || back.permit.Waited() <= 0 {
-			t.Fatalf("requeued item %s ended with %v after %s", back.item.ID, back.err, back.permit.Waited())
-		}
-		back.permit.Release()
-	})
-	t.Run("timeout counts from the first admission", func(t *testing.T) {
-		cfg := baseConfig()
-		cfg.QueueTimeout = 80 * time.Millisecond
-		h := newHarness(t, cfg, 1)
-		x := newItem("x", "f", 1, 10)
-		pm, err := h.c.Admit(context.Background(), x)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := make(chan result, 1)
-		h.admitAsync(context.Background(), newItem("y", "g", 1, 10), out)
-		waitFor(t, "y queued", func() bool { return h.waiting() == 1 })
-		time.Sleep(50 * time.Millisecond)
-		start := time.Now()
-		_, err = h.c.Requeue(context.Background(), pm, x)
-		if !errors.Is(err, ErrQueueTimeout) {
-			t.Fatalf("requeue got %v, want ErrQueueTimeout", err)
-		}
-		if el := time.Since(start); el >= cfg.QueueTimeout {
-			t.Fatalf("timed out %s after the requeue, the timeout must count from the first admission", el)
-		}
-		y := receive(t, out)
-		if y.err != nil {
-			t.Fatal(y.err)
-		}
-		y.permit.Release()
-	})
-}
-
-// A pool whose endpoints report neither metrics nor capacity dispatches every request at once
-func TestOpenPoolDispatchesWithoutMetricsOrCapacity(t *testing.T) {
-	store := &fakeStore{eps: []*fakeEndpoint{endpoint("static", true, nil)}}
-	det, err := NewMetricsDetector(store, newFakePredictor(), testStaleness, testThresholds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := NewController(baseConfig(), det, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	for i := range 50 {
-		pm, err := c.Admit(context.Background(), newItem(fmt.Sprint(i), "f", 1, 10))
-		if err != nil {
-			t.Fatalf("admit %d: %v", i, err)
-		}
-		if pm.Waited() > 20*time.Millisecond {
-			t.Fatalf("admit %d waited %s", i, pm.Waited())
-		}
-		defer pm.Release()
-	}
-	if got := c.InFlight(testPool); got != 50 {
-		t.Fatalf("in flight %d, want 50", got)
 	}
 }

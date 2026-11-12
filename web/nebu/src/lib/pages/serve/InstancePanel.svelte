@@ -3,7 +3,7 @@
 	import { bytes, enumLabel, num, uptime, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { InstanceStateSchema, ToolSupportSchema, type Instance, type LoadedAdapter } from '#lib/proto/nebu/v1/instance_pb.js';
-	import { ParamType, type Runtime } from '#lib/proto/nebu/v1/runtime_pb.js';
+	import type { Runtime } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Bar from '#lib/ui/Bar.svelte';
 	import Conditions from '#lib/ui/Conditions.svelte';
@@ -92,15 +92,17 @@
 			.catch((err) => (runtimeError = reason(err)));
 	});
 
-	// The parameters the launch set away from the runtime's defaults, under the names the runtime gives them
+	// What the launch set and what the runtime picked for the rest, in the runtime's order and names
 	const paramRows = $derived.by((): KeyRow[] => {
-		const byName = new Map((runtime?.params ?? []).map((p) => [p.name, p]));
+		const known = runtime?.params ?? [];
+		const byName = new Map(known.map((p, i) => [p.name, { param: p, at: i }]));
+		const at = (name: string) => byName.get(name)?.at ?? known.length;
 		return Object.entries(inst.params)
-			.filter(([name, value]) => {
-				const p = byName.get(name);
-				return !p || value !== (p.default || (p.type === ParamType.BOOL ? 'false' : ''));
-			})
-			.map(([name, value]) => ({ label: byName.get(name)?.label || name, value: [value, byName.get(name)?.unit].filter(Boolean).join(' '), mono: true, tip: name }));
+			.sort(([a], [b]) => at(a) - at(b) || a.localeCompare(b))
+			.map(([name, value]) => {
+				const p = byName.get(name)?.param;
+				return { label: p?.label || name, value: [value, p?.unit].filter(Boolean).join(' '), mono: true, tip: name };
+			});
 	});
 
 	let adapters = $state<LoadedAdapter[] | undefined>(undefined);

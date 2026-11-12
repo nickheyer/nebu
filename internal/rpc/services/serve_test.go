@@ -61,9 +61,9 @@ func TestListTasksFiltersTakeSeveralValues(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	done := []v1.TaskState{v1.TaskState_TASK_STATE_SUCCEEDED}
-	for len(titles(&v1.ListTasksRequest{States: done})) < 2 {
+	for len(titles(&v1.ListTasksRequest{States: done})) < 2 || len(titles(&v1.ListTasksRequest{States: []v1.TaskState{v1.TaskState_TASK_STATE_RUNNING}})) < 1 {
 		if time.Now().After(deadline) {
-			t.Fatal("the two short tasks did not finish")
+			t.Fatal("the two short tasks did not finish with the held one running")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

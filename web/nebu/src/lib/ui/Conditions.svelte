@@ -3,19 +3,21 @@
 	import { when } from '#lib/format.js';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import { reasonWords } from '#lib/ui/status.js';
+	import { passingCondition, reasonWords } from '#lib/ui/status.js';
 
-	// Each condition with its reason, a filled mark while it holds and a hollow one while it does not
+	// Each check with its reason, filled while it holds, a passing state listed only while it lasts
 	let { conditions = [] }: { conditions?: Condition[] } = $props();
+
+	const shown = $derived(conditions.filter((c) => !passingCondition(c.type) || c.status === ConditionStatus.TRUE));
 </script>
 
-{#if conditions.length}
+{#if shown.length}
 	<div class="conditions">
-		{#each conditions as c (c.type)}
+		{#each shown as c (c.type)}
 			{@const holds = c.status === ConditionStatus.TRUE}
-			<Tip facts={[{ label: 'message', value: c.message }, { label: 'since', value: when(c.lastTransitionTime) }].filter((f) => f.value !== '')} tag="div" class="condtip">
+			<Tip facts={[{ label: 'message', value: c.message }, { label: 'since', value: when(c.lastTransitionTime) }].filter((f) => f.value !== '')} placement="top-start" tag="div" class="condtip">
 				<div class="cond">
-					<Dot lamp={holds ? 'primary' : 'muted'} shape={holds ? 'filled' : 'hollow'} label={holds ? 'holds' : 'does not hold'} />
+					<Dot lamp={passingCondition(c.type) ? 'warning' : holds ? 'primary' : 'muted'} shape={holds ? 'filled' : 'hollow'} label={holds ? 'holds' : 'does not hold'} />
 					<span class="type">{reasonWords(c.type)}</span>
 					<span class="reason muted">{reasonWords(c.reason)}</span>
 				</div>

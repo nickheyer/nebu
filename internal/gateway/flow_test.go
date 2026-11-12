@@ -94,6 +94,75 @@ func TestRouteCapQueuesInsteadOfRefusing(t *testing.T) {
 	}
 }
 
+// The value of one counter series, by family name and a label pair
+func (h *harness) counter(name, label, value string) float64 {
+	h.t.Helper()
+	mfs, err := h.reg.Gather()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == label && l.GetValue() == value {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// Requests past a busy endpoint's seats queue and are each served though it never answers metrics
+func TestFullUnscrapedEndpointQueuesEveryRequest(t *testing.T) {
+	h := newHarness(t)
+	st, srv := h.stub("stub-model")
+	ctx := context.Background()
+	owner := pools.OwnerRef{Kind: pools.OwnerInstance, ID: "busy"}
+	addr, _ := datalayer.ParseAddress(hostOf(srv))
+	if err := h.mgr.Publish(ctx, owner, pools.Membership{Model: key("busy"), Runtime: "vllm", Protocol: datalayer.AppProtocolHTTP, Concurrency: 2}, []pools.Published{{InstanceID: owner.ID, NodeID: testNode, Address: addr, Ready: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.mgr.NameRoute(ctx, owner, "busy", pools.RouteSpec{ServedName: "stub-model"}); err != nil {
+		t.Fatal(err)
+	}
+	pool := pools.PoolIDOf(key("busy"), "vllm", "")
+	if p, ok := h.store.Pool(pool); !ok || p.SchedulerConfig != pools.SchedulerDefault {
+		t.Fatalf("pool runs scheduler %q, want the default of a runtime that declares metrics", p.SchedulerConfig)
+	}
+	st.Pause()
+	const requests, seats = 6, 2
+	replies := make(chan reply, requests)
+	for range requests {
+		go func() { replies <- h.do(http.MethodPost, "/v1/chat/completions", modelBody("busy")) }()
+	}
+	waitFor(t, "the seats taken and the rest queued", func() bool {
+		return h.g.flow.InFlight(pool) == seats && h.g.flow.Depth(pool)[0] == requests-seats
+	})
+	before := h.counter("nebu_scheduler_filter_dropped_total", "filter", "capacity-filter/capacity")
+	const held = 300 * time.Millisecond
+	time.Sleep(held)
+	picks := h.counter("nebu_scheduler_filter_dropped_total", "filter", "capacity-filter/capacity") - before
+	if most := float64(2 * held / (10 * time.Millisecond)); picks > most {
+		t.Fatalf("%v picks against the full pool in %s, want at most one a tick, %v", picks, held, most)
+	}
+	if len(replies) != 0 || h.g.flow.InFlight(pool) != seats {
+		t.Fatalf("%d replies and %d in flight while the endpoint is full", len(replies), h.g.flow.InFlight(pool))
+	}
+	st.Resume()
+	for range requests {
+		if r := <-replies; r.status != http.StatusOK {
+			t.Fatalf("status %d: %s", r.status, r.body)
+		}
+	}
+	if got := st.Stats().Served; got != requests {
+		t.Fatalf("stub served %d, want %d", got, requests)
+	}
+}
+
 // A forwarded request is counted once across the mesh, at the dispatching node, and recognized as a peer's without the guard
 func TestForwardedRequestCountedOnce(t *testing.T) {
 	t.Run("entry node forwards without applying the cap", func(t *testing.T) {

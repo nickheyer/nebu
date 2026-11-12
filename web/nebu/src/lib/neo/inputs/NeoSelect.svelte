@@ -135,11 +135,17 @@
     if (selected === undefined) value = undefined;
   };
 
+  /**
+   * Reflects a value set from outside, kept while its options have yet to arrive and matched once they do
+   */
   watch(() => {
     if (!value || transformed === value) return;
     if (Array.isArray(value) && Array.isArray(transformed) && value.every(v => transformed.includes(v))) return;
-    reflectValue();
-  }, () => value);
+    const found = findByValuesInList(value, items);
+    const whole = Array.isArray(value) ? Array.isArray(found) && found.length === value.length : found !== undefined;
+    const chosen = Array.isArray(selected) ? selected.length > 0 : selected !== undefined;
+    if (whole || chosen) selected = found;
+  }, () => [value, items]);
 
   const hasValue = $derived(!!(Array.isArray(selected) ? selected.length : selected));
   const close = $derived(clearable && (focusin || focused || hovered || open) && hasValue);

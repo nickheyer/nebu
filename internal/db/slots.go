@@ -25,10 +25,10 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 		if err != nil {
 			return err
 		}
-		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation, pool_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation, pool_bytes, install_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, s.GetName(), s.GetPosition(), enumCol(s.GetPlacement()), s.GetRuntimeId(), int64(s.GetMemoryBytes()), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetTaskId(), stamp(s.GetCreatedAt().AsTime()), stamp(s.GetUpdatedAt().AsTime()),
 			p.GetMaxInFlight(), p.GetRequestsPerSecond(), p.GetBurst(), p.GetRequestTimeoutMs(), p.GetUpstreamTimeoutMs(), s.GetFormationId(), profileCol(s.GetProfile()), s.GetArgs(),
-			s.GetDescription(), boolCol(s.GetDesiredRunning()), conditions, metaCol(s.GetMeta()), int64(s.GetObservedGeneration()), caps); err != nil {
+			s.GetDescription(), boolCol(s.GetDesiredRunning()), conditions, metaCol(s.GetMeta()), int64(s.GetObservedGeneration()), caps, s.GetInstallId()); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "slot_id", id, "slot_devices", "slot_aliases", "slot_params", "slot_requests", "slot_request_params"); err != nil {
@@ -62,14 +62,14 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 
 // Lists every slot by position, then name
 func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
-	out, err := list(ctx, d, `SELECT id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation, pool_bytes FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
+	out, err := list(ctx, d, `SELECT id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation, pool_bytes, install_id FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
 		s := &v1.Slot{}
 		p := &v1.Policy{}
 		var profile profileAt
 		var conditions, meta string
 		var observed int64
 		if err := rows.Scan(&s.Id, &s.Name, &s.Position, enumAt[v1.Placement]{&s.Placement}, &s.RuntimeId, &s.MemoryBytes, &s.InstanceId, enumAt[v1.SlotState]{&s.State}, &s.Error, &s.TaskId, at{&s.CreatedAt}, at{&s.UpdatedAt}, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs, &s.FormationId, &profile, &s.Args,
-			&s.Description, (*flag)(&s.DesiredRunning), &conditions, &meta, &observed, poolBytesAt{&s.PoolBytes}); err != nil {
+			&s.Description, (*flag)(&s.DesiredRunning), &conditions, &meta, &observed, poolBytesAt{&s.PoolBytes}, &s.InstallId); err != nil {
 			return nil, err
 		}
 		// A slot that inherits everything carries no policy, as it was written

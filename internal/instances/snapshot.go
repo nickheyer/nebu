@@ -54,7 +54,7 @@ func (m *Manager) snapshotKey(p *prepared) string {
 		h.Write([]byte(k + "=" + params[k]))
 	}
 	h.Write([]byte{0})
-	h.Write([]byte(runtimes.JoinArgs(p.res.args(), p.req.GetArgs())))
+	h.Write([]byte(p.args()))
 	return "snap-" + hex.EncodeToString(h.Sum(nil))[:24]
 }
 

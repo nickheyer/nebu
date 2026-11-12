@@ -1,6 +1,7 @@
 package runtimes
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -86,6 +87,15 @@ func (SGLang) Adapters(endpoint string, params map[string]string) AdapterClient 
 }
 
 func (SGLang) Sleeper(string, map[string]string) SleepClient { return nil }
+
+// The template file the chat_template param names, or the built in template it names when it is no file
+func (SGLang) TemplateOverride(params map[string]string) (string, string) {
+	named := strings.TrimSpace(params["chat_template"])
+	if info, err := os.Stat(named); named != "" && err == nil && !info.IsDir() {
+		return "", named
+	}
+	return named, ""
+}
 
 // Context from the context length param or the trained length, embedding alone for an embedding launch, else the model's encoders
 func (SGLang) Inventory(in Launch, params map[string]string) (*v1.RuntimeInventory, error) {

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/chattemplate/source"
 	"github.com/nickheyer/nebu/pkg/transcode/vllm"
 )
 
@@ -184,7 +184,7 @@ func TestGoldenTemplates(t *testing.T) {
 			if !ok {
 				t.Fatal("no golden result")
 			}
-			src := &chattemplate.Template{Text: string(readTestdata(t, "templates", c.Template)), Source: c.Template}
+			src := &source.Template{Text: string(readTestdata(t, "templates", c.Template)), Source: c.Template}
 			if c.ToolUse != "" {
 				src.ToolUse = string(readTestdata(t, "templates", c.ToolUse))
 			}

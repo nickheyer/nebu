@@ -149,12 +149,12 @@ func (SDCpp) Params() []*v1.Param {
 	}
 	solved := func(name, label string) *v1.Param {
 		part := sdParts[name]
-		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupFiles, Flag: part.flag, Picks: part.picks, Slots: part.slots,
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Supplied: true, Group: groupFiles, Flag: part.flag, Picks: part.picks, Slots: part.slots,
 			Rule: strings.TrimPrefix(strings.TrimPrefix(part.label, "a "), "an ") + " from the store, preferring the model repository, then blueprint sources, then matching names"}
 	}
 	dir := func(name, label string) *v1.Param {
 		d := sdDirs[name]
-		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupAdapters, Flag: d.flag, Picks: d.picks, Directory: true, Advanced: true,
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Supplied: true, Group: groupAdapters, Flag: d.flag, Picks: d.picks, Directory: true, Advanced: true,
 			Rule: "stored " + d.label + ", available to requests by file name"}
 	}
 	intParam := func(name, label, group, flag, def, unit, description string, min, max, step float64, advanced bool) *v1.Param {
@@ -169,9 +169,9 @@ func (SDCpp) Params() []*v1.Param {
 	strParam := func(name, label, group, flag, def, description string, choices []string, advanced bool) *v1.Param {
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_STRING, Default: def, Choices: choices, Group: group, Flag: flag, Advanced: advanced, Description: description}
 	}
-	// Sampling defaults resolved from the model family.
+	// Sampling a model's family documents, which sd-server holds no table of
 	sampling := func(name, label, group, flag string, typ v1.ParamType, unit string, choices []string, min, max, step float64, rule string) *v1.Param {
-		return &v1.Param{Name: name, Label: label, Type: typ, Default: Auto, Solved: true, Unit: unit, Choices: choices, Min: min, Max: max, Step: step, Group: group, Flag: flag, Rule: rule}
+		return &v1.Param{Name: name, Label: label, Type: typ, Default: Auto, Solved: true, Supplied: true, Unit: unit, Choices: choices, Min: min, Max: max, Step: step, Group: group, Flag: flag, Rule: rule}
 	}
 	pairs := "key=value, comma separated"
 	return []*v1.Param{
@@ -205,8 +205,8 @@ func (SDCpp) Params() []*v1.Param {
 
 		// Memory placement.
 		{Name: "on_device", Label: "Parts on device", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "parts", Min: 0, Step: 1, Group: groupPlacement,
-			Rule: "fit components on device in order: denoiser, VAE, text encoders"},
-		strParam("offload", "Offload to system memory", groupPlacement, "", "auto", "", []string{"auto", "on", "off"}, false),
+			Rule: "sd-server's own fit, reckoned as components on device while they fit in order: denoiser, VAE, text encoders"},
+		strParam("offload", "Offload to system memory", groupPlacement, "", "", "keep components in system memory and move each to the device as it runs, empty leaves placement to sd-server's own fit", sdOnOff, false),
 		strParam("backend", "Compute backend", groupPlacement, "--backend", "", "cpu, cuda0, or diffusion=cuda0,te=cpu", nil, true),
 		strParam("params_backend", "Weights backend", groupPlacement, "--params-backend", "", "disk, cpu, or diffusion=disk,te=cpu", nil, true),
 		strParam("max_vram", "Device memory budget", groupPlacement, "--max-vram", "", "GiB, or cuda0=6,vulkan0=4", nil, true),
@@ -238,15 +238,15 @@ func (SDCpp) Params() []*v1.Param {
 		floatParam("attn_scale", "Attention K/V scale", groupCompute, "--attn-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
 
 		// Generation defaults.
-		intParam("width", "Width", groupDefaults, "--width", "1024", "px", "sd-server's own default is 512", 64, 4096, 16, false),
-		intParam("height", "Height", groupDefaults, "--height", "1024", "px", "sd-server's own default is 512", 64, 4096, 16, false),
+		intParam("width", "Width", groupDefaults, "--width", "512", "px", "width of a request that names none, empty keeps sd-server's 512", 64, 4096, 16, false),
+		intParam("height", "Height", groupDefaults, "--height", "512", "px", "height of a request that names none, empty keeps sd-server's 512", 64, 4096, 16, false),
 		sampling("steps", "Steps", groupDefaults, "--steps", v1.ParamType_PARAM_TYPE_INT, "steps", nil, 1, 150, 1,
 			"family step count, reduced for distilled variants such as Turbo, schnell, and Lightning"),
 		sampling("sampling_method", "Sampler", groupDefaults, "--sampling-method", v1.ParamType_PARAM_TYPE_STRING, "", sdSamplers, 0, 0, 0,
 			"euler for transformers, lcm for PiD, euler_a for UNets"),
 		sampling("scheduler", "Scheduler", groupDefaults, "--scheduler", v1.ParamType_PARAM_TYPE_STRING, "", sdSchedulers, 0, 0, 0,
 			"family scheduler: flux, flux2, ltx2, logit_normal, lcm, or discrete"),
-		intParam("seed", "Seed", groupDefaults, "--seed", "-1", "", "-1 for random, sd-server's own default is 42", -1, 0, 1, true),
+		intParam("seed", "Seed", groupDefaults, "--seed", "42", "", "seed of a request that names none, -1 for random, empty keeps sd-server's 42", -1, 0, 1, true),
 		intParam("batch_count", "Images per request", groupDefaults, "--batch-count", "1", "images", "", 1, 64, 1, true),
 		intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 uses the family default", -1, 12, 1, true),
 		floatParam("strength", "Strength", groupDefaults, "--strength", "0.75", "", 0, 1, 0.05, true),
@@ -336,7 +336,7 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("extra_ad_args", "Extra ADetailer arguments", groupDetailer, "--extra-ad-args", "", pairs, nil, true),
 
 		// Diagnostics
-		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "debug", "sd-server's own is info, verbose and debug log the buffer sizes nebu measures", []string{"debug", "verbose", "info", "warn", "error"}, true),
+		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "info", "verbose and debug log the buffer sizes nebu measures, empty keeps sd-server's info", []string{"debug", "verbose", "info", "warn", "error"}, true),
 		boolParam("color", "Colored log", groupDiagnostics, "--color", true),
 	}
 }
@@ -388,7 +388,7 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	}
 	// Create adapter links under the prepared directory.
 	for name, d := range sdDirs {
-		if !p.IsAuto(name) {
+		if p[name] != nil {
 			continue
 		}
 		dir, err := linkDir(in.Artifacts["prepared_dir"], d.sub, in.Stored, d.picks)
@@ -397,12 +397,13 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 		}
 		p[name] = dir
 	}
-	// Enable offload when the plan or on_device leaves components in host memory.
-	offload := p.Str("offload") == "on"
-	if p.Str("offload") == "auto" {
-		offload = planOffloads(in.Plan) || (!p.IsAuto("on_device") && int(p.Int("on_device")) < sdPipelineParts(in.Plan, in.Descriptor))
+	// Offload is passed when set on, or when a set count of parts on device leaves some in host memory
+	setting := p.Str("offload")
+	offload := setting == "on"
+	if n, counted := p["on_device"].(int64); counted && setting == "" {
+		offload = int(n) < sdPipelineParts(in.Plan, in.Descriptor)
 	}
-	p["offload"] = ""
+	delete(p, "offload")
 	hostOnly := in.Placement == v1.Placement_PLACEMENT_HOST
 	if hostOnly && p.Str("backend") == "" {
 		p["backend"] = "cpu"
@@ -421,7 +422,7 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	if offload {
 		flags = append(flags, "--offload-to-cpu")
 		emitted["offload"] = "on"
-	} else {
+	} else if setting == "off" {
 		emitted["offload"] = "off"
 	}
 	cmd := &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}
@@ -568,7 +569,7 @@ func sdPipeline(in Launch, p estimate.Params) (string, error) {
 			}
 		}
 		param := sdParam(slot)
-		if param == "" || !p.IsAuto(param) {
+		if param == "" || p[param] != nil {
 			continue
 		}
 		path, err := file(slot, sub)
@@ -667,20 +668,6 @@ func sdPipelineParts(plan *v1.MemoryPlan, d *v1.Descriptor) int {
 		}
 	}
 	return n
-}
-
-// Reports whether any pipeline component uses host memory.
-func planOffloads(plan *v1.MemoryPlan) bool {
-	host := text.Enum(v1.PoolKind_POOL_KIND_HOST)
-	for _, pl := range plan.GetPlacements() {
-		switch pl.GetKind() {
-		case v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE, v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER:
-			if pl.GetPoolId() == host && pl.GetBytes() > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (SDCpp) Prepares(string) bool             { return false }
@@ -1144,12 +1131,6 @@ func (SDCpp) Policy() *estimate.Policy {
 		Margin:        0.05,
 		Solve:         sdSolve,
 		Missing:       sdMissing,
-		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
-			states := []*v1.ParamState{
-				bounds("on_device", 0, float64(sdPartCount(s.Descriptor)), 1),
-				bounds("threads", -1, cpuThreads(s.Host), 1),
-			}
-			return states, sdWarning(s)
-		},
+		Warning:       sdWarning,
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -126,7 +127,7 @@ func (m *Manager) isBusy(id string) bool {
 	return m.busy[id]
 }
 
-// Loads every slot from the store, giving older slots the desire their request implied and clearing inherits of gone slots
+// Loads every slot, older ones gaining the desire and the settings their request held, inherits of gone slots cleared
 func (m *Manager) Load(ctx context.Context) error {
 	list, err := m.DB.ListSlots(ctx)
 	if err != nil {
@@ -134,21 +135,30 @@ func (m *Manager) Load(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	m.slots = map[string]*v1.Slot{}
+	var changed []*v1.Slot
 	for _, s := range list {
 		if s.GetMeta() == nil {
 			s.Meta = &v1.ObjectMeta{Generation: 1}
 			s.DesiredRunning = s.GetRequest() != nil && s.GetState() != v1.SlotState_SLOT_STATE_EMPTY && s.GetState() != v1.SlotState_SLOT_STATE_FAILED
 		}
 		m.slots[s.GetId()] = s
+		if r := s.GetRequest(); r.GetRuntimeId() != "" || r.GetInstallId() != "" || len(r.GetParams()) > 0 || r.GetArgs() != "" {
+			// A request from before slots kept their settings launched its words after the slot's
+			if words := strings.TrimSpace(r.GetArgs()); words != "" && words != s.GetArgs() {
+				r.Args = strings.TrimSpace(s.GetArgs() + " " + words)
+			}
+			settle(s, r, false)
+			s.Request = held(r)
+			changed = append(changed, m.bumpLocked(s))
+		}
 	}
-	var heirs []*v1.Slot
 	for _, s := range m.slots {
 		if m.unheritLocked(s) {
-			heirs = append(heirs, m.bumpLocked(s))
+			changed = append(changed, m.bumpLocked(s))
 		}
 	}
 	m.mu.Unlock()
-	m.persist(heirs)
+	m.persist(changed)
 	m.renumber()
 	return nil
 }
@@ -170,7 +180,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 				sl.InstanceId, sl.DesiredRunning = live.GetId(), true
 				sl.State = stateOf(live)
 				if live.GetRequest() != nil {
-					sl.Request = live.GetRequest()
+					sl.Request = held(live.GetRequest())
 				}
 			})
 			if err := m.claimRoutes(ctx, s, occupant{in: live}); err != nil {
@@ -498,6 +508,96 @@ func (m *Manager) statusLocked(s *v1.Slot) {
 	}
 }
 
+// Takes a run's settings as the slot's own, wholly when exact, a formation run leaving the install pin, reporting a change
+func settle(sl *v1.Slot, run *v1.RunRequest, mesh bool) bool {
+	runtime, install, args, params := sl.GetRuntimeId(), sl.GetInstallId(), sl.GetArgs(), sl.GetParams()
+	if run.GetExact() {
+		sl.RuntimeId, sl.InstallId, sl.Args = run.GetRuntimeId(), run.GetInstallId(), strings.TrimSpace(run.GetArgs())
+		sl.Params = maps.Clone(run.GetParams())
+	} else {
+		if id := run.GetRuntimeId(); id != "" && id != runtime {
+			sl.RuntimeId, sl.InstallId = id, ""
+		}
+		if id := run.GetInstallId(); id != "" {
+			sl.InstallId = id
+		}
+		if len(run.GetParams()) > 0 {
+			sl.Params = runtimes.Merge(params, run.GetParams())
+		}
+		if words := strings.TrimSpace(run.GetArgs()); words != "" {
+			sl.Args = words
+		}
+	}
+	if mesh && run.GetInstallId() == "" && sl.GetRuntimeId() == runtime {
+		sl.InstallId = install
+	}
+	return sl.GetRuntimeId() != runtime || sl.GetInstallId() != install || sl.GetArgs() != args || !maps.Equal(sl.GetParams(), params)
+}
+
+// The request a slot keeps of a run, its model and route alone, the launch settings living on the slot
+func held(run *v1.RunRequest) *v1.RunRequest {
+	if run == nil {
+		return nil
+	}
+	out := proto.Clone(run).(*v1.RunRequest)
+	out.RuntimeId, out.InstallId, out.Params, out.Args, out.Exact = "", "", nil, "", false
+	return out
+}
+
+// A replacement's request carrying every setting it launches with, the run's over the slot's, the slot's own untouched
+func candidate(s *v1.Slot, run *v1.RunRequest) *v1.RunRequest {
+	out := proto.Clone(run).(*v1.RunRequest)
+	if out.GetExact() {
+		return out
+	}
+	if out.RuntimeId == "" {
+		out.RuntimeId = s.GetRuntimeId()
+	}
+	if out.InstallId == "" && out.RuntimeId == s.GetRuntimeId() {
+		out.InstallId = s.GetInstallId()
+	}
+	out.Params = runtimes.Merge(s.GetParams(), run.GetParams())
+	out.Args = runtimes.RunArgs(s.GetArgs(), run.GetArgs())
+	out.Exact = true
+	return out
+}
+
+// Settles the slot on a run's settings, a new spec generation when they change any
+func (m *Manager) take(id string, run *v1.RunRequest, mesh bool) *v1.Slot {
+	return m.update(id, func(sl *v1.Slot) {
+		if settle(sl, run, mesh) {
+			bump(sl)
+		}
+	})
+}
+
+// Takes the settings a run into the slot names as the slot's own, implementing the instance manager's slots
+func (m *Manager) Settle(id string, run *v1.RunRequest) error {
+	s, err := m.find(id)
+	if err != nil {
+		return err
+	}
+	if settle(proto.Clone(s).(*v1.Slot), run, false) {
+		m.take(s.GetId(), run, false)
+	}
+	return nil
+}
+
+// Checks a pinned install exists and belongs to the slot's runtime, returning the runtime an install alone names
+func (m *Manager) checkInstall(ctx context.Context, runtimeID, installID string) (string, error) {
+	if installID == "" {
+		return runtimeID, nil
+	}
+	in, err := m.Instances.Installs.Get(ctx, installID)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrSlot, err)
+	}
+	if runtimeID != "" && in.GetRuntimeId() != runtimeID {
+		return "", fmt.Errorf("%w: install %s is a %s install, not %s", ErrSlot, installID, in.GetRuntimeId(), runtimeID)
+	}
+	return in.GetRuntimeId(), nil
+}
+
 // Resolves a slot into planning constraints, implementing the instance manager's slots
 func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reservation, error) {
 	s, err := m.find(id)
@@ -512,6 +612,7 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 		PoolBytes:   m.localPools(s.GetPoolBytes()),
 		Placement:   s.GetPlacement(),
 		RuntimeID:   s.GetRuntimeId(),
+		InstallID:   s.GetInstallId(),
 		Params:      s.GetParams(),
 		InstanceID:  s.GetInstanceId(),
 		Args:        s.GetArgs(),
@@ -729,6 +830,10 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	if err != nil {
 		return nil, err
 	}
+	runtime, err := m.checkInstall(ctx, req.GetRuntimeId(), req.GetInstallId())
+	if err != nil {
+		return nil, err
+	}
 	now := timestamppb.Now()
 	s := &v1.Slot{
 		Id:          db.NewID(),
@@ -739,7 +844,8 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		DeviceIds:   devices,
 		MemoryBytes: req.GetMemoryBytes(),
 		PoolBytes:   caps,
-		RuntimeId:   req.GetRuntimeId(),
+		RuntimeId:   runtime,
+		InstallId:   req.GetInstallId(),
 		Params:      req.GetParams(),
 		Args:        args,
 		Policy:      req.GetPolicy(),
@@ -854,9 +960,13 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// Updates names, description and route limits at once, aliases inheriting them too, other settings applying on the next run
+// Updates names, description and route limits at once, aliases inheriting them too, launch settings applying on the slot's next launch
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Slot, error) {
 	s, err := m.find(req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := m.checkInstall(ctx, req.GetRuntimeId(), req.GetInstallId())
 	if err != nil {
 		return nil, err
 	}
@@ -900,7 +1010,8 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		sl.DeviceIds = devices
 		sl.MemoryBytes = req.GetMemoryBytes()
 		sl.PoolBytes = caps
-		sl.RuntimeId = req.GetRuntimeId()
+		sl.RuntimeId = runtime
+		sl.InstallId = req.GetInstallId()
 		sl.Params = req.GetParams()
 		sl.Args = args
 		sl.Policy = req.GetPolicy()
@@ -1047,7 +1158,7 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	return s, nil
 }
 
-// Stops the occupant and clears the saved request and the desire to run
+// Stops the occupant and clears the saved request and the desire to run, the slot keeping its launch settings
 func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -1103,7 +1214,7 @@ func (m *Manager) Relaunch(ctx context.Context, id string) (*v1.Slot, *v1.Instan
 		return nil, nil, nil, err
 	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
-		sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request, sl.DesiredRunning = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), in.GetRequest(), true
+		sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request, sl.DesiredRunning = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), held(in.GetRequest()), true
 	})
 	if err := m.claimRoutes(ctx, next, occupant{in: in}); err != nil {
 		m.Log.Warn("slot routes not named", "slot", next.GetName(), "err", err)
@@ -1276,6 +1387,12 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 		}
 		return m.fill(ctx, s, run, mesh)
 	}
+	// The replacement launches on its own settings and the slot takes them once it serves
+	if mesh {
+		run = m.meshRequest(s, run)
+	} else {
+		run = candidate(s, run)
+	}
 	mode := ModeBlueGreen
 	switch {
 	case canary && verdict != v1.FitVerdict_FIT_VERDICT_FITS:
@@ -1350,7 +1467,7 @@ func (m *Manager) fill(ctx context.Context, s *v1.Slot, run *v1.RunRequest, mesh
 		return nil, nil, nil, err
 	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
-		sl.InstanceId, sl.FormationId, sl.State, sl.Error, sl.TaskId, sl.Request, sl.DesiredRunning = in.GetId(), "", v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), in.GetRequest(), true
+		sl.InstanceId, sl.FormationId, sl.State, sl.Error, sl.TaskId, sl.Request, sl.DesiredRunning = in.GetId(), "", v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), held(in.GetRequest()), true
 		bump(sl)
 	})
 	if err := m.claimRoutes(ctx, next, occupant{in: in}); err != nil {
@@ -1369,8 +1486,9 @@ func (m *Manager) launchFresh(ctx context.Context, h *tasks.Handle, s *v1.Slot, 
 	return occupant{in: in}, err
 }
 
-// Launches the slot's model and returns the ready instance
+// Launches a swap's model and returns the ready instance, the slot's settings left for the swap to settle
 func (m *Manager) launch(ctx context.Context, h *tasks.Handle, run *v1.RunRequest, swap bool) (*v1.Instance, error) {
+	ctx = instances.Unsettled(ctx)
 	if swap {
 		ctx = instances.WithSwap(ctx)
 	}
@@ -1389,9 +1507,9 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, run *v1.RunReques
 func (m *Manager) occupy(ctx context.Context, s *v1.Slot, o occupant) error {
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		if o.f != nil {
-			sl.FormationId, sl.InstanceId, sl.Request = o.f.GetId(), "", o.f.GetRequest()
+			sl.FormationId, sl.InstanceId, sl.Request = o.f.GetId(), "", held(o.f.GetRequest())
 		} else {
-			sl.FormationId, sl.InstanceId, sl.Request = "", o.in.GetId(), o.in.GetRequest()
+			sl.FormationId, sl.InstanceId, sl.Request = "", o.in.GetId(), held(o.in.GetRequest())
 		}
 	})
 	return m.claimRoutes(ctx, next, o)
@@ -1425,6 +1543,7 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 		return err
 	}
 	h.Progress(1, 3, "switching routes")
+	m.take(s.GetId(), run, mesh)
 	if err := m.occupy(ctx, s, fresh); err != nil {
 		h.Logf("routes not pointed at %s: %v", fresh.name(), err)
 	}
@@ -1463,6 +1582,7 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 	fresh, err := m.launchFresh(ctx, h, s, run, mesh, false)
 	if err == nil {
 		h.Progress(2, 3, "switching routes")
+		m.take(s.GetId(), run, mesh)
 		m.settle(ctx, s, &fresh, "")
 		h.Progress(3, 3, "ready")
 		return nil
@@ -1529,7 +1649,7 @@ func (m *Manager) OnInstance(rec *v1.Instance) {
 		s = m.update(s.GetId(), func(sl *v1.Slot) {
 			sl.InstanceId, sl.DesiredRunning = rec.GetId(), true
 			if rec.GetRequest() != nil {
-				sl.Request = rec.GetRequest()
+				sl.Request = held(rec.GetRequest())
 			}
 		})
 	}

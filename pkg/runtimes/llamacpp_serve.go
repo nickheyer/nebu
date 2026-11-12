@@ -70,6 +70,17 @@ func (LlamaCpp) Adapters(endpoint string, params map[string]string) AdapterClien
 
 func (LlamaCpp) Sleeper(string, map[string]string) SleepClient { return nil }
 
+// The template file or text the params name, or the renderer llama.cpp falls back to with jinja off
+func (LlamaCpp) TemplateOverride(params map[string]string) (string, string) {
+	if params["jinja"] == "off" {
+		return "llama.cpp's renderer without jinja", ""
+	}
+	if file := strings.TrimSpace(params["chat_template_file"]); file != "" {
+		return "", file
+	}
+	return strings.TrimSpace(params["chat_template"]), ""
+}
+
 // Context one slot holds, the whole pool when unified, rerank or embedding alone for those modes, else the projector's modalities
 func (LlamaCpp) Inventory(in Launch, params map[string]string) (*v1.RuntimeInventory, error) {
 	inv, err := baseInventory(in, params)

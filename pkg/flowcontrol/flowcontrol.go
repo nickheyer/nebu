@@ -19,6 +19,10 @@ var (
 	ErrQueueFull = errors.New("queue full")
 	// Returned when the fairness id used up its quota for the window
 	ErrQuotaExceeded = errors.New("fairness quota exceeded")
+	// Answered by an item's placement while no endpoint has room for it, the item then waiting in queue
+	ErrNoRoom = errors.New("no endpoint has room for the request")
+	// Answered by a placement that found every endpoint full, the whole pool then waiting for a release
+	ErrPoolFull = fmt.Errorf("%w: every endpoint is full", ErrNoRoom)
 )
 
 // Identifies the flow a request belongs to
@@ -32,21 +36,16 @@ type Item struct {
 	ID       string
 	Flow     FlowKey
 	Pool     datalayer.PoolID
-	Model    string
-	Adapter  string
 	Priority int
 	// Estimated cost in tokens, prompt plus expected output
 	Cost int
-	// Prompt tokens, the predictor input for time to first token
-	PromptTokens int
-	// The latency objective, zero fields meaning none
-	TTFT time.Duration
-	TPOT time.Duration
 	// When the request entered flow control
 	EnqueuedAt time.Time
 	// The route the item counts under across every pool and how many of its items may be in flight, zero uncapped
 	Route      string
 	RouteLimit int
+	// Claims room on an endpoint, ErrNoRoom or ErrPoolFull keeping the item queued and any other error ending its admission
+	Place func() error
 }
 
 // The permit a dispatched request holds until it is released
@@ -85,24 +84,10 @@ func (e *QuotaError) Error() string {
 
 func (e *QuotaError) Unwrap() error { return ErrQuotaExceeded }
 
-// Judges whether a pool can take another request of a given cost
-type SaturationDetector interface {
-	// Whether the pool has no capacity for the item, at the hard limit of its endpoints
-	HardSaturated(pool datalayer.PoolID, item *Item) bool
-	// Whether every endpoint of the pool would miss the item's latency objective
-	SoftSaturated(pool datalayer.PoolID, item *Item) bool
-	// Records that the item left the queue and now holds capacity in the pool
-	Dispatched(pool datalayer.PoolID, item *Item)
-	// Records that the dispatched item gave its capacity back
-	Released(pool datalayer.PoolID, item *Item)
-}
-
-// Admits requests into a pool under priority, fairness, quota and saturation
+// Admits requests into a pool under priority, fairness and quota, each dispatched once its placement finds room
 type Controller interface {
-	// Blocks until the item may dispatch, or returns a shed, quota, timeout or ctx error
+	// Blocks until the item is placed, or returns a shed, quota, timeout, placement or ctx error
 	Admit(ctx context.Context, item *Item) (Permit, error)
-	// Gives a dispatched item's capacity back and blocks until it may dispatch again, timed from its first admission
-	Requeue(ctx context.Context, pm Permit, item *Item) (Permit, error)
 	// The number of items waiting per band for a pool
 	Depth(pool datalayer.PoolID) map[int]int
 	// The number of dispatched items not yet released for a pool
@@ -121,6 +106,8 @@ const (
 	OutcomeTimeout    = "timeout"
 	OutcomeCanceled   = "canceled"
 	OutcomeClosed     = "closed"
+	// The placement failed for a reason other than room
+	OutcomeUnplaced = "unplaced"
 )
 
 // Receives one call per admission so a caller can export counters and histograms
@@ -135,9 +122,9 @@ type Config struct {
 	QueueCapacity int
 	// How long an item may wait before it times out
 	QueueTimeout time.Duration
-	// Bands at or below this priority are shed instead of queued under hard saturation
+	// Bands at or below this priority are shed instead of queued when no endpoint has room
 	SheddableBelow int
-	// How often queued items are reconsidered when no release wakes them
+	// How often queued items are placed again when no release wakes them
 	Tick time.Duration
 	// The quota of every fairness id without one of its own
 	Quota Quota

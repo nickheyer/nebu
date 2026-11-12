@@ -185,6 +185,16 @@ func runRuntimesRecipes(ctx context.Context, e *env, args []string) error {
 			rows = append(rows, []string{r.GetId(), r.GetRuntimeId(), rs.GetVariant(), strings.Join(variants, ","), text.Enum(rs.GetSandbox()), strings.Join(rs.GetUnmet(), ", "), r.GetDescription()})
 		}
 		table(w, []string{"ID", "RUNTIME", "SELECTED", "VARIANTS", "SANDBOX", "UNMET", "DESCRIPTION"}, rows)
+		for _, rs := range resp.Msg.GetRecipes() {
+			var patches [][]string
+			for _, p := range rs.GetRecipe().GetPatches() {
+				patches = append(patches, []string{p.GetId(), p.GetDescription()})
+			}
+			if len(patches) > 0 {
+				section(w, rs.GetRecipe().GetId()+" patches")
+				table(w, []string{"PATCH", "DESCRIPTION"}, patches)
+			}
+		}
 	})
 }
 
@@ -197,8 +207,9 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 	ref := fs.String("ref", "", "source ref, the recipe default when empty")
 	force := fs.Bool("force", false, "rebuild even when this exact build already exists")
 	detach := fs.Bool("detach", false, "start the task and return its id")
-	var vars multi
+	var vars, skip multi
 	fs.Var(&vars, "var", "recipe var as name=value, repeatable")
+	fs.Var(&skip, "no-patch", "recipe patch id to leave out, repeatable, see nebu runtimes recipes")
 	usage := "build <runtime> [flags]"
 	positional, err := e.parse(fs, args, 0, 1, usage)
 	if err != nil {
@@ -216,7 +227,7 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := &v1.BuildRequest{RecipeId: *recipe, Variant: *variant, Image: *image, Ref: *ref, Force: *force, Vars: varMap}
+	req := &v1.BuildRequest{RecipeId: *recipe, Variant: *variant, Image: *image, Ref: *ref, Force: *force, Vars: varMap, SkipPatches: skip}
 	if len(positional) == 1 {
 		req.RuntimeId = positional[0]
 	}

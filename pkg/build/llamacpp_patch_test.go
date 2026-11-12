@@ -56,3 +56,60 @@ func TestLlamaCppEmptySlotPatchApplies(t *testing.T) {
 		t.Fatalf("yield at %d is not between the cache save at %d and the LRU pick at %d", yield, save, lru)
 	}
 }
+
+// The idle slot patch lands on the llama.cpp server source it was written against, once, and is tolerated when already there
+func TestLlamaCppResidentIdleSlotsPatchApplies(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("testdata", "llamacpp_idle_slots.cpp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "tools", "server", "server-context.cpp")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var patch recipes.Patch
+	for _, p := range (recipes.LlamaCpp{}).Patches() {
+		if p.ID == "server-resident-idle-slots" {
+			patch = p
+		}
+	}
+	if len(patch.Content) == 0 {
+		t.Fatal("the llama.cpp recipe carries no server-resident-idle-slots patch")
+	}
+	parsed, err := parseUnified(patch.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := range 2 {
+		touched, err := applyPatches(root, parsed, 1)
+		if err != nil || len(touched) != 1 || touched[0] != "tools/server/server-context.cpp" {
+			t.Fatalf("round %d: %v %v", round, touched, err)
+		}
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for text, want := range map[string]int{
+		"params_base.cache_idle_slots && !params_base.kv_unified":         1,
+		"bool try_clear_idle_slots(const server_slot * keep = nullptr) {": 1,
+		"try_clear_idle_slots(ret)":                                       2,
+		"lru->prompt_save(*prompt_cache)":                                 1,
+		"lru->prompt_clear();":                                            1,
+		"slot.prompt_clear();":                                            0,
+		"purging slot":                                                    0,
+	} {
+		if n := strings.Count(got, text); n != want {
+			t.Fatalf("%q appears %d times, want %d, in the patched source:\n%s", text, n, want, got)
+		}
+	}
+	// The state is saved before the slot's cells are cleared
+	if save, clear := strings.Index(got, "lru->prompt_save(*prompt_cache)"), strings.Index(got, "lru->prompt_clear();"); save > clear {
+		t.Fatalf("the slot is cleared at %d before its state is saved at %d", clear, save)
+	}
+}

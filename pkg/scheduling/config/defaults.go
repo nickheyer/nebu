@@ -1,29 +1,17 @@
 package config
 
-// The profile set for a pool whose runtime exports queue, KV cache and LoRA metrics
+// The profile set for a pool whose runtime lists its adapters, endpoints picked by the gateway's own counts
 const DefaultConfig = `plugins:
 - type: ready-filter
   name: ready
-- type: fresh-metrics-filter
-  name: fresh
-  parameters:
-    threshold: 2s
 - type: subset-filter
   name: subset
-- type: kv-threshold-filter
-  name: kv-limit
-  parameters:
-    max: 0.95
 - type: capacity-filter
   name: capacity
 - type: lora-affinity-filter
   name: lora-filter
 - type: objective-filter
   name: objective
-- type: queue-scorer
-  name: queue
-- type: kv-cache-utilization-scorer
-  name: kv
 - type: prefix-cache-scorer
   name: prefix
 - type: lora-affinity-scorer
@@ -50,16 +38,10 @@ profiles:
 - name: default
   plugins:
   - pluginRef: ready
-  - pluginRef: fresh
   - pluginRef: subset
-  - pluginRef: kv-limit
   - pluginRef: capacity
   - pluginRef: lora-filter
   - pluginRef: objective
-  - pluginRef: queue
-    weight: 1
-  - pluginRef: kv
-    weight: 1
   - pluginRef: prefix
     weight: 3
   - pluginRef: lora
@@ -129,10 +111,6 @@ profileHandler:
 const DefaultPDConfig = `plugins:
 - type: ready-filter
   name: ready
-- type: fresh-metrics-filter
-  name: fresh
-  parameters:
-    threshold: 2s
 - type: subset-filter
   name: subset
 - type: role-filter
@@ -143,18 +121,10 @@ const DefaultPDConfig = `plugins:
   name: decode-role
   parameters:
     role: decode
-- type: kv-threshold-filter
-  name: kv-limit
-  parameters:
-    max: 0.95
 - type: capacity-filter
   name: capacity
 - type: lora-affinity-filter
   name: lora-filter
-- type: queue-scorer
-  name: queue
-- type: kv-cache-utilization-scorer
-  name: kv
 - type: prefix-cache-scorer
   name: prefix
 - type: lora-affinity-scorer
@@ -185,16 +155,10 @@ profiles:
 - name: prefill
   plugins:
   - pluginRef: ready
-  - pluginRef: fresh
   - pluginRef: subset
   - pluginRef: prefill-role
-  - pluginRef: kv-limit
   - pluginRef: capacity
   - pluginRef: lora-filter
-  - pluginRef: queue
-    weight: 1
-  - pluginRef: kv
-    weight: 1
   - pluginRef: prefix
     weight: 3
   - pluginRef: lora
@@ -209,16 +173,10 @@ profiles:
 - name: decode
   plugins:
   - pluginRef: ready
-  - pluginRef: fresh
   - pluginRef: subset
   - pluginRef: decode-role
-  - pluginRef: kv-limit
   - pluginRef: capacity
   - pluginRef: lora-filter
-  - pluginRef: queue
-    weight: 1
-  - pluginRef: kv
-    weight: 1
   - pluginRef: prefix
     weight: 3
   - pluginRef: lora
@@ -240,24 +198,12 @@ profileHandler:
 const DefaultReplicasConfig = `plugins:
 - type: ready-filter
   name: ready
-- type: fresh-metrics-filter
-  name: fresh
-  parameters:
-    threshold: 2s
 - type: subset-filter
   name: subset
-- type: kv-threshold-filter
-  name: kv-limit
-  parameters:
-    max: 0.95
 - type: capacity-filter
   name: capacity
 - type: lora-affinity-filter
   name: lora-filter
-- type: queue-scorer
-  name: queue
-- type: kv-cache-utilization-scorer
-  name: kv
 - type: prefix-cache-scorer
   name: prefix
 - type: assumed-load-scorer
@@ -284,15 +230,9 @@ profiles:
 - name: replicas
   plugins:
   - pluginRef: ready
-  - pluginRef: fresh
   - pluginRef: subset
-  - pluginRef: kv-limit
   - pluginRef: capacity
   - pluginRef: lora-filter
-  - pluginRef: queue
-    weight: 1
-  - pluginRef: kv
-    weight: 1
   - pluginRef: prefix
     weight: 4
   - pluginRef: assumed

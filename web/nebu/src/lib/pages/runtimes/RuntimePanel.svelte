@@ -91,12 +91,15 @@
 	let image = $state('');
 	let ref = $state('');
 	let force = $state(false);
+	// Recipe patches the build leaves out, every patch applied until switched off
+	let skipPatches = $state<string[]>([]);
 	let busy = $state(false);
 
 	const recipe = $derived(option?.recipe ?? recipes.find((r) => r.recipe?.runtimeId === id));
 	const variants = $derived((recipe?.recipe?.variants ?? []).map((v) => ({ value: v.id, label: v.id, description: unsupported(v) ? v.requires : v.description, disabled: unsupported(v) })));
 	const absent = $derived(recipe?.absentTools ?? []);
 	const chosen = $derived(recipe?.recipe?.variants.find((v) => v.id === variant));
+	const patches = $derived(recipe?.recipe?.patches ?? []);
 	// Tools the chosen variant needs that this host lacks, none inside a container which brings its own
 	const missing = $derived(sandbox === SandboxKind.HOST ? [...(recipe?.recipe?.tools ?? []), ...(chosen?.tools ?? [])].filter((t) => absent.includes(t)) : []);
 
@@ -154,6 +157,10 @@
 		return out;
 	}
 
+	function togglePatch(id: string, on: boolean) {
+		skipPatches = on ? skipPatches.filter((x) => x !== id) : [...skipPatches.filter((x) => x !== id), id];
+	}
+
 	function commit() {
 		const kind = option?.method?.kind;
 		if (kind === InstallKind.ADOPTED) return adopt();
@@ -192,7 +199,7 @@
 	async function build() {
 		busy = true;
 		try {
-			const res = await rpc.build.build({ runtimeId: id, recipeId: recipe?.recipe?.id ?? '', variant, vars, sandbox, image, force, ref });
+			const res = await rpc.build.build({ runtimeId: id, recipeId: recipe?.recipe?.id ?? '', variant, vars, sandbox, image, force, ref, skipPatches: skipPatches.filter((x) => patches.some((p) => p.id === x)) });
 			if (!res.task) throw new Error('the daemon answered without a task');
 			followTask(res.task, `Build ${rt?.name}`);
 			ontab('installs');
@@ -228,7 +235,7 @@
 	}
 
 	function users(installId: string) {
-		const slots = [...live.slots.values()].filter((s) => s.request?.installId === installId).map((s) => s.name);
+		const slots = [...live.slots.values()].filter((s) => s.installId === installId).map((s) => s.name);
 		const instances = [...live.instances.values()].filter((i) => i.installId === installId).map((i) => i.name);
 		return { slots, instances };
 	}
@@ -339,6 +346,20 @@
 						<Str value={missingText(missing)} kind="message" color="error" width="100%" />
 					{/if}
 				</FormSection>
+				{#if patches.length}
+					<FormSection title="Patches">
+						<List head={{ primary: 'Patch', action: 'Apply' }} label="Patches" compactBelow={0}>
+							{#each patches as p (p.id)}
+								<ListRow primary={p.id} primaryKind="version">
+									{#snippet action()}
+										<Switch checked={!skipPatches.includes(p.id)} aria={`Apply ${p.id}`} onchange={(on) => togglePatch(p.id, on)} />
+									{/snippet}
+									{#snippet below()}<span class="secondary muted">{p.description}</span>{/snippet}
+								</ListRow>
+							{/each}
+						</List>
+					</FormSection>
+				{/if}
 			{/if}
 		</Stack>
 		<SaveBar always dirty saving={busy} label={verb} disabled={option?.method?.kind === InstallKind.BUILT && (missing.length > 0 || !variant)} onsave={commit} ondiscard={() => ontab('installs')} />

@@ -54,8 +54,10 @@ func (m *Manager) launchOnce(ctx context.Context, h *tasks.Handle, in *instance,
 			return err
 		}
 		p.generation = gen
+		p.inherit()
 		in.update(func(r *v1.Instance) {
 			r.Plan, r.InstallId = p.plan, p.install.GetId()
+			r.Request = proto.Clone(p.req).(*v1.RunRequest)
 			r.Conditions = SetCondition(r.Conditions, CondScheduled, true, ReasonPlanned, planDetail(p), gen)
 		})
 	}
@@ -114,7 +116,7 @@ func (m *Manager) Preview(ctx context.Context, req *v1.RunRequest) ([]string, ma
 		input.Artifacts = launchArtifacts
 	}
 	cmds, err := renderRanks(input, p.rt.Ranks(stringParams(p.params)), p.rt.Launch, func(in runtimes.Launch, cmd *runtimes.Command) error {
-		extra, err := runtimes.RenderArgs(runtimes.JoinArgs(p.res.args(), p.req.GetArgs()), runtimes.ScopeOf(in, cmd))
+		extra, err := runtimes.RenderArgs(p.args(), runtimes.ScopeOf(in, cmd))
 		cmd.Args = append(cmd.Args, extra...)
 		return err
 	})
@@ -179,7 +181,7 @@ func (m *Manager) launchSolo(ctx context.Context, h *tasks.Handle, in *instance,
 		}
 		input.Port = port
 		cmds, err := renderRanks(input, ranks, rt.Launch, func(in runtimes.Launch, cmd *runtimes.Command) error {
-			extra, err := runtimes.RenderArgs(runtimes.JoinArgs(p.res.args(), p.req.GetArgs()), runtimes.ScopeOf(in, cmd))
+			extra, err := runtimes.RenderArgs(p.args(), runtimes.ScopeOf(in, cmd))
 			cmd.Args = append(cmd.Args, extra...)
 			return err
 		})
@@ -513,7 +515,7 @@ func cacheMeasured(measurements []*v1.Measurement) uint64 {
 	return total
 }
 
-// Records the auto params the runtime picked itself, read from its log, as the instance's params
+// Records what the runtime picked for the params the launch left unset, read from its log, as the instance's params
 func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string) map[string]string {
 	policy := in.rt.Policy()
 	if policy == nil {
@@ -521,18 +523,22 @@ func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string
 	}
 	rec := in.snapshot()
 	picked := map[string]string{}
-	for name, read := range policy.Deferred {
-		if _, set := rec.GetParams()[name]; set {
-			continue
+	read := func(readers map[string]func([]string) (string, bool), always bool) {
+		for name, value := range readers {
+			if _, set := rec.GetParams()[name]; set {
+				continue
+			}
+			v, ok := value(lines)
+			if ok {
+				picked[name] = v
+				logf("%s %s, chosen by %s", name, v, rec.GetRuntimeId())
+			} else if always {
+				logf("%s left %s to the runtime and its log names no value for it", rec.GetName(), name)
+			}
 		}
-		v, ok := read(lines)
-		if !ok {
-			logf("%s left %s to the runtime and its log names no value for it", rec.GetName(), name)
-			continue
-		}
-		picked[name] = v
-		logf("%s %s, chosen by %s", name, v, rec.GetRuntimeId())
 	}
+	read(policy.Deferred, true)
+	read(policy.Stated, false)
 	if len(picked) == 0 {
 		return nil
 	}
@@ -574,20 +580,13 @@ func (m *Manager) replan(ctx context.Context, logf func(string, ...any), in *ins
 	in.update(func(r *v1.Instance) { r.Plan = plan })
 }
 
-// Reads the chat template from the model's files, or for a diffusion runtime the generation modes it serves
+// Reads the chat template the launch runs, or for a diffusion runtime the generation modes it serves
 func (m *Manager) readTemplate(ctx context.Context, logf func(string, ...any), in *instance) (*v1.ChatTemplate, error) {
 	rec := in.snapshot()
 	if m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
 		return nil, m.readModes(ctx, logf, in)
 	}
-	var tpl *v1.ChatTemplate
-	if m.Store == nil {
-		tpl = &v1.ChatTemplate{Error: "no store holds the model's files"}
-	} else if stored, err := m.Store.ReadManifest(rec.GetSourceId(), rec.GetRepo(), rec.GetGroup()); err != nil {
-		tpl = &v1.ChatTemplate{Error: "manifest: " + err.Error()}
-	} else {
-		tpl = chattemplate.Inspect(stored)
-	}
+	tpl := chattemplate.Describe(m.launchTemplate(rec))
 	switch {
 	case tpl.GetError() != "":
 		logf("chat template: %s. Tool definitions pass through as the client sends them", tpl.GetError())

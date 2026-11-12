@@ -24,8 +24,14 @@ const None = "none"
 // Default shutdown grace period.
 const DefaultStopGrace = 15 * time.Second
 
+// Form groups whose params turn speculative decoding on or tune it, which a formation plan looks for
+const (
+	GroupSpeculative = "Speculative decoding"
+	GroupDraft       = "Draft model"
+)
+
 // Shared rule for automatic context length.
-const contextRule = "the largest context that fits in memory, up to the length the model was trained for"
+const contextRule = "the runtime's own choice, the length the model was trained for"
 
 var (
 	// Returned when a runtime id is not known
@@ -242,6 +248,9 @@ func New(list []Runtime) (*Registry, error) {
 				return nil, fmt.Errorf("runtime %s: %w", rt.ID(), err)
 			}
 		}
+		if err := checkRefs(rt.Params()); err != nil {
+			return nil, fmt.Errorf("runtime %s: %w", rt.ID(), err)
+		}
 		methods := map[string]bool{}
 		for _, m := range rt.Methods() {
 			if m.ID == "" || methods[m.ID] {
@@ -301,20 +310,6 @@ func checkRule(p *v1.Param) error {
 	return nil
 }
 
-// Total probed CPU threads.
-func cpuThreads(h *v1.HostProfile) float64 {
-	var n float64
-	for _, d := range h.GetDevices() {
-		if d.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU {
-			continue
-		}
-		if v, err := strconv.ParseFloat(d.GetFacts()["threads"], 64); err == nil {
-			n += v
-		}
-	}
-	return n
-}
-
 // First reported driver version for the vendor, or empty.
 func driverVersion(h *v1.HostProfile, vendor string) string {
 	for _, d := range h.GetDevices() {
@@ -325,6 +320,32 @@ func driverVersion(h *v1.HostProfile, vendor string) string {
 		}
 	}
 	return ""
+}
+
+// Requires every param a form condition or a scaled list names to exist, and scaled lists to pair rightly
+func checkRefs(params []*v1.Param) error {
+	byName := map[string]*v1.Param{}
+	for _, p := range params {
+		byName[p.GetName()] = p
+	}
+	for _, p := range params {
+		for _, w := range p.GetWhen() {
+			if byName[w.GetParam()] == nil {
+				return fmt.Errorf("param %s: offered by %s, which is no param", p.GetName(), w.GetParam())
+			}
+			if w.GetSet() == (len(w.GetValues()) > 0) {
+				return fmt.Errorf("param %s: its condition on %s names either values or any value", p.GetName(), w.GetParam())
+			}
+		}
+		if p.GetScaledIn() == "" {
+			continue
+		}
+		scaled := byName[p.GetScaledIn()]
+		if p.GetList() != v1.ParamList_PARAM_LIST_FILES || scaled.GetList() != v1.ParamList_PARAM_LIST_SCALED {
+			return fmt.Errorf("param %s: scaled_in pairs a files list with a scaled list, %s is not one", p.GetName(), p.GetScaledIn())
+		}
+	}
+	return nil
 }
 
 // Validates numeric bounds and positive steps.
@@ -510,13 +531,26 @@ func Status(rt Runtime, profile *v1.HostProfile) *v1.RuntimeStatus {
 	return &v1.RuntimeStatus{Runtime: Describe(rt), Compatible: ok, Unmet: unmet}
 }
 
-// Resolves typed params from the runtime's defaults and the overrides given
+// Typed values of the params a launch sets, a param left unset holding none so no flag carries it
 func Resolve(rt Runtime, overrides map[string]string) (estimate.Params, error) {
+	return typed(rt, overrides, false)
+}
+
+// What a plan reckons with, the set values over what the runtime keeps by itself for each param left unset
+func Assume(rt Runtime, overrides map[string]string) (estimate.Params, error) {
+	return typed(rt, overrides, true)
+}
+
+// Converts the overrides a runtime knows, an empty or auto one counting as unset, over each param's default when assumed
+func typed(rt Runtime, overrides map[string]string, assumed bool) (estimate.Params, error) {
 	params := rt.Params()
 	out := make(estimate.Params, len(params))
 	byName := map[string]*v1.Param{}
 	for _, p := range params {
 		byName[p.GetName()] = p
+		if !assumed {
+			continue
+		}
 		v, err := convert(p, p.GetDefault())
 		if err != nil {
 			return nil, err
@@ -530,6 +564,9 @@ func Resolve(rt Runtime, overrides map[string]string) (estimate.Params, error) {
 				continue
 			}
 			return nil, fmt.Errorf("%w: unknown param %q for runtime %s", ErrParam, name, rt.ID())
+		}
+		if unset(p, raw) {
+			continue
 		}
 		v, err := convert(p, raw)
 		if err != nil {
@@ -545,12 +582,24 @@ func Resolve(rt Runtime, overrides map[string]string) (estimate.Params, error) {
 	return out, nil
 }
 
+// Whether a raw value leaves its param unset, empty text for any and auto for a solved one
+func unset(p *v1.Param, raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw == "" || p.GetSolved() && strings.EqualFold(raw, Auto)
+}
+
 // The param a launch sets to false to keep Claude Code's billing header in the prompts the gateway rewrites for it
 const ParamStripBillingHeader = "strip_billing_header"
 
 // A runtime naming params it took once and now sets itself, which a stored launch may still carry
 type Retirer interface {
 	Retired() []string
+}
+
+// A runtime whose launch can run a chat template other than the one its model carries
+type TemplateOverrider interface {
+	// What the recorded params run in the model's template's place, as text or as a file, both empty when nothing
+	TemplateOverride(params map[string]string) (text, file string)
 }
 
 // A runtime that refuses resolved values its params' types and bounds cannot rule out
@@ -564,6 +613,12 @@ func fileList(p *v1.Param, list v1.ParamList) *v1.Param {
 	return p
 }
 
+// Names the scaled list that takes this file list's files given a scale, so one control fills both
+func scaledIn(scaled string, p *v1.Param) *v1.Param {
+	p.ScaledIn = scaled
+	return p
+}
+
 // Merges parameter maps, with later values taking precedence.
 func Merge(layers ...map[string]string) map[string]string {
 	out := map[string]string{}
@@ -574,6 +629,9 @@ func Merge(layers ...map[string]string) map[string]string {
 	}
 	return out
 }
+
+// A plan's text for a param as the typed value a launch holds
+func Value(p *v1.Param, raw string) (any, error) { return convert(p, raw) }
 
 func convert(p *v1.Param, raw string) (any, error) {
 	raw = strings.TrimSpace(raw)
@@ -802,9 +860,4 @@ func versionField(output string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// Numeric parameter bounds for the current model and host.
-func bounds(name string, min, max, step float64) *v1.ParamState {
-	return &v1.ParamState{Name: name, Min: min, Max: max, Step: step}
 }

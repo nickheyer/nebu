@@ -13,8 +13,8 @@ export const selectToggle = { text: true, elevation: 0, hover: 0, active: 0, pre
 // Nothing at all, drawn where an option list would draw placeholder rows while it waits
 const quiet = createRawSnippet(() => ({ render: () => '<span hidden></span>' }));
 
-// Option lists mount at the document root, scroll in the space under or over their box, and search in an edgeless box
-export const listPopover = { height: { max: 'available' }, tooltipProps: { portal: true, flipOptions: { fallbackAxisSideDirection: 'none' } }, loader: quiet, searchProps: { borderless: true } } as const;
+// Option lists mount at the document root, fit the space around their box, and search in an edgeless box
+export const listPopover = { width: { min: 'match', max: 'available' }, height: { max: 'available' }, tooltipProps: { portal: true, flipOptions: { fallbackAxisSideDirection: 'none' } }, loader: quiet, searchProps: { borderless: true } } as const;
 
 let seq = 0;
 

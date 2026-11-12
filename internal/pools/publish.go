@@ -81,6 +81,7 @@ func (m *Manager) publishLocked(ctx context.Context, owner OwnerRef, mem Members
 	}
 	if from != id {
 		if old := m.st.pools[from]; old != nil {
+			m.wokenLocked(old, owner)
 			old.owners = slices.DeleteFunc(old.owners, func(o OwnerRef) bool { return o == owner })
 		}
 		ps.owners = append(ps.owners, owner)
@@ -150,7 +151,7 @@ func (m *Manager) setReady(ctx context.Context, match func(*Published) bool, rea
 	m.publishViewLocked()
 }
 
-// Removes every endpoint the owner published, keeping the owner while it names routes so its pool can wake
+// Removes the owner's endpoints and ends the wakes they served, keeping an owner naming routes so it can wake
 func (m *Manager) Unpublish(ctx context.Context, owner OwnerRef) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -166,9 +167,11 @@ func (m *Manager) unpublishLocked(ctx context.Context, owner OwnerRef) {
 	os.published = nil
 	os.draining = false
 	ps := m.st.pools[os.pool]
+	if ps != nil {
+		m.wokenLocked(ps, owner)
+	}
 	m.releaseLocked(os)
 	if ps != nil {
-		ps.waking = false
 		m.applyLocked(ps, false)
 	}
 	m.refreshRoutesLocked(ctx)
@@ -384,7 +387,7 @@ func (m *Manager) commitLocked(ps *poolState, plan poolPlan) change {
 		ch.members = ch.members || members
 		ch.readiness = ch.readiness || readiness
 		if len(os.joined) > 0 {
-			ps.waking = false
+			m.wokenLocked(ps, o)
 		}
 	}
 	return ch

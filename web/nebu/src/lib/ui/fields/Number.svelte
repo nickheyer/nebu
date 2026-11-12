@@ -21,6 +21,10 @@
 		optional = false,
 		// The label beside a short box at the row's end, for a narrow column of settings
 		inline = false,
+		// A box alone, without the buttons that step it
+		plain = false,
+		// The name a box without a label goes by
+		aria,
 		onchange,
 		onclear
 	}: {
@@ -38,6 +42,8 @@
 		emptyZero?: boolean;
 		optional?: boolean;
 		inline?: boolean;
+		plain?: boolean;
+		aria?: string;
 		onchange?: (n: number) => void;
 		onclear?: () => void;
 	} = $props();
@@ -75,7 +81,7 @@
 <div class="field" class:inline class:dense={inline}>
 	<FieldLabel {label} {info} forId={id} />
 	<div class="box">
-		<Stepper {id} bind:raw bind:focused {min} {max} {step} {fallback} {disabled} {message} {error} {unit} buttons={!inline} ariaLabel={label} onchange={changed} />
+		<Stepper {id} bind:raw bind:focused {min} {max} {step} {fallback} {disabled} {message} {error} {unit} buttons={!inline && !plain} ariaLabel={label ?? aria} onchange={changed} />
 	</div>
 </div>
 

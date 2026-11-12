@@ -23,7 +23,7 @@ func defaults(dataDir, cacheDir string) *v1.Config {
 			Policy:         &v1.Policy{UpstreamTimeoutMs: 600000},
 			FlowControl: &v1.FlowControl{
 				QueueCapacity: 1024, QueueTimeoutMs: 30000, SheddableBelow: -1,
-				SaturationQueueDepth: 5, SaturationKvUtilization: 0.8, MetricsStalenessMs: 2000,
+				MetricsStalenessMs: 2000,
 			},
 			TraceRetention:      "168h",
 			TraceRing:           1024,

@@ -240,6 +240,16 @@ func (t *RuleTable) Lookup(ctx context.Context, model string) (datalayer.Pool, s
 	return t.lookup(t.snap.Load(), model)
 }
 
+// Every endpoint of the pool, with the adapter the model names there
+func (t *RuleTable) Scope(_ string, pool datalayer.PoolID, model string) Scope {
+	for _, b := range t.snap.Load().served[model] {
+		if b.pool == pool && b.adapter {
+			return Scope{Adapter: model}
+		}
+	}
+	return Scope{}
+}
+
 // The pool serving a name, several pools sharing it by their ready endpoint counts
 func (t *RuleTable) lookup(s *tableSnapshot, model string) (datalayer.Pool, string, error) {
 	by := s.served[model]

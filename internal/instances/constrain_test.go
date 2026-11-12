@@ -90,3 +90,29 @@ func TestConstrainCapsEachPool(t *testing.T) {
 		t.Fatalf("a cap on a device pool a host placement leaves whole %v", got)
 	}
 }
+
+// Host memory other live instances may still fill leaves the host pools a new run is planned on
+func TestUnreservedTakesLiveReservesOutOfHostPools(t *testing.T) {
+	m := &Manager{}
+	add := func(id string, state v1.InstanceState, reserve uint64) {
+		m.list = append(m.list, &instance{mgr: m, rec: &v1.Instance{Id: id, State: state, Plan: &v1.MemoryPlan{ReserveBytes: reserve}}})
+	}
+	p := profile()
+	if got := m.unreserved(p, ""); got != p {
+		t.Fatal("a node with no reserve keeps its profile")
+	}
+	add("live", v1.InstanceState_INSTANCE_STATE_READY, 30)
+	add("stopped", v1.InstanceState_INSTANCE_STATE_STOPPED, 40)
+	add("self", v1.InstanceState_INSTANCE_STATE_READY, 50)
+	out := m.unreserved(p, "self")
+	if h := out.GetPools()[0]; h.GetTotalBytes() != 70 || h.GetFreeBytes() != 60 {
+		t.Fatalf("host pool total %d free %d, want the live instance's 30 out of 100 and 90", h.GetTotalBytes(), h.GetFreeBytes())
+	}
+	if d := out.GetPools()[1]; d.GetTotalBytes() != 50 || d.GetFreeBytes() != 40 || p.GetPools()[0].GetTotalBytes() != 100 {
+		t.Fatalf("device pool %v or the profile passed in changed", d)
+	}
+	add("large", v1.InstanceState_INSTANCE_STATE_STARTING, 95)
+	if h := m.unreserved(p, "self").GetPools()[0]; h.GetTotalBytes() != 0 || h.GetFreeBytes() != 1 {
+		t.Fatalf("host pool total %d free %d under reserves past its size, want 0 and the 1 byte of a measured pool", h.GetTotalBytes(), h.GetFreeBytes())
+	}
+}

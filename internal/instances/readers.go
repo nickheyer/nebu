@@ -36,16 +36,27 @@ func (m *Manager) Modes(id string) []string {
 	return in.modesOf()
 }
 
-// The chat template read from the instance's stored model files
+// The chat template the instance's launch runs
 func (m *Manager) Template(id string) (*chattemplate.Template, error) {
 	in, err := m.find(id)
 	if err != nil {
 		return nil, err
 	}
-	if m.Store == nil {
-		return nil, fmt.Errorf("no store holds the model files of %s", id)
+	return m.launchTemplate(in.snapshot())
+}
+
+// The chat template a launch runs, the one its recorded params name or else the one its stored model carries
+func (m *Manager) launchTemplate(rec *v1.Instance) (*chattemplate.Template, error) {
+	if rt, err := m.Runtimes.Get(rec.GetRuntimeId()); err == nil {
+		if o, overrides := rt.(runtimes.TemplateOverrider); overrides {
+			if text, file := o.TemplateOverride(rec.GetParams()); text != "" || file != "" {
+				return chattemplate.Override(text, file)
+			}
+		}
 	}
-	rec := in.snapshot()
+	if m.Store == nil {
+		return nil, fmt.Errorf("no store holds the model files of %s", rec.GetName())
+	}
 	stored, err := m.Store.ReadManifest(rec.GetSourceId(), rec.GetRepo(), rec.GetGroup())
 	if err != nil {
 		return nil, fmt.Errorf("manifest of %s: %w", rec.GetName(), err)

@@ -11,15 +11,23 @@ import (
 	"github.com/nickheyer/nebu/pkg/datalayer"
 )
 
-// A resolver reporting a wake under way for every pool while set
+// A resolver whose scopes report a wake while set, taking only the endpoints it names when it names any
 type wakingResolver struct {
 	Resolver
 	waking atomic.Bool
+	only   map[datalayer.EndpointID]bool
 }
 
-func (w *wakingResolver) Waking(datalayer.PoolID) bool { return w.waking.Load() }
+func (w *wakingResolver) Scope(clientModel string, pool datalayer.PoolID, model string) Scope {
+	s := w.Resolver.Scope(clientModel, pool, model)
+	s.Waking = w.waking.Load
+	if w.only != nil {
+		s.Serves = func(ep datalayer.Endpoint) bool { return w.only[ep.ID()] }
+	}
+	return s
+}
 
-// A woken request waits for its pool's first ready endpoint, or ends with the request timeout, the pool going away, or the wake lapsing
+// A woken request waits for its scope's ready endpoint or ends on timeout, pool removal, or a lapsed wake
 func TestWokenRequestHeldUntilReady(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -35,6 +43,22 @@ func TestWokenRequestHeldUntilReady(t *testing.T) {
 				e.store.UpsertEndpoint(endpoint("e1", "p1", "10.0.0.1", true))
 			}()
 		}, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, nil, "", 1},
+		{"endpoint outside the scope", func(e *env, w *wakingResolver) {
+			w.only = map[datalayer.EndpointID]bool{"e1": true}
+			e.store.UpsertEndpoint(endpoint("e2", "p1", "10.0.0.2", true))
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				e.store.UpsertEndpoint(endpoint("e1", "p1", "10.0.0.1", true))
+			}()
+		}, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, nil, "", 1},
+		{"wake lapses beside an endpoint outside the scope", func(e *env, w *wakingResolver) {
+			w.only = map[datalayer.EndpointID]bool{"e1": true}
+			e.store.UpsertEndpoint(endpoint("e2", "p1", "10.0.0.2", true))
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				w.waking.Store(false)
+			}()
+		}, func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, ErrNoReadyEndpoints, "woke nothing", 0},
 		{"request timeout passes", func(*env, *wakingResolver) {}, func() (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), 300*time.Millisecond)
 		}, ErrNoReadyEndpoints, "before the request timeout", 0},
@@ -78,6 +102,8 @@ func TestWokenRequestHeldUntilReady(t *testing.T) {
 				t.Fatalf("refused after %s without holding", time.Since(start))
 			case e.flow.admitted.Load() != c.admit:
 				t.Fatalf("flow admitted %d requests, want %d", e.flow.admitted.Load(), c.admit)
+			case dec != nil && (len(dec.Endpoints) != 1 || dec.Endpoints[0].ID() != "e1"):
+				t.Fatalf("decided on %v, want e1 alone", dec.Endpoints)
 			}
 			if dec != nil {
 				e.dir.ResponseComplete(context.Background(), dec, nil)

@@ -53,6 +53,18 @@ enum ToolSupport {
   TOOL_SUPPORT_NONE = 3;
 }
 
+// How a chat template thinks and what turns its thinking off
+enum Thinking {
+  // The template was not rendered to find out
+  THINKING_UNSPECIFIED = 0;
+  // The template renders no thinking, so there is none to turn off
+  THINKING_NONE = 1;
+  // The template thinks unless a request sets its switch variable false
+  THINKING_SWITCHED = 2;
+  // The template thinks and reads no variable that turns thinking off
+  THINKING_ALWAYS = 3;
+}
+
 // The chat template read from the model's files when the instance starts
 message ChatTemplate {
   // The file or GGUF metadata key the template was read from
@@ -61,6 +73,16 @@ message ChatTemplate {
   ToolSupport tools = 2;
   // Why no template was read, empty when one was
   string error = 3;
+  // Reasoning effort levels the template renders as levels it knows, lowest first
+  repeated string efforts = 4;
+  // Whether the template reads a reasoning effort, so a level outside efforts is translated or refused
+  bool reads_effort = 5;
+  // How the template thinks, unspecified when it was not rendered to find out
+  Thinking thinking = 6;
+  // The variable a request sets false in chat_template_kwargs to turn thinking off, set when thinking is switched
+  string thinking_switch = 7;
+  // Why the template could not be rendered to learn how it takes reasoning settings, empty when it was
+  string reasoning_error = 8;
 }
 
 // Another seat of the formation a seat talks to, with the address it reaches it at
@@ -194,7 +216,7 @@ message InstanceRank {
   uint32 port = 6;
 }
 
-// Start a stored model. Request parameters override slot defaults, which override manifest defaults.
+// Starts a stored model, its params over its slot's over the runtime's defaults, the slot keeping what it launched with
 message RunRequest {
   string source_id = 1;
   string repo = 2;
@@ -214,7 +236,7 @@ message RunRequest {
   PlanProfile profile = 12;
   // Plan against free memory instead of total, as a launch does, so a swap sees the occupant it replaces
   bool free = 13;
-  // Extra words for the runtime's server command, after the slot's, split like a shell, templates rendered at launch
+  // Extra words for the runtime's server command, the slot's when empty, split like a shell, templates rendered at launch
   string args = 14;
   // Limits of the route the instance names for itself
   Policy policy = 15;
@@ -224,6 +246,8 @@ message RunRequest {
   uint32 idle_unload_seconds = 17;
   // Snapshot the process with CRIU once ready, later launches of the same run restoring the image instead of starting cold
   bool snapshot = 18;
+  // The runtime, install, params and args are every setting of the launch, replacing the slot's instead of laid over them
+  bool exact = 19;
 }
 
 // Returns the instance and its startup task

@@ -37,6 +37,15 @@ func keep(eps []datalayer.Endpoint, ok func(datalayer.Endpoint) bool) []datalaye
 	return out
 }
 
+// Keeps endpoints the check finds room on, refusing as saturated when it finds none
+func room(state *framework.CycleState, eps []datalayer.Endpoint, ok func(datalayer.Endpoint) bool) []datalayer.Endpoint {
+	out := keep(eps, ok)
+	if len(out) == 0 && len(eps) > 0 {
+		framework.Refuse(state, framework.ErrSaturated)
+	}
+	return out
+}
+
 // Keeps endpoints that are ready and that the health collector last found healthy
 type ReadyFilter struct{ plugins.Named }
 
@@ -46,7 +55,7 @@ func (f *ReadyFilter) Filter(_ context.Context, _ *framework.CycleState, _ *fram
 	return keep(eps, datalayer.ReadyAndHealthy)
 }
 
-// Keeps endpoints whose scraped metrics are no older than the threshold
+// Keeps endpoints with metrics no older than the threshold, refusing as saturated while none has such a sample
 type FreshMetricsFilter struct {
 	plugins.Named
 	threshold time.Duration
@@ -57,9 +66,9 @@ func NewFreshMetricsFilter(threshold time.Duration, clock registry.Clock) *Fresh
 	return &FreshMetricsFilter{Named: plugins.NewNamed(FreshMetricsFilterType), threshold: threshold, clock: clock}
 }
 
-func (f *FreshMetricsFilter) Filter(_ context.Context, _ *framework.CycleState, _ *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
+func (f *FreshMetricsFilter) Filter(_ context.Context, state *framework.CycleState, _ *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
 	now := f.clock.Now()
-	return keep(eps, func(ep datalayer.Endpoint) bool {
+	return room(state, eps, func(ep datalayer.Endpoint) bool {
 		m, ok := plugins.Metrics(ep)
 		return ok && !m.Stale(now, f.threshold)
 	})
@@ -106,7 +115,7 @@ func (f *RoleFilter) Filter(_ context.Context, _ *framework.CycleState, _ *frame
 	})
 }
 
-// Drops endpoints whose KV cache utilization exceeds the maximum or that report no metrics
+// Drops endpoints over the KV cache utilization maximum or without metrics, refusing as saturated when none remain
 type KVThresholdFilter struct {
 	plugins.Named
 	max float64
@@ -116,14 +125,14 @@ func NewKVThresholdFilter(max float64) *KVThresholdFilter {
 	return &KVThresholdFilter{Named: plugins.NewNamed(KVThresholdFilterType), max: max}
 }
 
-func (f *KVThresholdFilter) Filter(_ context.Context, _ *framework.CycleState, _ *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
-	return keep(eps, func(ep datalayer.Endpoint) bool {
+func (f *KVThresholdFilter) Filter(_ context.Context, state *framework.CycleState, _ *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
+	return room(state, eps, func(ep datalayer.Endpoint) bool {
 		m, ok := plugins.Metrics(ep)
 		return ok && m.KVCacheUtilization <= f.max
 	})
 }
 
-// Drops endpoints whose queued request count exceeds the maximum or that report no metrics
+// Drops endpoints over the queued request maximum or without metrics, refusing as saturated when none remain
 type QueueThresholdFilter struct {
 	plugins.Named
 	max int
@@ -133,8 +142,8 @@ func NewQueueThresholdFilter(max int) *QueueThresholdFilter {
 	return &QueueThresholdFilter{Named: plugins.NewNamed(QueueThresholdFilterType), max: max}
 }
 
-func (f *QueueThresholdFilter) Filter(_ context.Context, _ *framework.CycleState, _ *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
-	return keep(eps, func(ep datalayer.Endpoint) bool {
+func (f *QueueThresholdFilter) Filter(_ context.Context, state *framework.CycleState, _ *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
+	return room(state, eps, func(ep datalayer.Endpoint) bool {
 		m, ok := plugins.Metrics(ep)
 		return ok && m.QueuedRequests <= f.max
 	})
@@ -219,7 +228,7 @@ func NewCapacityFilter() *CapacityFilter {
 // An endpoint holding no tokens always fits, the runtime judging a prompt against its own context length
 func (f *CapacityFilter) Filter(_ context.Context, state *framework.CycleState, req *framework.Request, eps []datalayer.Endpoint) []datalayer.Endpoint {
 	cost := plugins.Cost(req)
-	out := keep(eps, func(ep datalayer.Endpoint) bool {
+	return room(state, eps, func(ep datalayer.Endpoint) bool {
 		n, _ := datalayer.Attribute[int](ep, datalayer.CollectorAssumed)
 		if capacity, _ := datalayer.Attribute[int](ep, datalayer.CollectorCapacity); capacity > 0 && n >= capacity {
 			return false
@@ -228,10 +237,6 @@ func (f *CapacityFilter) Filter(_ context.Context, state *framework.CycleState, 
 		kv, ok := plugins.KVTokens(ep)
 		return !ok || tokens <= 0 || tokens+cost <= kv
 	})
-	if len(out) == 0 && len(eps) > 0 {
-		framework.Refuse(state, framework.ErrSaturated)
-	}
-	return out
 }
 
 // Drops endpoints whose predicted TTFT or TPOT misses the request's objective, refusing as saturated when every one misses
@@ -251,15 +256,11 @@ func (f *ObjectiveFilter) Filter(_ context.Context, state *framework.CycleState,
 		return eps
 	}
 	feats := plugins.LatencyFeatures(f.idx, state, req, eps)
-	out := keep(eps, func(ep datalayer.Endpoint) bool {
+	return room(state, eps, func(ep datalayer.Endpoint) bool {
 		id := ep.ID()
 		if req.Objective.TTFT > 0 && plugins.Misses(f.pred.PredictTTFT(id, feats[id]), req.Objective.TTFT) {
 			return false
 		}
 		return req.Objective.TPOT <= 0 || !plugins.Misses(f.pred.PredictTPOT(id, feats[id]), req.Objective.TPOT)
 	})
-	if len(out) == 0 && len(eps) > 0 {
-		framework.Refuse(state, framework.ErrSaturated)
-	}
-	return out
 }

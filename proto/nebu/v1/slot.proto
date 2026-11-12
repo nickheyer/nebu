@@ -34,9 +34,7 @@ message SlotAlias {
   string inherit_slot_id = 4;
 }
 
-// Named device and memory reservation.
-// Run and swap set the request. Eviction clears it. Failures retain it for retry.
-// Slots with a request restart with the daemon.
+// Named device and memory reservation with the runtime, install, params and args its launches use, taken from each run into it
 message Slot {
   string id = 1;
   string name = 2;
@@ -48,6 +46,7 @@ message Slot {
   string instance_id = 8;
   SlotState state = 9;
   string error = 10;
+  // The model and route the slot runs, set by run and swap, cleared by eviction, relaunched with the daemon
   RunRequest request = 11;
   string task_id = 12;
   google.protobuf.Timestamp created_at = 13;
@@ -73,6 +72,8 @@ message Slot {
   bool desired_running = 25;
   // Bytes the slot may take from each memory pool by id, node/pool for another mesh node
   map<string, uint64> pool_bytes = 26;
+  // The install a launch on this node runs, the runtime's newest when empty
+  string install_id = 27;
 }
 
 // Creates a slot
@@ -94,6 +95,8 @@ message CreateSlotRequest {
   string args = 12;
   // Bytes the slot may take from a memory pool, by pool id, a pool on another mesh node as node/pool
   map<string, uint64> pool_bytes = 13;
+  // The install a launch on this node runs, the runtime's newest when empty
+  string install_id = 14;
 }
 
 // Returns the new slot
@@ -147,6 +150,8 @@ message UpdateSlotRequest {
   string args = 13;
   // Bytes the slot may take from a memory pool, by pool id, replacing the current caps
   map<string, uint64> pool_bytes = 14;
+  // The install a launch on this node runs, the runtime's newest when empty
+  string install_id = 15;
 }
 
 // Returns the updated slot

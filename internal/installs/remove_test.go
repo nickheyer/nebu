@@ -31,7 +31,7 @@ func TestRemoveRefusesNamedInstall(t *testing.T) {
 		release func(t *testing.T)
 	}{
 		{name: "slot", hold: func(t *testing.T) {
-			if err := m.DB.PutSlot(ctx, &v1.Slot{Id: "s1", Name: "main", RuntimeId: "fake", Request: &v1.RunRequest{RuntimeId: "fake", InstallId: id}, CreatedAt: now, UpdatedAt: now}); err != nil {
+			if err := m.DB.PutSlot(ctx, &v1.Slot{Id: "s1", Name: "main", RuntimeId: "fake", InstallId: id, CreatedAt: now, UpdatedAt: now}); err != nil {
 				t.Fatal(err)
 			}
 		}, release: func(t *testing.T) {

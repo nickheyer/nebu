@@ -206,16 +206,24 @@ func TestInspectLeadsWithTheSolvedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if est.GetPlan().GetParams()["n_ctx"] != "2048" || len(est.GetParams()) == 0 || est.GetWarning() != "" {
+	if est.GetPlan().GetParams()["n_ctx"] != "2048" || est.GetWarning() != "" {
 		t.Fatalf("estimate %+v", est)
 	}
-	states := map[string]*v1.ParamState{}
-	for _, s := range est.GetParams() {
-		states[s.GetName()] = s
+	// A slot's params lie under the request's, and an exact request leaves them out
+	i.Constrain = slotParams{"n_ctx": "1024"}
+	for exact, want := range map[bool]string{false: "1024", true: "4096"} {
+		est, err := i.Estimate(context.Background(), &v1.EstimateRequest{SourceId: "disk", Repo: "org/model", RuntimeId: "llamacpp", SlotId: "s", Exact: exact})
+		if err != nil || est.GetPlan().GetParams()["n_ctx"] != want {
+			t.Fatalf("exact %v: context %q, want %q: %v", exact, est.GetPlan().GetParams()["n_ctx"], want, err)
+		}
 	}
-	if states["n_ctx"].GetMax() != 4096 || states["n_gpu_layers"].GetMax() != 2 {
-		t.Fatalf("states %v", est.GetParams())
-	}
+}
+
+// A slot holding the whole host and these params
+type slotParams map[string]string
+
+func (p slotParams) Constrain(_ context.Context, _ string, profile *v1.HostProfile) (*Constraint, error) {
+	return &Constraint{Profile: profile, Params: p}, nil
 }
 
 // The solved row keeps a set context and solves only an unset one, the grid rows set their own
@@ -277,7 +285,7 @@ func TestDraftSizedFromItsFile(t *testing.T) {
 	}
 	// Left unset, the method of a plain draft model is llama.cpp's own pick
 	unset := map[string]string{"n_ctx": "4096", "draft_model": path}
-	if plan, _, err = i.Plan(context.Background(), rt, target, profile, unset, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || plan.GetParams()["spec_type"] != estimate.Auto {
+	if plan, _, err = i.Plan(context.Background(), rt, target, profile, unset, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || plan.GetParams()["spec_type"] != "" {
 		t.Fatalf("a plain draft model leaves the method to llama.cpp: %v %v", plan.GetParams()["spec_type"], err)
 	}
 	// A stored draft uses its descriptor, the model itself included
@@ -293,5 +301,41 @@ func TestDraftSizedFromItsFile(t *testing.T) {
 	overrides["draft_model"] = filepath.Join(dir, "gone.gguf")
 	if in, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || in.Draft != nil {
 		t.Fatalf("a missing draft: %v %v", in.Draft, err)
+	}
+}
+
+// A stored group plans from its own descriptor, so a source that cannot answer fails only a group the store lacks
+func TestEstimatePlansAStoredGroupWithoutItsSource(t *testing.T) {
+	i := inspector(t)
+	resp, err := i.Inspect(context.Background(), &v1.InspectRequest{SourceId: "disk", Repo: "org/model"})
+	if err != nil || len(resp.GetDescriptors()) != 1 {
+		t.Fatalf("descriptors %v: %v", resp.GetDescriptors(), err)
+	}
+	d := resp.GetDescriptors()[0]
+	want, err := i.Estimate(context.Background(), &v1.EstimateRequest{SourceId: "disk", Repo: "org/model", Group: d.GetGroup(), RuntimeId: "llamacpp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, err := sources.Build(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i.Sources = none
+	i.Stored = func() ([]*v1.StoredModel, error) {
+		return []*v1.StoredModel{{SourceId: "disk", Repo: "org/model", Group: d.GetGroup(), FormatId: d.GetFormatId(), Descriptor_: d}}, nil
+	}
+	got, err := i.Estimate(context.Background(), &v1.EstimateRequest{SourceId: "disk", Repo: "org/model", Group: d.GetGroup(), RuntimeId: "llamacpp"})
+	if err != nil {
+		t.Fatalf("a stored group asked its source: %v", err)
+	}
+	if got.GetPlan().GetParams()["n_ctx"] != want.GetPlan().GetParams()["n_ctx"] || got.GetPlan().GetVerdict() != want.GetPlan().GetVerdict() || got.GetPlan().GetWeightsBytes() != want.GetPlan().GetWeightsBytes() {
+		t.Fatalf("stored plan %v differs from the source's %v", got.GetPlan(), want.GetPlan())
+	}
+	// With no runtime named the stored group's own format picks one
+	if _, err := i.Estimate(context.Background(), &v1.EstimateRequest{SourceId: "disk", Repo: "org/model", Group: d.GetGroup()}); err != nil {
+		t.Fatalf("default runtime for a stored group: %v", err)
+	}
+	if _, err := i.Estimate(context.Background(), &v1.EstimateRequest{SourceId: "disk", Repo: "org/other", Group: d.GetGroup(), RuntimeId: "llamacpp"}); err == nil {
+		t.Fatal("a group the store lacks planned without its source")
 	}
 }

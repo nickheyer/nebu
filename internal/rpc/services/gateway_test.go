@@ -83,8 +83,7 @@ func gatewayHarness(t *testing.T) (*GatewayService, *pools.Manager, *gateway.Gat
 		Metrics: mreg, Telemetry: tp, Health: health.NewRegistry(), Logger: log,
 		Config: gateway.Config{
 			Policy: &v1.Policy{}, OutputTokens: 64,
-			Flow:       flowcontrol.Config{QueueCapacity: 16, QueueTimeout: 2 * time.Second, SheddableBelow: -1, Tick: 10 * time.Millisecond},
-			Saturation: flowcontrol.Thresholds{QueueDepth: 8, KVUtilization: 0.9}, Staleness: 2 * time.Second,
+			Flow:  flowcontrol.Config{QueueCapacity: 16, QueueTimeout: 2 * time.Second, SheddableBelow: -1, Tick: 10 * time.Millisecond},
 			Retry: gateway.Retry{Shed: time.Second, Unavailable: time.Second}, TraceRetention: time.Hour, TraceRing: 32,
 			Version: "test", Interval: 50 * time.Millisecond,
 		},

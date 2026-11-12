@@ -91,13 +91,25 @@ type Resolver interface {
 	Default(ctx context.Context) (datalayer.Pool, string, bool)
 	// The pool serving a model name without rules and the adapter it selects, ErrUnknownModel when none serves it
 	Lookup(ctx context.Context, model string) (datalayer.Pool, string, error)
+	// What serves a model resolved in a pool, through the client model's route or the model name alone
+	Scope(clientModel string, pool datalayer.PoolID, model string) Scope
 }
 
-// Reports pools whose owner a resolve woke, so the director holds the request until the pool comes up
-type WakeReporter interface {
-	// Whether a request woke an owner of the pool and no endpoint has joined it since
-	Waking(pool datalayer.PoolID) bool
+// The endpoints a resolved request may go to, the wake they await, and the adapter its model selects
+type Scope struct {
+	// Whether an endpoint of the pool serves the request, every endpoint when nil
+	Serves func(datalayer.Endpoint) bool
+	// Whether a request woke an owner serving the scope and none of its endpoints joined since, never when nil
+	Waking func() bool
+	// The adapter the model selects in the pool, empty for a base model
+	Adapter string
 }
+
+// Whether the scope takes an endpoint
+func (s Scope) serves(ep datalayer.Endpoint) bool { return s.Serves == nil || s.Serves(ep) }
+
+// Whether an owner serving the scope is waking
+func (s Scope) waking() bool { return s.Waking != nil && s.Waking() }
 
 // Runs before scheduling, able to change the request the scheduler sees
 type PreRequestPlugin interface {

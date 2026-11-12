@@ -112,5 +112,5 @@ const sdcppQwen3VLEmbedTokens = `--- a/src/name_conversion.cpp
 `
 
 func (SDCpp) Patches() []Patch {
-	return []Patch{{ID: "qwen3-vl-hf-embed-tokens", Content: []byte(sdcppQwen3VLEmbedTokens)}}
+	return []Patch{{ID: "qwen3-vl-hf-embed-tokens", Description: "Reads the token embeddings of Qwen3-VL text encoders saved in the Hugging Face layout", Content: []byte(sdcppQwen3VLEmbedTokens)}}
 }

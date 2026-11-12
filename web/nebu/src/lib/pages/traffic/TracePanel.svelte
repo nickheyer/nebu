@@ -46,15 +46,16 @@
 		load(want);
 	});
 
-	// The stream's copy keeps a running request fresh, and its finish fetches the bodies the stream leaves out
+	const fresh = $derived(live.traces.find((x) => x.id === id));
+	const running = $derived(trace !== undefined && !trace.finishedAt);
+
+	// Fetches the bodies the stream leaves out once the stream reports a running request finished
 	$effect(() => {
-		const fresh = live.traces.find((t) => t.id === id);
-		if (!fresh || !trace || trace.finishedAt) return;
-		if (fresh.finishedAt) load(id);
-		else trace = { ...trace, ...fresh, request: trace.request, upstreamRequest: trace.upstreamRequest, response: trace.response, reasoning: trace.reasoning, toolCalls: trace.toolCalls };
+		if (running && fresh?.finishedAt) load(id);
 	});
 
-	const t = $derived(trace);
+	// A running request shows the stream's copy over the fetched one, which keeps the bodies only the fetch carries
+	const t = $derived(trace && running && fresh && !fresh.finishedAt ? { ...trace, ...fresh, request: trace.request, upstreamRequest: trace.upstreamRequest, response: trace.response, reasoning: trace.reasoning, toolCalls: trace.toolCalls } : trace);
 
 	// The tabs a trace has something for, routing and tools only when it went through either
 	function tabsOf(tr: Trace) {

@@ -226,7 +226,7 @@ func TestConcurrentDefaultProfile(t *testing.T) {
 	}
 }
 
-// A seat holding the prompt's prefix wins while busier but under its caps, and loses once over any of them
+// A seat holding the prompt's prefix wins while busier but under its request capacity, and loses once at it
 func TestPinnedSeatWinsUnderCap(t *testing.T) {
 	clock := schedtest.NewClock()
 	d := deps(clock)
@@ -247,8 +247,8 @@ func TestPinnedSeatWinsUnderCap(t *testing.T) {
 	}{
 		{"busier under the caps", schedtest.EP("pinned").Metrics(metrics(2, 0.5)).With(datalayer.CollectorCapacity, 4).With(datalayer.CollectorAssumed, 3), "pinned"},
 		{"at its request capacity", schedtest.EP("pinned").Metrics(metrics(2, 0.5)).With(datalayer.CollectorCapacity, 4).With(datalayer.CollectorAssumed, 4), "other"},
-		{"over the kv threshold", schedtest.EP("pinned").Metrics(metrics(2, 0.96)).With(datalayer.CollectorCapacity, 4), "other"},
-		{"stale metrics", schedtest.EP("pinned").Metrics(datalayer.ServerMetrics{QueuedRequests: 2, UpdatedAt: clock.Now().Add(-3 * time.Second)}), "other"},
+		{"high scraped load", schedtest.EP("pinned").Metrics(metrics(9, 0.96)).With(datalayer.CollectorCapacity, 4), "pinned"},
+		{"stale metrics", schedtest.EP("pinned").Metrics(datalayer.ServerMetrics{QueuedRequests: 2, UpdatedAt: clock.Now().Add(-3 * time.Second)}), "pinned"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
