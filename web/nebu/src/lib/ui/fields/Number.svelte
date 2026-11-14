@@ -13,6 +13,7 @@
 		label,
 		info,
 		fallback,
+		placeholder,
 		unit,
 		disabled = false,
 		message,
@@ -23,6 +24,8 @@
 		inline = false,
 		// A box alone, without the buttons that step it
 		plain = false,
+		// Takes a decimal point whatever the step
+		fraction = false,
 		// The name a box without a label goes by
 		aria,
 		onchange,
@@ -35,6 +38,7 @@
 		label?: string;
 		info?: string;
 		fallback?: number;
+		placeholder?: string;
 		unit?: string;
 		disabled?: boolean;
 		message?: string;
@@ -43,6 +47,7 @@
 		optional?: boolean;
 		inline?: boolean;
 		plain?: boolean;
+		fraction?: boolean;
 		aria?: string;
 		onchange?: (n: number) => void;
 		onclear?: () => void;
@@ -81,7 +86,7 @@
 <div class="field" class:inline class:dense={inline}>
 	<FieldLabel {label} {info} forId={id} />
 	<div class="box">
-		<Stepper {id} bind:raw bind:focused {min} {max} {step} {fallback} {disabled} {message} {error} {unit} buttons={!inline && !plain} ariaLabel={label ?? aria} onchange={changed} />
+		<Stepper {id} bind:raw bind:focused {min} {max} {step} {fallback} {placeholder} {disabled} {message} {error} {unit} buttons={!inline && !plain} {fraction} ariaLabel={label ?? aria} onchange={changed} />
 	</div>
 </div>
 

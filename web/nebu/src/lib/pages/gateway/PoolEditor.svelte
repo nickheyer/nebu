@@ -17,6 +17,7 @@
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
+	import Slider from '#lib/ui/fields/Slider.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
@@ -115,7 +116,7 @@
 		{#snippet advanced()}
 			{#if spec.inventory}
 				<FieldRow>
-					<NumberField bind:value={spec.inventory.contextLength} min={0} label="Context length" unit="tokens" emptyZero />
+					<Slider bind:value={() => spec.inventory?.contextLength || undefined, (n) => (spec.inventory!.contextLength = n ?? 0)} min={256} max={1_048_576} step={256} curve="geometric" unit="tokens" label="Context length" optional />
 					<Text bind:value={spec.inventory.quantization} label="Quantization" max={32} />
 				</FieldRow>
 				<FieldRow>

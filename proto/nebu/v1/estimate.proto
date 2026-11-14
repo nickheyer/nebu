@@ -173,11 +173,19 @@ message Part {
   string subfolder = 15;
 }
 
-// Plan and descriptor for the requested inputs
+// The span a parameter's slider draws for the current model, host, and settings, which limits no value
+message ParamState {
+  string name = 1;
+  double min = 2;
+  double max = 3;
+  double step = 4;
+}
+
+// Plan, descriptor, and slider spans for the requested inputs
 message EstimateResponse {
-  reserved 3;
   MemoryPlan plan = 1;
   Descriptor descriptor = 2;
+  repeated ParamState params = 3;
   string warning = 4;
   // Missing dependencies and their download locations.
   repeated Part missing = 5;

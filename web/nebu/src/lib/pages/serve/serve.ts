@@ -6,11 +6,23 @@ import type { Task } from '#lib/proto/nebu/v1/task_pb.js';
 import { date, elapsed, ms, num } from '#lib/format.js';
 import type { Live } from '#lib/live/events.svelte.js';
 import type { KeyRow } from '#lib/ui/KeyRows.svelte';
-import type { Install } from '#lib/proto/nebu/v1/runtime_pb.js';
+import { ParamType, type Install, type Param } from '#lib/proto/nebu/v1/runtime_pb.js';
+import type { ParamState } from '#lib/proto/nebu/v1/estimate_pb.js';
+import { curveOf, type Span } from '#lib/ui/fields/scale.js';
 
 // The burst an empty box resolves to, the gateway's own or the rate in effect rounded up
 export function burstFallback(policy: Policy | undefined, gateway: Policy | undefined): number | undefined {
 	return gateway?.burst || Math.ceil(policy?.requestsPerSecond || gateway?.requestsPerSecond || 0) || undefined;
+}
+
+// A numeric param's slider span, the plan's where it has room, else the runtime's own, none when unbounded
+export function sliderSpan(p: Param, state?: ParamState): Span | undefined {
+	if (p.type !== ParamType.INT && p.type !== ParamType.FLOAT) return undefined;
+	const min = state?.min ?? p.min;
+	const max = state && state.max > min ? state.max : p.max;
+	if (max <= 0 || max <= min) return undefined;
+	const step = state?.step || p.step || (p.type === ParamType.FLOAT ? 0.01 : 1);
+	return { min, max, step, curve: curveOf(min, max, step) };
 }
 
 // An install by its version, the name of its binary when it reports none

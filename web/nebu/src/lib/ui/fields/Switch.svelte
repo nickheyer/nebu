@@ -3,23 +3,24 @@
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
-	// A toggle after its label on one line, on a form's control column or hugging its label when compact
+	// A toggle after its label on one line, hugging it when compact, under it when stacked
 	let {
 		checked = $bindable(false),
 		label,
 		info,
 		compact = false,
+		stacked = false,
 		disabled = false,
 		message,
 		// The name a switch without a label goes by
 		aria,
 		onchange
-	}: { checked?: boolean; label?: string; info?: string; compact?: boolean; disabled?: boolean; message?: string; aria?: string; onchange?: (on: boolean) => void } = $props();
+	}: { checked?: boolean; label?: string; info?: string; compact?: boolean; stacked?: boolean; disabled?: boolean; message?: string; aria?: string; onchange?: (on: boolean) => void } = $props();
 
 	const id = fieldId();
 </script>
 
-<div class="switchline" class:compact={compact || !label} class:disabled>
+<div class="switchline" class:compact={!stacked && (compact || !label)} class:stacked class:disabled>
 	{#if label}<span class="words"><FieldLabel {label} {info} forId={id} /></span>{/if}
 	<NeoSwitch {id} bind:checked {disabled} {message} elevation={-1} aria-label={label ?? aria} onchange={(e) => onchange?.((e.currentTarget as HTMLInputElement).checked)} />
 </div>
@@ -45,6 +46,21 @@
 	.compact .words {
 		flex: 0 1 auto;
 	}
+	/* Stacked, the label sits over the toggle, which centres on the line a box would take */
+	.stacked {
+		flex-direction: column;
+		gap: 4px;
+		align-items: flex-start;
+	}
+	.stacked .words {
+		flex: 0 0 auto;
+		max-width: 100%;
+	}
+	.stacked :global(.neo-switch-container) {
+		display: flex;
+		align-items: center;
+		min-height: var(--nebu-input-height);
+	}
 	.switchline :global(.neo-switch-container) {
 		--neo-label-margin: 0;
 
@@ -55,8 +71,8 @@
 		color: var(--nebu-disabled-text);
 	}
 	/* Beside a labelled box the toggle drops to the line of the box */
-	:global(.fieldrow:not(.single):has(> :not(.switchline):not(:has(> .switchline))) > .switchline:not(.compact)),
-	:global(.fieldrow:not(.single):has(> :not(.switchline):not(:has(> .switchline))) > * > .switchline:not(.compact)) {
+	:global(.fieldrow:not(.single):has(> :not(.switchline):not(:has(> .switchline))) > .switchline:not(.compact, .stacked)),
+	:global(.fieldrow:not(.single):has(> :not(.switchline):not(:has(> .switchline))) > * > .switchline:not(.compact, .stacked)) {
 		margin-top: 28px;
 	}
 </style>

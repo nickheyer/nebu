@@ -21,6 +21,9 @@ const Auto = estimate.Auto
 // Value of a path parameter the runtime would otherwise resolve, choosing no file at all.
 const None = "none"
 
+// Longest context a slider draws while no model bounds it
+const contextSpan = 1 << 20
+
 // Default shutdown grace period.
 const DefaultStopGrace = 15 * time.Second
 
@@ -310,6 +313,20 @@ func checkRule(p *v1.Param) error {
 	return nil
 }
 
+// Total probed CPU threads.
+func cpuThreads(h *v1.HostProfile) float64 {
+	var n float64
+	for _, d := range h.GetDevices() {
+		if d.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU {
+			continue
+		}
+		if v, err := strconv.ParseFloat(d.GetFacts()["threads"], 64); err == nil {
+			n += v
+		}
+	}
+	return n
+}
+
 // First reported driver version for the vendor, or empty.
 func driverVersion(h *v1.HostProfile, vendor string) string {
 	for _, d := range h.GetDevices() {
@@ -348,8 +365,11 @@ func checkRefs(params []*v1.Param) error {
 	return nil
 }
 
-// Validates numeric bounds and positive steps.
+// Validates numeric bounds, positive steps, and placeholders only on non bool params without a default
 func checkForm(p *v1.Param) error {
+	if p.GetPlaceholder() != "" && (p.GetDefault() != "" || p.GetType() == v1.ParamType_PARAM_TYPE_BOOL) {
+		return fmt.Errorf("param %s: a placeholder belongs to a param with no default that is not a bool", p.GetName())
+	}
 	numeric := p.GetType() == v1.ParamType_PARAM_TYPE_INT || p.GetType() == v1.ParamType_PARAM_TYPE_FLOAT
 	if !numeric && (p.GetMin() != 0 || p.GetMax() != 0 || p.GetStep() != 0) {
 		return fmt.Errorf("param %s: min, max, and step apply to int and float params only", p.GetName())
@@ -619,6 +639,12 @@ func scaledIn(scaled string, p *v1.Param) *v1.Param {
 	return p
 }
 
+// Sets the text an empty control shows for what the runtime keeps unset
+func placeholder(text string, p *v1.Param) *v1.Param {
+	p.Placeholder = text
+	return p
+}
+
 // Merges parameter maps, with later values taking precedence.
 func Merge(layers ...map[string]string) map[string]string {
 	out := map[string]string{}
@@ -860,4 +886,9 @@ func versionField(output string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// The span a param's slider draws, a zero max leaving it a plain box
+func bounds(name string, min, max, step float64) *v1.ParamState {
+	return &v1.ParamState{Name: name, Min: min, Max: max, Step: step}
 }

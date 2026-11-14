@@ -184,6 +184,8 @@ type Policy struct {
 	Solve func(s *Scope)
 	// What the plan could not account for under resolved values
 	Warning func(s *Scope) string
+	// The span each param's slider draws under resolved values, which limits no value
+	States func(s *Scope) []*v1.ParamState
 	// Host memory the run fills as it serves, given the host bytes its plan leaves
 	HostReserve func(params Params, plan *v1.MemoryPlan, room uint64) uint64
 	// Required companion slots left unresolved. Nil when the runtime has no companion files.
@@ -365,6 +367,14 @@ func (p *Policy) PlanWarning(in Input, plan *v1.MemoryPlan) string {
 		return ""
 	}
 	return p.Warning(p.solvedScope(in, plan))
+}
+
+// The span each param's slider draws under resolved values, which limits no value
+func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) []*v1.ParamState {
+	if p.States == nil {
+		return nil
+	}
+	return p.States(p.solvedScope(in, plan))
 }
 
 // Returns companion slots left unresolved by the plan.

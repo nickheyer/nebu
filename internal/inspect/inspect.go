@@ -608,7 +608,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Warning: rt.Policy().PlanWarning(in, plan), Missing: missing}, nil
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: rt.Policy().ParamStates(in, plan), Warning: rt.Policy().PlanWarning(in, plan), Missing: missing}, nil
 }
 
 // Resolves missing slots and associates each part with its runtime param.

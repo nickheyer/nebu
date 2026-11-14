@@ -100,7 +100,7 @@
 {#snippet folder()}<FolderIcon size={20} />{/snippet}
 {#snippet file()}<FileIcon size={20} />{/snippet}
 
-<NeoDialog bind:open modal rounded="md" filled elevation={2} width="min(44rem, 94vw)" padding="16px">
+<NeoDialog bind:open modal rounded="md" filled elevation={2} width="min(44rem, 94vw)" style="--nebu-dialog-width: min(44rem, 94vw)" padding="16px">
 	<div class="browser">
 		<div class="bar">
 			{#each places as p (p.path)}

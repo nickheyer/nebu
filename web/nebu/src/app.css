@@ -308,6 +308,11 @@ input[type='number']::-webkit-outer-spin-button {
 	isolation: isolate;
 }
 
+/* A modal centres on the page beside the rail when it fits there, on the window when it does not */
+.neo-dialog[data-modal='true']:is([data-placement='center'], [data-placement='top']) {
+	left: clamp(0px, calc((100vw - var(--nebu-dialog-width, 100vw) - 2 * var(--neo-gap, 1rem) - var(--nebu-rail-width, 0px)) * 9999), var(--nebu-rail-width, 0px));
+}
+
 /* A dialog floats on its shadow alone, its border the one edge it shows */
 .neo-dialog {
 	box-shadow: var(--neo-dialog-box-shadow, var(--neo-glass-box-shadow-raised-1));

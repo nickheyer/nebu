@@ -108,7 +108,7 @@
 	</button>
 {/if}
 
-<NeoDialog bind:open modal filled rounded="md" elevation={2} placement="top" width="min(40rem, 92vw)" padding="0" blur={1} slide={false} fade={false} closeOnClickOutside onclose={close}>
+<NeoDialog bind:open modal filled rounded="md" elevation={2} placement="top" width="min(40rem, 92vw)" style="--nebu-dialog-width: min(40rem, 92vw)" padding="0" blur={1} slide={false} fade={false} closeOnClickOutside onclose={close}>
 	<div class="palette" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-haspopup="listbox" tabindex="-1" {onkeydown}>
 		<div class="search">
 			<NeoInput bind:ref={input} bind:value={query} elevation={0} floating={false} borderless width="100%" aria-label="Search" aria-autocomplete="list" aria-controls="palette-list" autocomplete="off" spellcheck={false}>

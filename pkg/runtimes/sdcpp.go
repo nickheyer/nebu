@@ -206,7 +206,7 @@ func (SDCpp) Params() []*v1.Param {
 		// Memory placement.
 		{Name: "on_device", Label: "Parts on device", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "parts", Min: 0, Step: 1, Group: groupPlacement,
 			Rule: "sd-server's own fit, reckoned as components on device while they fit in order: denoiser, VAE, text encoders"},
-		strParam("offload", "Offload to system memory", groupPlacement, "", "", "keep components in system memory and move each to the device as it runs, empty leaves placement to sd-server's own fit", sdOnOff, false),
+		placeholder("runtime's own fit", strParam("offload", "Offload to system memory", groupPlacement, "", "", "keep components in system memory and move each to the device as it runs", sdOnOff, false)),
 		strParam("backend", "Compute backend", groupPlacement, "--backend", "", "cpu, cuda0, or diffusion=cuda0,te=cpu", nil, true),
 		strParam("params_backend", "Weights backend", groupPlacement, "--params-backend", "", "disk, cpu, or diffusion=disk,te=cpu", nil, true),
 		strParam("max_vram", "Device memory budget", groupPlacement, "--max-vram", "", "GiB, or cuda0=6,vulkan0=4", nil, true),
@@ -215,38 +215,38 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("rpc_servers", "RPC servers", groupPlacement, "--rpc-servers", "", "host:port, comma separated", nil, true),
 		boolParam("mmap", "Memory map weights", groupPlacement, "--mmap", true),
 		boolParam("eager_load", "Load every part at start", groupPlacement, "--eager-load", true),
-		strParam("auto_fit", "Automatic fit", groupPlacement, "--auto-fit", "", "place weights on the compute device, RAM, another device, or disk by free memory, empty keeps sd-server's on", sdOnOff, true),
+		placeholder("on", strParam("auto_fit", "Automatic fit", groupPlacement, "--auto-fit", "", "place weights on the compute device, RAM, another device, or disk by free memory", sdOnOff, true)),
 		boolParam("disable_prefetch", "Disable weight prefetch", groupPlacement, "--disable-prefetch", true),
 		boolParam("disable_segmented_compute", "Disable segmented compute", groupPlacement, "--disable-segmented-compute", true),
-		intParam("conditioning_cache_size", "Conditioning cache", groupPlacement, "--conditioning-cache-size", "", "prompts", "encoded prompts kept per model, empty keeps sd-server's 4, 0 off", 0, 0, 1, true),
+		placeholder("4", intParam("conditioning_cache_size", "Conditioning cache", groupPlacement, "--conditioning-cache-size", "", "prompts", "encoded prompts kept per model, 0 off", 0, 0, 1, true)),
 
 		// Compute settings.
-		strParam("flash_attn", "Flash attention", groupCompute, "", "", "on, off, auto, or module assignments such as auto,te=off,vae=on, empty keeps sd-server's auto", nil, false),
+		placeholder("auto", strParam("flash_attn", "Flash attention", groupCompute, "", "", "on, off, auto, or module assignments such as auto,te=off,vae=on", nil, false)),
 		boolParam("sage_attn", "SageAttention in the denoiser", groupCompute, "--sage-attn", true),
-		strParam("weight_type", "Weight type", groupCompute, "--type", "", "empty keeps the weight file's type", sdTypes, false),
+		placeholder("the file's type", strParam("weight_type", "Weight type", groupCompute, "--type", "", "", sdTypes, false)),
 		strParam("tensor_type_rules", "Tensor type rules", groupCompute, "--tensor-type-rules", "", `^vae\.=f16,model\.=q8_0`, nil, true),
-		strParam("vae_format", "VAE latent format", groupCompute, "--vae-format", "", "empty keeps sd-server's auto", []string{"", "auto", "flux", "sd3", "flux2", "wan"}, true),
-		strParam("conv_direct", "Direct convolution", groupCompute, "", "", "on, off, auto, or diffusion, vae, and controlnet assignments such as auto,vae=off, empty keeps sd-server's auto", nil, true),
-		strParam("batched_cfg", "Batched CFG", groupCompute, "--batched-cfg", "", "run the conditional and unconditional branches in one forward pass, empty keeps sd-server's on", sdOnOff, true),
+		placeholder("auto", strParam("vae_format", "VAE latent format", groupCompute, "--vae-format", "", "", []string{"", "auto", "flux", "sd3", "flux2", "wan"}, true)),
+		placeholder("auto", strParam("conv_direct", "Direct convolution", groupCompute, "", "", "on, off, auto, or diffusion, vae, and controlnet assignments such as auto,vae=off", nil, true)),
+		placeholder("on", strParam("batched_cfg", "Batched CFG", groupCompute, "--batched-cfg", "", "run the conditional and unconditional branches in one forward pass", sdOnOff, true)),
 		boolParam("force_sdxl_vae_conv_scale", "Force SDXL VAE conv scale", groupCompute, "--force-sdxl-vae-conv-scale", true),
 		strParam("model_args", "Model arguments", groupCompute, "--model-args", "", pairs, nil, true),
-		strParam("lora_apply_mode", "LoRA apply mode", groupCompute, "--lora-apply-mode", "", "empty keeps sd-server's auto, at_runtime for quantized weights and immediately otherwise", []string{"", "auto", "immediately", "at_runtime"}, true),
-		strParam("rng", "Random number generator", groupCompute, "--rng", "", "empty keeps sd-server's cuda, the noise sd-webui makes, cpu for comfyui's", append([]string{""}, sdRNG...), true),
+		placeholder("auto", strParam("lora_apply_mode", "LoRA apply mode", groupCompute, "--lora-apply-mode", "", "auto takes at_runtime for quantized weights and immediately otherwise", []string{"", "auto", "immediately", "at_runtime"}, true)),
+		placeholder("cuda", strParam("rng", "Random number generator", groupCompute, "--rng", "", "cuda for the noise sd-webui makes, cpu for comfyui's", append([]string{""}, sdRNG...), true)),
 		strParam("sampler_rng", "Sampler random number generator", groupCompute, "--sampler-rng", "", "", append([]string{""}, sdRNG...), true),
 		strParam("prediction", "Prediction type", groupCompute, "--prediction", "", "", sdPrediction, true),
 		floatParam("linear_scale", "Linear input scale", groupCompute, "--linear-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
 		floatParam("attn_scale", "Attention K/V scale", groupCompute, "--attn-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
 
 		// Generation defaults.
-		intParam("width", "Width", groupDefaults, "--width", "512", "px", "width of a request that names none, empty keeps sd-server's 512", 64, 4096, 16, false),
-		intParam("height", "Height", groupDefaults, "--height", "512", "px", "height of a request that names none, empty keeps sd-server's 512", 64, 4096, 16, false),
+		intParam("width", "Width", groupDefaults, "--width", "512", "px", "width of a request that names none", 64, 4096, 16, false),
+		intParam("height", "Height", groupDefaults, "--height", "512", "px", "height of a request that names none", 64, 4096, 16, false),
 		sampling("steps", "Steps", groupDefaults, "--steps", v1.ParamType_PARAM_TYPE_INT, "steps", nil, 1, 150, 1,
 			"family step count, reduced for distilled variants such as Turbo, schnell, and Lightning"),
 		sampling("sampling_method", "Sampler", groupDefaults, "--sampling-method", v1.ParamType_PARAM_TYPE_STRING, "", sdSamplers, 0, 0, 0,
 			"euler for transformers, lcm for PiD, euler_a for UNets"),
 		sampling("scheduler", "Scheduler", groupDefaults, "--scheduler", v1.ParamType_PARAM_TYPE_STRING, "", sdSchedulers, 0, 0, 0,
 			"family scheduler: flux, flux2, ltx2, logit_normal, lcm, or discrete"),
-		intParam("seed", "Seed", groupDefaults, "--seed", "42", "", "seed of a request that names none, -1 for random, empty keeps sd-server's 42", -1, 0, 1, true),
+		intParam("seed", "Seed", groupDefaults, "--seed", "42", "", "seed of a request that names none, -1 for random", -1, 0, 1, true),
 		intParam("batch_count", "Images per request", groupDefaults, "--batch-count", "1", "images", "", 1, 64, 1, true),
 		intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 uses the family default", -1, 12, 1, true),
 		floatParam("strength", "Strength", groupDefaults, "--strength", "0.75", "", 0, 1, 0.05, true),
@@ -324,7 +324,7 @@ func (SDCpp) Params() []*v1.Param {
 		intParam("upscale_tile_size", "Upscale tile size", groupUpscale, "--upscale-tile-size", "128", "px", "", 32, 1024, 32, true),
 
 		// Caching across steps
-		strParam("cache_mode", "Cache mode", groupCache, "--cache-mode", "", "skip denoiser work across steps, easycache for DiT, ucache for UNet, the rest block level, empty off", sdCacheModes, false),
+		placeholder("off", strParam("cache_mode", "Cache mode", groupCache, "--cache-mode", "", "skip denoiser work across steps, easycache for DiT, ucache for UNet, the rest block level", sdCacheModes, false)),
 		strParam("cache_option", "Cache options", groupCache, "--cache-option", "", pairs, nil, true),
 		strParam("scm_mask", "SCM steps mask", groupCache, "--scm-mask", "", "1,1,0,1,0", nil, true),
 		strParam("scm_policy", "SCM policy", groupCache, "--scm-policy", "dynamic", "", []string{"dynamic", "static"}, true),
@@ -336,7 +336,7 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("extra_ad_args", "Extra ADetailer arguments", groupDetailer, "--extra-ad-args", "", pairs, nil, true),
 
 		// Diagnostics
-		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "info", "verbose and debug log the buffer sizes nebu measures, empty keeps sd-server's info", []string{"debug", "verbose", "info", "warn", "error"}, true),
+		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "info", "verbose and debug log the buffer sizes nebu measures", []string{"debug", "verbose", "info", "warn", "error"}, true),
 		boolParam("color", "Colored log", groupDiagnostics, "--color", true),
 	}
 }
@@ -1132,5 +1132,11 @@ func (SDCpp) Policy() *estimate.Policy {
 		Solve:         sdSolve,
 		Missing:       sdMissing,
 		Warning:       sdWarning,
+		States: func(s *estimate.Scope) []*v1.ParamState {
+			return []*v1.ParamState{
+				bounds("on_device", 0, float64(sdPartCount(s.Descriptor)), 1),
+				bounds("threads", -1, cpuThreads(s.Host), 1),
+			}
+		},
 	}
 }

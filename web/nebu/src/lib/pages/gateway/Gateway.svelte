@@ -221,7 +221,7 @@
 			{#if !live.ready}
 				<Skeleton rows={4} secondary="24ch" />
 			{:else if routes.length === 0}
-				<Empty icon={SignpostIcon} text="No routes" action="Launch" href="/serve/launch" />
+				<Empty icon={SignpostIcon} text="No routes" action="Route" href="/gateway/routes/new" />
 			{:else}
 				<List head={{ primary: 'Route', secondary: 'Target' }}>
 					{#each routes as r (r.name)}{@render routeRow(r)}{/each}
@@ -233,7 +233,7 @@
 			{#if !live.ready}
 				<Skeleton rows={4} secondary="40ch" />
 			{:else if pools.length === 0}
-				<Empty icon={StackIcon} text="No pools" action="Launch" href="/serve/launch" />
+				<Empty icon={StackIcon} text="No pools" action="Pool" href="/gateway/pools/new" />
 			{:else}
 				<List head={{ primary: 'Pool', secondary: 'Model', facts: ['Ready'] }}>
 					{#each pools as p (p.id)}{@render poolRow(p)}{/each}

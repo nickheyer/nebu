@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import { motion } from '#lib/ui/motion.svelte.js';
 	import BottomBar from '#lib/shell/BottomBar.svelte';
@@ -9,7 +10,7 @@
 	let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="shell" class:mobile={viewport.mobile} data-motion={motion.enabled ? 'on' : 'off'}>
+<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} data-motion={motion.enabled ? 'on' : 'off'}>
 	{#if !viewport.mobile}
 		<Rail />
 	{/if}
@@ -31,11 +32,16 @@
 		--nebu-gutter: var(--nebu-space-6);
 		--nebu-pad-top: var(--nebu-space-5);
 		--nebu-pad-bottom: var(--nebu-space-6);
+		--nebu-rail-width: 232px;
 
 		display: flex;
 		min-height: 100dvh;
 	}
+	.shell.collapsed {
+		--nebu-rail-width: 68px;
+	}
 	.shell.mobile {
+		--nebu-rail-width: 0px;
 		--nebu-card-pad-base: var(--nebu-space-4);
 		--nebu-gutter: var(--nebu-space-4);
 		--nebu-pad-top: var(--nebu-space-4);

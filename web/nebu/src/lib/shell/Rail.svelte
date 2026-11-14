@@ -77,10 +77,10 @@
 		position: sticky;
 		top: 0;
 		display: flex;
-		flex: 0 0 232px;
+		flex: 0 0 var(--nebu-rail-width);
 		flex-direction: column;
 		align-self: flex-start;
-		width: 232px;
+		width: var(--nebu-rail-width);
 		height: 100dvh;
 		padding: 0 12px 12px;
 		overflow-y: auto;
@@ -89,10 +89,6 @@
 		transition:
 			width 180ms var(--nebu-settle),
 			flex-basis 180ms var(--nebu-settle);
-	}
-	.rail.collapsed {
-		flex-basis: 68px;
-		width: 68px;
 	}
 	.brand {
 		display: flex;

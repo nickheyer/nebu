@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/estimate"
+	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/triage"
 )
@@ -91,6 +92,79 @@ func TestRegistryRefusesBrokenRuntimes(t *testing.T) {
 	}
 	if _, err := New([]Runtime{shaped{id: "a", methods: adopt}, shaped{id: "a", methods: adopt}}); err == nil {
 		t.Fatal("duplicate id should be refused")
+	}
+}
+
+func TestPlaceholderOnlyFillsEmptyControls(t *testing.T) {
+	if err := checkForm(&v1.Param{Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Placeholder: "8192"}); err != nil {
+		t.Fatalf("a placeholder on a param without a default: %v", err)
+	}
+	for name, p := range map[string]*v1.Param{
+		"over a default": {Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Default: "5", Placeholder: "5"},
+		"on a bool":      {Name: "p", Type: v1.ParamType_PARAM_TYPE_BOOL, Placeholder: "off"},
+	} {
+		if err := checkForm(p); err == nil || !strings.Contains(err.Error(), "placeholder") {
+			t.Errorf("a placeholder %s should be refused: %v", name, err)
+		}
+	}
+	if _, err := New([]Runtime{shaped{id: "a", params: []*v1.Param{{Name: "p", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Placeholder: "off"}}, methods: []Method{{ID: "adopt", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"x"}}}}}); err == nil {
+		t.Fatal("a registry should refuse a runtime whose bool param has a placeholder")
+	}
+}
+
+// Slider spans name real params and follow the model, a set value past a span staying as set
+func TestSliderSpansFollowTheModel(t *testing.T) {
+	for _, rt := range registry(t).List() {
+		set := map[string]string{}
+		if rt.ID() == "llamacpp" {
+			set["n_ctx"] = "999999"
+		}
+		params, err := Assume(rt, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rt.Policy().States == nil {
+			t.Fatalf("%s reports no slider spans", rt.ID())
+		}
+		known := map[string]bool{}
+		for _, p := range rt.Params() {
+			known[p.GetName()] = true
+		}
+		spans := map[string]*v1.ParamState{}
+		for _, s := range rt.Policy().States(&estimate.Scope{Model: formats.Params{ContextTrain: 4096, Layers: 2}, Host: &v1.HostProfile{}, Params: params}) {
+			if !known[s.GetName()] {
+				t.Fatalf("%s spans %s, which is no param of it", rt.ID(), s.GetName())
+			}
+			spans[s.GetName()] = s
+		}
+		if rt.ID() != "llamacpp" {
+			continue
+		}
+		if spans["n_ctx"].GetMax() != 4096 || spans["n_gpu_layers"].GetMax() != 2 {
+			t.Fatalf("llama.cpp spans %v", spans)
+		}
+		if params.Int("n_ctx") != 999999 {
+			t.Fatalf("a context set past its span is kept as set, got %d", params.Int("n_ctx"))
+		}
+	}
+}
+
+// A context length draws its slider before any model bounds it
+func TestContextLengthSpansWithoutAModel(t *testing.T) {
+	seen := 0
+	for _, rt := range registry(t).List() {
+		for _, p := range rt.Params() {
+			if p.GetName() != "n_ctx" {
+				continue
+			}
+			seen++
+			if p.GetMax() != contextSpan || p.GetMin() >= p.GetMax() || p.GetStep() <= 0 {
+				t.Fatalf("%s context length spans %g to %g by %g", rt.ID(), p.GetMin(), p.GetMax(), p.GetStep())
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no runtime has a context length")
 	}
 }
 

@@ -61,10 +61,10 @@
 		min-width: 0;
 		container-type: inline-size;
 	}
-	/* Labels, names, bars and readings each share a column, the names as wide as the longest up to a cap */
+	/* Labels, names, bars and readings each share a column, names as wide as the longest up to half the frame */
 	.bars {
 		display: grid;
-		grid-template-columns: max-content fit-content(20rem) minmax(6rem, 1fr) max-content;
+		grid-template-columns: max-content fit-content(min(26rem, 50cqi)) minmax(6rem, 1fr) max-content;
 		gap: var(--nebu-space-2) var(--nebu-space-3);
 		min-width: 0;
 	}

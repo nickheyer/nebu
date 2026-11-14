@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -68,7 +69,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 		section(w, "params")
 		var rows [][]string
 		for _, p := range m.GetParams() {
-			rows = append(rows, []string{p.GetName(), text.Enum(p.GetType()), p.GetDefault(), strings.Join(p.GetChoices(), ","), p.GetDescription()})
+			rows = append(rows, []string{p.GetName(), text.Enum(p.GetType()), cmp.Or(p.GetDefault(), p.GetPlaceholder()), strings.Join(p.GetChoices(), ","), p.GetDescription()})
 		}
 		table(w, []string{"NAME", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
 	})

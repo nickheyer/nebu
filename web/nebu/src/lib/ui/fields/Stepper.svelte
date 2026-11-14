@@ -14,6 +14,7 @@
 		max,
 		step = 1,
 		fallback,
+		placeholder,
 		disabled = false,
 		message,
 		error,
@@ -21,6 +22,8 @@
 		ariaLabel,
 		tail,
 		buttons = true,
+		// Takes a decimal point whatever the step
+		fraction = false,
 		onchange
 	}: {
 		id?: string;
@@ -30,6 +33,7 @@
 		max?: number;
 		step?: number;
 		fallback?: number;
+		placeholder?: string;
 		disabled?: boolean;
 		message?: string;
 		error?: string;
@@ -37,6 +41,7 @@
 		ariaLabel?: string;
 		tail?: Snippet;
 		buttons?: boolean;
+		fraction?: boolean;
 		onchange?: () => void;
 	} = $props();
 
@@ -61,7 +66,7 @@
 		for (const ch of s) {
 			if (ch >= '0' && ch <= '9') out += ch;
 			else if (ch === '-' && negative && out === '') out += ch;
-			else if ((ch === '.' || ch === ',') && decimals > 0 && !point) {
+			else if ((ch === '.' || ch === ',') && (decimals > 0 || fraction) && !point) {
 				out += '.';
 				point = true;
 			}
@@ -69,11 +74,12 @@
 		return out;
 	}
 
+	// Holds a number to the bounds at the step's decimals, or at the decimals already typed when those are more
 	function clamp(n: number): number {
 		let v = n;
 		if (min !== undefined) v = Math.max(min, v);
 		if (max !== undefined) v = Math.min(max, v);
-		return Number(v.toFixed(decimals));
+		return Number(v.toFixed(Math.max(decimals, (text.split('.')[1] ?? '').length)));
 	}
 
 	function typed() {
@@ -82,15 +88,12 @@
 		onchange?.();
 	}
 
-	// Settles the box on leaving it, clamping a number past its bounds and dropping text that is none
+	// Settles the box on leaving it, a number inside its bounds kept as typed and text that is none dropped
 	function settle() {
 		if (text === '') return;
 		const n = Number(text);
-		if (!Number.isFinite(n)) {
-			raw = '';
-		} else {
-			raw = String(clamp(n));
-		}
+		if (!Number.isFinite(n)) raw = '';
+		else if ((min !== undefined && n < min) || (max !== undefined && n > max)) raw = String(clamp(n));
 		onchange?.();
 	}
 
@@ -124,9 +127,9 @@
 	bind:value={raw}
 	bind:focused
 	type="text"
-	inputmode={decimals > 0 ? 'decimal' : 'numeric'}
+	inputmode={decimals > 0 || fraction ? 'decimal' : 'numeric'}
 	{id}
-	placeholder={fallback === undefined ? '' : String(fallback)}
+	placeholder={placeholder ?? (fallback === undefined ? '' : String(fallback))}
 	{disabled}
 	{message}
 	error={shownError}

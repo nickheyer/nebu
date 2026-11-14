@@ -8,7 +8,7 @@
 	import { isCancel, isCode, reason, rpc } from '#lib/api/transport.js';
 	import { bytes, enumLabel, tokensPerSecond } from '#lib/format.js';
 	import { live, modelKey } from '#lib/live/events.svelte.js';
-	import { PlanProfile, Shape, ShapeSchema, type MemoryPlan, type Part } from '#lib/proto/nebu/v1/estimate_pb.js';
+	import { PlanProfile, Shape, ShapeSchema, type MemoryPlan, type ParamState, type Part } from '#lib/proto/nebu/v1/estimate_pb.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { PolicySchema, ProfileSchema } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { RunRequestSchema, type RunRequest } from '#lib/proto/nebu/v1/instance_pb.js';
@@ -99,6 +99,7 @@
 	let shape = $state<Shape>(Shape.UNSPECIFIED);
 	let profile = $state<PlanProfile>(PlanProfile.AUTO);
 	let plan = $state<MemoryPlan | undefined>(undefined);
+	let paramStates = $state<ParamState[]>([]);
 	let planWarning = $state('');
 	let formationPlan = $state<FormationPlan | undefined>(undefined);
 	let planError = $state('');
@@ -420,10 +421,12 @@
 				const res = await rpc.mesh.planFormation({ run: request() }, { signal: abort.signal });
 				formationPlan = res.plan;
 				plan = res.plan?.memory;
+				paramStates = [];
 				planWarning = res.plan?.detail ?? '';
 			} else {
 				const res = await rpc.estimate.estimate({ sourceId: m.sourceId, repo: m.repo, group: m.group, runtimeId, params: cleanParams(), slotId: slot?.id ?? '', exact: slot !== undefined, free }, { signal: abort.signal });
 				plan = res.plan;
+				paramStates = res.params;
 				planWarning = res.warning;
 				formationPlan = undefined;
 			}
@@ -542,24 +545,26 @@
 		{#if model && runtimes !== undefined && usable.length === 0}
 			<Empty icon={EngineIcon} text="No runtime installed for this model" action="Runtimes" href="/runtimes" />
 		{:else if model && runtime}
-			{#if !swap && !planOnly}
-				<FieldRow>
-					{#if slotOptions.length}<Select bind:value={slotId} options={slotOptions} label="Slot" info="The launch fills the slot and the slot keeps its runtime, parameters and arguments" clearable />{/if}
-					{#if !slot}<Text bind:value={name} label="Name" max={64} required />{/if}
-				</FieldRow>
-			{/if}
-			<RuntimeFields runtimes={usable} bind:runtimeId bind:installId />
+			<FieldRow>
+				{#if !swap && !planOnly}
+					<FieldRow>
+						{#if slotOptions.length}<Select bind:value={slotId} options={slotOptions} label="Slot" info="The launch fills the slot and the slot keeps its runtime, parameters and arguments" clearable />{/if}
+						{#if !slot}<Text bind:value={name} label="Name" max={64} required />{/if}
+					</FieldRow>
+				{/if}
+				<RuntimeFields runtimes={usable} bind:runtimeId bind:installId />
+			</FieldRow>
 			{@render memory()}
 			{#if inMesh && planOnly}{@render mesh()}{/if}
 			<div class="more">
-				<Collapse label="Parameters">
+				<Collapse label="Parameters" heading indent={false}>
 					<Stack gap={24}>
-						<ParamsForm params={runtimeParams} bind:values={params} supplied={plan?.params} />
+						<ParamsForm params={runtimeParams} bind:values={params} supplied={plan?.params} states={paramStates} />
 						<Text bind:value={args} label="Extra arguments" max={512} mono />
 					</Stack>
 				</Collapse>
 				{#if swap}
-					<Collapse label="Rollout">
+					<Collapse label="Rollout" heading indent={false}>
 						<Stack gap={12}>
 							<FieldRow>
 								<Switch bind:checked={drainFirst} label="Let open requests finish first" disabled={canaryPercent > 0} />
@@ -577,7 +582,7 @@
 						</Stack>
 					</Collapse>
 				{:else if !planOnly}
-					<Collapse label="Route">
+					<Collapse label="Route" heading indent={false}>
 						<Stack gap={24}>
 							<FieldRow wide>
 								<Duration bind:value={idleUnload} base="s" max={86_400} label="Unload when idle for" emptyZero />
@@ -590,10 +595,10 @@
 					</Collapse>
 				{/if}
 				{#if inMesh && !planOnly}
-					<Collapse label="Mesh">{@render mesh()}</Collapse>
+					<Collapse label="Mesh" heading indent={false}>{@render mesh()}</Collapse>
 				{/if}
 				{#if !planOnly}
-					<Collapse label="Command" bind:open={commandOpen}>
+					<Collapse label="Command" heading indent={false} bind:open={commandOpen}>
 						{#if previewError}
 							<p class="error-text secondary">{previewError}</p>
 						{:else if preview}
@@ -628,10 +633,16 @@
 		gap: var(--nebu-space-2);
 		align-items: center;
 	}
+	/* Each folding section sits under a rule, so what it opens reads as its own down to the next rule */
 	.more {
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
+		padding-top: var(--nebu-space-2);
+	}
+	.more > :global(*) {
+		border: 0;
+		border-top: 1px solid var(--nebu-border);
 	}
 	.rows {
 		display: flex;

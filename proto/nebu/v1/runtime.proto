@@ -79,6 +79,8 @@ message Param {
   string scaled_in = 22;
   // Unset, a launch passes what the plan worked out, a fact of the model the runtime cannot find
   bool supplied = 23;
+  // Shown in the empty control when neither a plan nor a default gives a value, what the runtime keeps unset
+  string placeholder = 24;
 }
 
 // A value another parameter holds
