@@ -208,10 +208,11 @@ func TestRequestMCPServerOnThisHostRefused(t *testing.T) {
 	}
 }
 
-// A vLLM engine holding its response headers for a while before answering
+// A vLLM engine holding its response headers for a while, and its stream body until the caller has those headers
 type slowVLLM struct {
 	vllmpb.UnimplementedInferenceServer
 	hold time.Duration
+	seen chan struct{}
 }
 
 func (f *slowVLLM) Generate(ctx context.Context, _ *vllmpb.GenerateRequest) (*vllmpb.GenerateResponse, error) {
@@ -224,7 +225,11 @@ func (f *slowVLLM) GenerateStream(_ *vllmpb.GenerateRequest, s vllmpb.Inference_
 	if err := s.SendHeader(metadata.Pairs("x-engine", "slow")); err != nil {
 		return err
 	}
-	time.Sleep(f.hold)
+	select {
+	case <-f.seen:
+	case <-s.Context().Done():
+		return s.Context().Err()
+	}
 	return s.Send(&vllmpb.GenerateResponse{Outputs: &vllmpb.SequenceOutput{Text: "hi", NumTokens: 1, FinishInfo: &vllmpb.FinishInfo{NumOutputTokens: 1, FinishReason: vllmpb.FinishInfo_STOP}}})
 }
 
@@ -237,7 +242,8 @@ func TestGRPCFirstByteAtBackendHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := grpc.NewServer()
-	vllmpb.RegisterInferenceServer(engine, &slowVLLM{hold: hold})
+	slow := &slowVLLM{hold: hold, seen: make(chan struct{})}
+	vllmpb.RegisterInferenceServer(engine, slow)
 	go engine.Serve(lis)
 	t.Cleanup(engine.Stop)
 	h.publish("slow", "grpc", "vllm", datalayer.AppProtocolGRPC, true, pools.RouteSpec{ServedName: "served"}, lis.Addr().String())
@@ -246,7 +252,8 @@ func TestGRPCFirstByteAtBackendHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	if _, err := vllmpb.NewInferenceClient(conn).Generate(ctx, &vllmpb.GenerateRequest{RequestId: "u1", Model: "slow", Prompt: &vllmpb.GenerateRequest_Text{Text: "hello"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -258,6 +265,11 @@ func TestGRPCFirstByteAtBackendHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := stream.Header(); err != nil {
+		t.Fatal(err)
+	}
+	seen := h.g.clock.Now()
+	close(slow.seen)
 	for {
 		if _, err := stream.Recv(); err != nil {
 			break
@@ -274,10 +286,9 @@ func TestGRPCFirstByteAtBackendHeaders(t *testing.T) {
 		}
 		return false
 	})
-	first := streamed.GetFirstByteAt().AsTime().Sub(streamed.GetStartedAt().AsTime())
-	finished := streamed.GetFinishedAt().AsTime().Sub(streamed.GetFirstByteAt().AsTime())
-	if first < hold || first >= 2*hold || finished < hold {
-		t.Fatalf("stream first byte after %v, finished %v after it, hold %v", first, finished, hold)
+	first := streamed.GetFirstByteAt().AsTime()
+	if held := first.Sub(streamed.GetStartedAt().AsTime()); held < hold || first.After(seen) {
+		t.Fatalf("stream first byte %v after the start and %v after the caller had the headers, hold %v", held, first.Sub(seen), hold)
 	}
 }
 
