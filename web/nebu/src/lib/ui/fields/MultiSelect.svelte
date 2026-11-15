@@ -13,13 +13,13 @@
 		disabled = false,
 		search = false,
 		message,
-		// A toolbar select, its label standing as the placeholder
+		// A toolbar select, its label inside the box before the choices
 		compact = false
 	}: { value?: V[]; options: Option<V>[]; label?: string; info?: string; placeholder?: string; disabled?: boolean; search?: boolean; message?: string; compact?: boolean } = $props();
 
 	const id = fieldId();
 	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
-	const empty = $derived(placeholder ?? (compact ? label : undefined));
+	const empty = $derived(placeholder ?? (compact && label ? 'All' : undefined));
 
 	// The chosen options by name on one line
 	function named(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
@@ -29,6 +29,10 @@
 	}
 </script>
 
+{#snippet lead()}
+	<span class="inlabel">{label}</span>
+{/snippet}
+
 <div class="field" class:compact>
 	{#if !compact}<FieldLabel {label} {info} forId={id} />{/if}
 	<NeoSelect
@@ -36,6 +40,7 @@
 		options={items}
 		{id}
 		multiple
+		before={compact && label ? lead : undefined}
 		placeholder={empty}
 		display={named}
 		{disabled}
@@ -62,6 +67,12 @@
 	}
 	.field :global(.neo-input-group) {
 		min-width: 0;
+	}
+	/* A toolbar field keeps its name in the box before what it holds */
+	.inlabel {
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+		white-space: nowrap;
 	}
 	/* A compact select keeps control height, the chosen options cut off at its edge */
 	.compact :global(.neo-input-group) {

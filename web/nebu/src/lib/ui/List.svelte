@@ -7,6 +7,9 @@
 	let { head, label, compactBelow, children }: { head?: ListHead; label?: string; compactBelow?: number; children: Snippet } = $props();
 
 	const layout = provideList(untrack(() => compactBelow));
+	$effect.pre(() => {
+		layout.head = head;
+	});
 </script>
 
 <div class="list" role="group" aria-label={label} style:grid-template-columns={layout.template} bind:clientWidth={layout.width}>
@@ -66,6 +69,12 @@
 		border-top: 1px solid var(--nebu-border);
 		border-bottom: 1px solid var(--nebu-border);
 		background: var(--nebu-surface-sunken);
+	}
+	/* A heading wider than its column clips inside it, clear of the next heading */
+	.listhead > span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.end {
 		text-align: right;

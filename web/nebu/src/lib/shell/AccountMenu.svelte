@@ -20,7 +20,7 @@
 	}
 </script>
 
-<NeoMenu {items} onSelect={onSelect} placement="bottom-end">
+<NeoMenu {items} onSelect={onSelect} placement="bottom-end" filled>
 	<NeoButton text aria-label="Account">
 		{#snippet icon()}<UserIcon size={20} />{/snippet}
 	</NeoButton>

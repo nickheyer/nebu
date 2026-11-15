@@ -6,6 +6,7 @@
 	import { live } from '#lib/live/events.svelte.js';
 	import { RuntimeInventorySchema } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { AppProtocol, FailureMode, MetricNamesSchema, PoolSpecSchema, StaticEndpointSchema, type Pool } from '#lib/proto/nebu/v1/pool_pb.js';
+	import { failureOptions, protocolOptions } from '#lib/pages/gateway/gateway.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Chips from '#lib/ui/fields/Chips.svelte';
@@ -43,7 +44,15 @@
 
 	const portNumbers = $derived(ports.map(Number));
 	const dirty = $derived(!editing || toJsonString(PoolSpecSchema, spec) !== baseline || portNumbers.join(',') !== initial.targetPorts.join(','));
-	const complete = $derived(id.trim() !== '' && spec.model.trim() !== '' && portNumbers.length > 0 && portNumbers.every((n) => Number.isInteger(n) && n >= 1 && n <= 65535) && spec.staticEndpoints.every((e) => e.address.trim() !== ''));
+	// What the pool still needs, the first thing missing
+	const missing = $derived.by(() => {
+		if (id.trim() === '') return 'Name the pool';
+		if (spec.model.trim() === '') return 'Name the model its endpoints serve';
+		if (portNumbers.length === 0) return 'Give it at least one port';
+		if (!portNumbers.every((n) => Number.isInteger(n) && n >= 1 && n <= 65535)) return 'A port is a whole number from 1 to 65535';
+		if (spec.staticEndpoints.some((e) => e.address.trim() === '')) return 'Give every static endpoint an address';
+		return '';
+	});
 
 	// Runtimes installed here and those other pools name, the current choice kept
 	const runtimes = $derived(
@@ -87,40 +96,37 @@
 
 <PanelHeader title={editing ? id : 'New pool'} {onclose} />
 <Stack gap={24}>
-	<FormSection title="Pool">
+	<FormSection>
 		<FieldRow>
 			<Text bind:value={id} label="Name" required readonly={editing} max={64} />
-			<Text bind:value={spec.model} label="Model" required max={128} />
+			<Text bind:value={spec.model} label="Model" info="The name the endpoints know the model by, sent to them as it is" required max={128} />
 		</FieldRow>
 		<FieldRow>
-			<Select value={spec.runtimeId || undefined} options={runtimes} label="Runtime" clearable onchange={(v) => (spec.runtimeId = v ?? '')} />
-			<Text bind:value={spec.accelerator} label="Accelerator" max={64} />
-		</FieldRow>
-		<KeyValues bind:value={spec.selector} label="Selector" info="Labels an endpoint must carry to join" />
-		<FieldRow>
-			<Chips bind:value={ports} label="Ports" numeric max={8} />
-			<NumberField bind:value={spec.concurrency} min={0} label="Concurrency" info="Requests one endpoint runs at once when it reports no capacity" emptyZero />
+			<Select value={spec.runtimeId || undefined} options={runtimes} label="Runtime" info="The server the endpoints run, which says how their metrics are read" clearable unset="not stated" onchange={(v) => (spec.runtimeId = v ?? '')} />
+			<Select value={spec.schedulerConfig || undefined} options={configs} label="Scheduler" clearable unset="the gateway's own" onchange={(v) => (spec.schedulerConfig = v ?? '')} />
 		</FieldRow>
 		<FieldRow>
-			<Segmented bind:value={spec.appProtocol} options={[{ value: AppProtocol.HTTP, label: 'HTTP' }, { value: AppProtocol.H2C, label: 'h2c' }, { value: AppProtocol.GRPC, label: 'gRPC' }]} label="Protocol" />
-			<Segmented bind:value={spec.failureMode} options={[{ value: FailureMode.FAIL_CLOSE, label: 'Reject' }, { value: FailureMode.FAIL_OPEN, label: 'Let through' }]} label="If the scheduler fails" />
+			<Chips bind:value={ports} label="Ports" info="Ports of an endpoint the pool sends to" numeric max={8} />
+			<NumberField bind:value={spec.concurrency} min={0} label="Concurrency" info="Requests one endpoint runs at once when it reports no capacity" emptyZero unset="what each endpoint reports" />
 		</FieldRow>
 		<FieldRow>
-			<Select value={spec.schedulerConfig || undefined} options={configs} label="Scheduler" clearable onchange={(v) => (spec.schedulerConfig = v ?? '')} />
+			<Segmented bind:value={spec.appProtocol} options={protocolOptions} label="Protocol" />
+			<Segmented bind:value={spec.failureMode} options={failureOptions} label="If the scheduler fails" message={failureOptions.find((o) => o.value === spec.failureMode)?.tip} />
+		</FieldRow>
+		<FieldRow>
 			<Switch bind:checked={spec.export} label="Export" info="Offers the pool to every mesh member" />
-		</FieldRow>
-		<FieldRow>
 			<Switch bind:checked={spec.tokensInOut} label="Send token ids" info="The gateway turns prompts into token ids before sending them" />
-			<span></span>
 		</FieldRow>
+		<KeyValues bind:value={spec.selector} label="Selector" info="Labels an endpoint must carry to join" keyLabel="Label" addLabel="Label" />
+		<Text bind:value={spec.accelerator} label="Accelerator" info="What every endpoint runs on, in words, as the models listing shows it" unset="not stated" max={64} />
 		{#snippet advanced()}
 			{#if spec.inventory}
 				<FieldRow>
-					<Slider bind:value={() => spec.inventory?.contextLength || undefined, (n) => (spec.inventory!.contextLength = n ?? 0)} min={256} max={1_048_576} step={256} curve="geometric" unit="tokens" label="Context length" optional />
+					<Slider bind:value={() => spec.inventory?.contextLength || undefined, (n) => (spec.inventory!.contextLength = n ?? 0)} min={256} max={1_048_576} step={256} curve="geometric" unit="tokens" label="Context length" info="Tokens one request holds, prompt and output together, as the models listing states it" resting="not listed" optional />
 					<Text bind:value={spec.inventory.quantization} label="Quantization" max={32} />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.inventory.accelerator} label="Launch accelerator" max={64} />
+					<Text bind:value={spec.inventory.accelerator} label="Launch accelerator" info="The devices one launch runs on, when they differ from the pool's" max={64} />
 					<Segmented bind:value={() => spec.inventory?.throughputClass || undefined, (v) => (spec.inventory!.throughputClass = v ?? '')} options={[{ value: 'device', label: 'Device' }, { value: 'offload', label: 'Offload' }, { value: 'host', label: 'Host' }]} label="Throughput class" info="Whether the model runs on device, offloaded or on the host" clearable />
 				</FieldRow>
 				<MultiSelect bind:value={spec.inventory.modalities} options={modalities} label="Modalities" />
@@ -136,15 +142,15 @@
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.queuedRequests} label="Queued requests gauge" mono />
-					<KeyValues bind:value={spec.metrics.queuedRequestsMatch} label="Queued requests labels" />
+					<KeyValues bind:value={spec.metrics.queuedRequestsMatch} label="Queued requests labels" keyLabel="Label" addLabel="Label" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.runningRequests} label="Running requests gauge" mono />
-					<KeyValues bind:value={spec.metrics.runningRequestsMatch} label="Running requests labels" />
+					<KeyValues bind:value={spec.metrics.runningRequestsMatch} label="Running requests labels" keyLabel="Label" addLabel="Label" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.kvCacheUtilization} label="KV utilization gauge" mono />
-					<KeyValues bind:value={spec.metrics.kvCacheUtilizationMatch} label="KV utilization labels" />
+					<KeyValues bind:value={spec.metrics.kvCacheUtilizationMatch} label="KV utilization labels" keyLabel="Label" addLabel="Label" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.cacheConfigInfo} label="Cache config gauge" info="Info gauge carrying block size and block count" mono />
@@ -156,11 +162,11 @@
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.blockSize} label="Block size gauge" info="Gauge holding block size when there is no cache config gauge" mono />
-					<KeyValues bind:value={spec.metrics.blockSizeMatch} label="Block size labels" />
+					<KeyValues bind:value={spec.metrics.blockSizeMatch} label="Block size labels" keyLabel="Label" addLabel="Label" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.numBlocks} label="Block count gauge" info="Gauge holding total blocks when there is no cache config gauge" mono />
-					<KeyValues bind:value={spec.metrics.numBlocksMatch} label="Block count labels" />
+					<KeyValues bind:value={spec.metrics.numBlocksMatch} label="Block count labels" keyLabel="Label" addLabel="Label" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.loraInfo} label="LoRA info gauge" mono />
@@ -204,7 +210,7 @@
 	<Confirm label="Delete" question="Delete {id}?" danger placement="top-start" onconfirm={remove} />
 {/snippet}
 
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!complete} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} needs={missing} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
 
 <style>
 	.endpoints {

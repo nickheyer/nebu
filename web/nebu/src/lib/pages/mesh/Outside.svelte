@@ -2,7 +2,7 @@
 	import type { Timestamp } from '@bufbuild/protobuf/wkt';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, enumLabel, num, when } from '#lib/format.js';
+	import { ago, enumLabel, num, plural, shortId, when } from '#lib/format.js';
 	import { AdmissionSide, AdmissionState, AdmissionStateSchema, type Admission, type MeshStatus, type NearbyMesh } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import CopyButton from '#lib/ui/CopyButton.svelte';
@@ -14,8 +14,9 @@
 	import Screen from '#lib/ui/Screen.svelte';
 	import StateWord from '#lib/ui/StateWord.svelte';
 	import Time from '#lib/ui/Time.svelte';
+	import Secret from '#lib/ui/fields/Secret.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import Facts from '#lib/ui/Facts.svelte';
+	import Facts, { type FactItem } from '#lib/ui/Facts.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
@@ -30,6 +31,18 @@
 	const meshes = $derived(status?.meshes ?? []);
 	const nodes = $derived(status?.nodes ?? []);
 	const admissions = $derived(status?.admissions ?? []);
+	// The node by name and id, where it listens, where others reach it, and whether it calls out to the network
+	const self = $derived.by((): FactItem[] => {
+		const s = status;
+		if (!s) return [];
+		return [
+			{ id: 'name', label: 'Name', value: s.nodeName || 'unnamed', note: s.nodeId ? `id ${shortId(s.nodeId)}` : undefined, tip: s.nodeId || undefined, wide: true },
+			{ id: 'listen', label: 'Listening on', value: s.listen || 'nothing', mono: s.listen !== '', quiet: !s.listen, lamp: s.listen ? undefined : 'warning', note: s.listen ? undefined : 'no other node can call it', wide: s.listen !== '' },
+			{ id: 'address', label: 'Reached at', value: s.address || 'nowhere', mono: s.address !== '', quiet: !s.address, note: s.address ? undefined : s.listen ? 'it listens on this machine alone' : 'nothing listens', wide: s.address !== '' },
+			{ id: 'announce', label: 'Beacons', value: s.announce ? 'on' : 'off', lamp: s.announce ? 'success' : undefined, quiet: !s.announce, note: s.announce ? 'nodes nearby hear it' : 'it stays silent' },
+			{ id: 'heard', label: 'Heard nearby', value: num(meshes.length + nodes.length), note: `${plural(meshes.length, 'mesh', 'meshes')}, ${plural(nodes.length, 'node')}` }
+		];
+	});
 	const heard = $derived(meshes.length > 0 || nodes.length > 0);
 
 	let asking = $state('');
@@ -180,17 +193,18 @@
 
 <PageHeader />
 
+<!-- What this node is and how others reach it, with the two ways into a mesh -->
 <Card title="This node">
 	{#snippet tools()}
 		<NeoButton elevation={2} onclick={openJoin}>Join with a token</NeoButton>
 		<NeoButton class="primary" elevation={2} onclick={openCreate}>Create a mesh</NeoButton>
 	{/snippet}
-	<Facts items={[{ id: 'listen', label: 'Listening', value: status?.listen ?? '', mono: true, lamp: status?.listen ? 'success' : 'warning' }, { id: 'heard', label: 'Heard nearby', value: num(meshes.length + nodes.length) }]} />
+	<Facts items={self} />
 </Card>
 
 {#if !heard && admissions.length === 0}
-	<Card>
-		<Empty icon={ShareNetworkIcon} text="Nothing nearby" />
+	<Card title="Nearby">
+		<Empty icon={ShareNetworkIcon} text="No node or mesh heard on this network" hint={status?.announce ? 'Nodes on the same network find each other by beacon. One further away joins with a token made by a member of the mesh.' : 'Beacons are off on this node, so it hears no other and no other hears it. A node joins a mesh with a token made by one of its members.'} />
 	</Card>
 {:else if heard && admissions.length}
 	<Columns ratio="3/2">
@@ -218,7 +232,7 @@
 	title={made ? `Join token for ${made.name}` : 'Create a mesh'}
 	confirm={made ? undefined : 'Create'}
 	busy={creating}
-	disabled={!meshName.trim()}
+	needs={made || meshName.trim() ? '' : 'Name the mesh'}
 	onconfirm={createMesh}
 	footer={made ? madeFooter : undefined}
 >
@@ -229,8 +243,9 @@
 	{/if}
 </Dialog>
 
-<Dialog bind:open={joinOpen} title="Join with a token" confirm="Join" busy={joining} disabled={!joinToken.trim()} onconfirm={join}>
-	<Text bind:value={joinToken} label="Join token" mono required />
+<Dialog bind:open={joinOpen} title="Join with a token" confirm="Join" busy={joining} needs={joinToken.trim() ? '' : 'Paste the join token'} onconfirm={join}>
+	<p class="secondary">A member of the mesh makes the token on its Mesh page, under Token, and it works until the time it was given runs out.</p>
+	<Secret bind:value={joinToken} label="Join token" required />
 </Dialog>
 
 <style>

@@ -627,13 +627,21 @@ func sizeOf(models []*v1.StoredModel) uint64 {
 	return total
 }
 
+// A count of models in words, one model or several
+func models(n int) string {
+	if n == 1 {
+		return "1 model"
+	}
+	return fmt.Sprintf("%d models", n)
+}
+
 // Starts a task that rehashes blobs and drops corrupt ones
 func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, error) {
 	selected, err := p.selectManifests(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
-	title := fmt.Sprintf("verify %d models", len(selected))
+	title := fmt.Sprintf("verify %s", models(len(selected)))
 	return p.Tasks.Start(kindVerify, title, nil, func(ctx context.Context, h *tasks.Handle) error {
 		return p.verify(ctx, h, selected)
 	}), nil

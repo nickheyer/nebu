@@ -90,11 +90,11 @@
 			{:else if sorted.length === 0}
 				<Empty icon={EngineIcon} text="No runtimes" />
 			{:else}
-				<List head={{ primary: 'Runtime', facts: ['Installs'] }}>
+				<List head={{ primary: 'Runtime', facts: ['State', 'Installs'] }}>
 					{#each sorted as r (r.runtime?.id)}
 						{@const n = installs(r)}
 						<ListRow
-							lamp={r.compatible ? 'success' : 'muted'}
+							lamp={r.compatible && n > 0 ? 'success' : 'muted'}
 							shape={r.compatible && n > 0 ? 'filled' : 'hollow'}
 							primary={r.runtime?.name ?? ''}
 							primaryTip={about(r)}
@@ -102,7 +102,7 @@
 							secondaryKind="message"
 							secondaryWidth="28ch"
 							secondaryTip={r.unmet.length > 1 ? r.unmet.join('\n') : undefined}
-							facts={[{ value: n > 0 ? num(n) : '' }]}
+							facts={[{ value: !r.compatible ? 'unsupported here' : n > 0 ? 'installed' : 'not installed', tip: r.compatible ? undefined : r.unmet.join('\n') || undefined }, { value: num(n) }]}
 							selected={r.runtime?.id === id}
 							onclick={() => open(r)}
 						/>
@@ -115,7 +115,7 @@
 
 <PageHeader tabs={serveTabs} active="runtimes" />
 
-<Sheet open={id !== ''} onclose={() => goto('/runtimes')} {list}>
+<Sheet open={id !== ''} onclose={() => goto('/runtimes')} {list} wide={tab === 'defaults'}>
 	{#if selected}
 		{#key selected.runtime?.id}
 			<RuntimePanel status={selected} {tab} ontab={showTab} onclose={() => goto('/runtimes')} />

@@ -11,7 +11,6 @@
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Dot from '#lib/ui/Dot.svelte';
-	import Tip from '#lib/ui/Tip.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
@@ -55,7 +54,16 @@
 	const dirty = $derived(!editing || toJsonString(RouteSpecSchema, draft) !== baseline);
 	const current = $derived(editing ? live.routes.get(name) : undefined);
 	const objectives = $derived([...live.objectives.values()].map((o) => ({ value: o.name, label: o.name, description: `priority ${o.priority}` })));
-	const complete = $derived(!locked && name.trim() !== '' && ordered.length > 0 && ordered.every((r) => r.targets.length > 0 && r.targets.every((t) => t.poolId && t.weight >= 1)));
+	const balanceNote = $derived(spec.balance === RouteBalance.READY_ENDPOINTS ? 'A target with more ready endpoints takes more' : spec.balance === RouteBalance.FREE_CAPACITY ? 'A target with more room for requests takes more' : 'Each target takes its weight as written');
+	// What the route still needs, the first thing missing
+	const missing = $derived.by(() => {
+		if (name.trim() === '') return 'Name the route';
+		if (ordered.length === 0) return 'Add a rule';
+		const at = ordered.findIndex((r) => r.targets.length === 0 || r.targets.some((t) => !t.poolId));
+		if (at >= 0) return ordered.length > 1 ? `Pick a pool for every target of rule ${at + 1}` : 'Pick a pool for every target';
+		if (ordered.some((r) => r.targets.some((t) => t.weight < 1))) return 'Give every target a weight of at least 1';
+		return '';
+	});
 
 	function nextKey(): string {
 		return `rule-${seq++}`;
@@ -106,32 +114,39 @@
 	}
 </script>
 
-{#snippet removeButton(label: string, onclick: () => void, disabled = false)}
-	<span class="trail remove"><NeoButton text aria-label={label} title={label} {disabled} {onclick}>{#snippet icon()}<XIcon size={18} />{/snippet}</NeoButton></span>
+{#snippet removeButton(label: string, onclick: () => void)}
+	<span class="trail remove"><NeoButton text aria-label={label} title={label} {onclick}>{#snippet icon()}<XIcon size={18} />{/snippet}</NeoButton></span>
 {/snippet}
 
+<!-- A route with one rule has nothing to reorder or to remove, so the handle and the remove button come with the second rule -->
 {#snippet ruleBody(k: string, rule: RewriteRule, index: number, handle?: (node: HTMLElement) => () => void)}
-	<div class="rulehead">
-		{#if handle}
-			<span class="grip muted" role="button" tabindex="0" aria-label="Drag to reorder" title="Drag to reorder" {@attach handle}><DotsSixVerticalIcon size={18} /></span>
-		{/if}
-		<span class="label">Rule {index + 1}</span>
-		<span class="fill"></span>
-		{#if !owned}{@render removeButton('Remove rule', () => removeRule(k), ordered.length === 1)}{/if}
-	</div>
-	<div class="rulebody">
-		<Text bind:value={rule.match} label="Match" info="Exact model name, every request when empty" max={64} mono disabled={owned || locked} />
+	{@const several = ordered.length > 1}
+	{#if several}
+		<div class="rulehead">
+			{#if handle}
+				<span class="grip muted" role="button" tabindex="0" aria-label="Drag rule {index + 1} to reorder" title="Drag to reorder" {@attach handle}><DotsSixVerticalIcon size={18} /></span>
+			{/if}
+			<span class="label">Rule {index + 1}</span>
+			<span class="fill"></span>
+			{#if !owned}<NeoButton text class="danger" onclick={() => removeRule(k)}>Remove rule</NeoButton>{/if}
+		</div>
+	{/if}
+	<div class="rulebody" class:indented={several && handle !== undefined}>
+		<Text bind:value={rule.match} label="Model name to match" info="Compared whole with the model name a request asks for, such as llama-3-8b" unset="every request" max={64} mono disabled={owned || locked} />
 		<div class="targets">
 			{#each rule.targets as target, t (t)}
 				{@const pool = target.poolId ? live.pools.get(target.poolId) : undefined}
 				<div class="target">
 					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} current={target.poolId || undefined} required disabled={owned || locked} /></span>
-					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} info={t === 0 ? 'Sent to the pool in place of the name asked for' : undefined} max={64} placeholder={pool?.spec?.model || undefined} disabled={owned || locked} /></span>
-					<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} unit={targetShare(rule, target.weight)} disabled={owned || locked} /></span>
-					{#if target.poolId}
-						<span class="trail share"><Tip text={poolWord(pool)} tag="span"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} label={poolWord(pool)} /></Tip></span>
+					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} info={t === 0 ? 'Sent to the pool in place of the name asked for' : undefined} max={64} unset={pool?.spec?.model ? `${pool.spec.model}, the pool's own` : undefined} disabled={owned || locked} /></span>
+					{#if rule.targets.length > 1}
+						<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} info={t === 0 ? 'The share of the rule\'s requests a target takes is its weight over the sum of them all' : undefined} disabled={owned || locked} /></span>
+						<span class="share num" aria-label="Share of the rule's requests">{targetShare(rule, target.weight)}</span>
 					{/if}
-					{#if !owned}{@render removeButton('Remove target', () => (rule.targets = rule.targets.filter((_, j) => j !== t)), rule.targets.length === 1)}{/if}
+					{#if !owned && rule.targets.length > 1}{@render removeButton(`Remove target ${t + 1}`, () => (rule.targets = rule.targets.filter((_, j) => j !== t)))}{/if}
+					{#if target.poolId}
+						<span class="state"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} /><span class="secondary">{pool ? poolWord(pool) : 'no such pool'}</span></span>
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -149,7 +164,7 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Route">
+	<FormSection>
 		<FieldRow>
 			<Text bind:value={name} label="Name" required readonly={editing} max={64} />
 			<Select value={spec.objective || undefined} options={objectives} label="Objective" info="Requests may name their own" clearable disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
@@ -161,7 +176,8 @@
 				{ value: RouteBalance.READY_ENDPOINTS, label: 'Ready endpoints' },
 				{ value: RouteBalance.FREE_CAPACITY, label: 'Free capacity' }
 			]}
-			label="Balance" info="What target weights are scaled by"
+			label="Balance" info="What the weights of a rule's targets are scaled by before a request is sent"
+			message={balanceNote}
 			disabled={locked}
 		/>
 	</FormSection>
@@ -196,7 +212,7 @@
 		<PolicyFields bind:policy={spec.policy} bind:profile={spec.profile} disabled={locked} />
 	{/if}
 	{#if current?.status?.conditions.length}
-		<Section title="Status" level={3}>
+		<Section title="Checks" level={3}>
 			<Conditions conditions={current.status.conditions} />
 		</Section>
 	{/if}
@@ -205,7 +221,7 @@
 	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
 {/snippet}
 
-<SaveBar dirty={locked ? false : dirty} always={!editing} {saving} {error} message={locked ? 'Read only' : undefined} label={editing ? 'Save' : 'Create'} disabled={!complete} leading={editing && !owner ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
+<SaveBar dirty={locked ? false : dirty} always={!editing} {saving} {error} message={locked ? 'Read only' : undefined} label={editing ? 'Save' : 'Create'} needs={locked ? '' : missing} leading={editing && !owner ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
 
 <style>
 	.rules {
@@ -239,6 +255,8 @@
 		flex-direction: column;
 		gap: var(--nebu-space-3);
 		min-width: 0;
+	}
+	.rulebody.indented {
 		padding-left: 26px;
 	}
 	.targets {
@@ -272,14 +290,29 @@
 	}
 	.weight {
 		display: flex;
-		flex: 0 0 11rem;
+		flex: 0 0 8rem;
 		min-width: 0;
 	}
 	.weight > :global(*) {
 		flex: 1 1 auto;
 	}
+	/* What a weight comes to stands beside the box that sets it, on the line of the box */
 	.share {
-		margin-left: auto;
+		display: inline-flex;
+		flex: 0 0 4.5ch;
+		align-items: center;
+		justify-content: flex-end;
+		min-height: var(--nebu-input-height);
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+	}
+	/* How ready a target's pool is reads in words on its own line under the target */
+	.state {
+		display: flex;
+		flex: 1 1 100%;
+		gap: 6px;
+		align-items: center;
+		margin-top: -4px;
 	}
 	.remove {
 		flex: 0 0 auto;

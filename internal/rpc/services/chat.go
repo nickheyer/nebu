@@ -59,6 +59,21 @@ func (s *ChatService) DeleteConversation(ctx context.Context, req *connect.Reque
 	return reply(&v1.DeleteConversationResponse{}, s.chats.Delete(ctx, s.owner(req.Header()), req.Msg.GetId()))
 }
 
+func (s *ChatService) DeleteTurn(ctx context.Context, req *connect.Request[v1.DeleteTurnRequest]) (*connect.Response[v1.DeleteTurnResponse], error) {
+	c, err := s.chats.DeleteTurn(ctx, s.owner(req.Header()), req.Msg.GetId(), req.Msg.GetTurnId())
+	return reply(&v1.DeleteTurnResponse{Conversation: c}, err)
+}
+
+func (s *ChatService) EditTurn(ctx context.Context, req *connect.Request[v1.EditTurnRequest]) (*connect.Response[v1.EditTurnResponse], error) {
+	c, err := s.chats.EditTurn(ctx, s.owner(req.Header()), req.Msg.GetId(), req.Msg.GetTurnId(), req.Msg.GetText())
+	return reply(&v1.EditTurnResponse{Conversation: c}, err)
+}
+
+func (s *ChatService) RetryTurn(ctx context.Context, req *connect.Request[v1.RetryTurnRequest]) (*connect.Response[v1.RetryTurnResponse], error) {
+	c, err := s.chats.RetryTurn(ctx, s.owner(req.Header()), req.Msg.GetId(), req.Msg.GetTurnId())
+	return reply(&v1.RetryTurnResponse{Conversation: c}, err)
+}
+
 func (s *ChatService) PutChatFile(ctx context.Context, req *connect.Request[v1.PutChatFileRequest]) (*connect.Response[v1.PutChatFileResponse], error) {
 	f, err := s.chats.PutFile(ctx, s.owner(req.Header()), req.Msg.GetFile(), req.Msg.GetData())
 	return reply(&v1.PutChatFileResponse{File: f}, err)

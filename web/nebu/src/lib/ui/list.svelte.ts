@@ -17,6 +17,8 @@ export class ListLayout {
 	secondaryWeight = $state(1.4);
 	width = $state(0);
 	threshold = $state(compactBelow);
+	// The column headings, which name what a compact row moves under itself
+	head = $state<ListHead | undefined>(undefined);
 
 	readonly compact = $derived(this.width > 0 && this.width < this.threshold);
 	readonly factCount = $derived(this.#facts.reduce((m, n) => Math.max(m, n), 0));
@@ -49,7 +51,7 @@ export class ListLayout {
 		if (this.has('dot')) cols.push('max-content');
 		cols.push(`minmax(min-content, ${this.has('secondary') || this.has('instrument') ? this.primaryWeight : 1}fr)`);
 		if (this.has('secondary')) cols.push(`minmax(0, ${this.secondaryWeight}fr)`);
-		if (this.has('instrument')) cols.push('minmax(8rem, 1.6fr)');
+		if (this.has('instrument')) cols.push('minmax(min-content, 1.6fr)');
 		for (let i = 0; i < this.shownFacts; i++) cols.push('max-content');
 		if (this.has('action')) cols.push('max-content');
 		if (this.has('menu')) cols.push('max-content');

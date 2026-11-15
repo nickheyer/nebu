@@ -16,7 +16,26 @@ const sizes = { mobile: [390, 844], standard: [1440, 900], ultrawide: [1920, 108
 for (const w of widths) if (!(w in sizes)) throw new Error(`no width "${w}", widths are ${Object.keys(sizes).join(', ')}`);
 for (const t of themes) if (t !== 'light' && t !== 'dark') throw new Error(`no theme "${t}", themes are light, dark`);
 
-// Every page and its open panel, drawer, dialog or wizard, reached by route, by pressing the named control, or by clicking the first element a selector finds
+// Calls one ChatService procedure from the page, as the account the browser is signed in as
+const chatCall = (procedure, body) => `fetch('/nebu.v1.ChatService/${procedure}', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: ${JSON.stringify(JSON.stringify(body))} }).then((r) => r.ok || r.text().then((t) => { throw new Error(t); }))`;
+
+// A saved conversation for the scenes that show a thread, two exchanges with their timings
+const thread = {
+    id: 'screenshots-thread',
+    title: 'Reading a memory plan',
+    model: 'qwen3.8-27b',
+    settings: { dialect: 'openai', stream: true },
+    turns: [
+        { id: 'u1', role: 'user', text: 'What does the memory plan tell me before I launch a model?', startedAt: '2026-11-14T10:00:00Z' },
+        { id: 'a1', role: 'assistant', text: 'It answers three things before anything is loaded.\n\n1. **Where the weights go**, how many layers land on each device and how many stay in system memory.\n2. **How much context fits**, the largest window the cache has room for beside the weights.\n3. **What is left**, the memory each pool keeps free once the model is up.\n\nA plan that spills into system memory still runs, only slower.', startedAt: '2026-11-14T10:00:00Z', firstTokenAt: '2026-11-14T10:00:00.420Z', finishedAt: '2026-11-14T10:00:03.100Z', promptTokens: 212, completionTokens: 96, stop: 'stop', dialect: 'openai' },
+        { id: 'u2', role: 'user', text: 'Show me how to ask for it from the command line.', startedAt: '2026-11-14T10:01:00Z' },
+        { id: 'a2', role: 'assistant', text: 'Name the repository and the weights you mean.\n\n```sh\nnebu inspect huggingface/unsloth/Qwen3.8-27B-GGUF --group Q4_K_M\n```\n\nThe table it prints has one row for each runtime that can load them.', startedAt: '2026-11-14T10:01:00Z', firstTokenAt: '2026-11-14T10:01:00.380Z', finishedAt: '2026-11-14T10:01:02.200Z', promptTokens: 331, completionTokens: 58, stop: 'stop', dialect: 'openai' }
+    ]
+};
+const seedThread = chatCall('PutConversation', { conversation: thread });
+const dropThread = chatCall('DeleteConversation', { id: thread.id });
+
+// Every page and its open panel, drawer, dialog or wizard, reached by route, by pressing the named control, by clicking the first element a selector finds, or by a list of such steps in order, after any record the scene seeds
 const allScenes = [
     { id: 'host', path: '/' },
     { id: 'tasks', path: '/tasks' },
@@ -25,6 +44,10 @@ const allScenes = [
     { id: 'chat', path: '/chat' },
     { id: 'chat-settings', path: '/chat', press: 'Settings', widths: ['mobile', 'standard'] },
     { id: 'chat-conversations', path: '/chat', press: 'Conversations', widths: ['mobile', 'standard'] },
+    { id: 'chat-thread', path: `/chat/${thread.id}`, seed: seedThread, unseed: dropThread },
+    { id: 'chat-thread-edit', path: `/chat/${thread.id}`, press: 'Edit', seed: seedThread, unseed: dropThread },
+    { id: 'chat-theater', path: `/chat/${thread.id}`, press: 'Theater mode', seed: seedThread, unseed: dropThread },
+    { id: 'chat-thread-delete', path: `/chat/${thread.id}`, press: 'Delete this message', seed: seedThread, unseed: dropThread },
     { id: 'models', path: '/models' },
     { id: 'models-panel', path: '/models', click: 'main .listrow.clickable' },
     { id: 'models-missing', path: '/models/huggingface/moonshotai%2FKimi-K3.1-Pro/default' },
@@ -35,11 +58,15 @@ const allScenes = [
     { id: 'runtimes', path: '/runtimes' },
     { id: 'runtimes-panel', path: '/runtimes/llamacpp' },
     { id: 'runtimes-install', path: '/runtimes/llamacpp/install' },
+    { id: 'runtimes-install-open', path: '/runtimes/llamacpp', click: 'aside.pane [aria-label="Expand"], dialog[open] [aria-label="Expand"]' },
     { id: 'runtimes-builds', path: '/runtimes/llamacpp/builds' },
+    { id: 'runtimes-build-open', path: '/runtimes/llamacpp/builds', click: 'aside.pane [aria-label="Expand"], dialog[open] [aria-label="Expand"]' },
     { id: 'runtimes-defaults', path: '/runtimes/llamacpp/defaults' },
+    { id: 'runtimes-defaults-advanced', path: '/runtimes/llamacpp/defaults', steps: [{ press: 'Advanced context' }, { press: 'Advanced placement' }] },
     { id: 'serve', path: '/serve' },
     { id: 'serve-launch', path: '/serve/launch' },
     { id: 'serve-slot', path: '/serve', press: 'Slot' },
+    { id: 'serve-slot-params', path: '/serve', steps: [{ press: 'Slot' }, { click: '[aria-label="Runtime"]' }, { press: 'llama.cpp' }] },
     { id: 'serve-slot-edit', path: '/serve', click: 'main .listrow.clickable' },
     { id: 'gateway', path: '/gateway' },
     { id: 'gateway-route', path: '/gateway/routes/new' },
@@ -53,7 +80,7 @@ const allScenes = [
     { id: 'gateway-scheduler', path: '/gateway/schedulers', click: 'main .listrow.clickable' },
     { id: 'gateway-imports', path: '/gateway/imports' },
     { id: 'traffic', path: '/traffic' },
-    { id: 'traffic-timeline', path: '/traffic', press: 'Timeline', widths: ['standard', 'ultrawide', 'wqhd'] },
+    { id: 'traffic-timeline', path: '/traffic', press: 'Timeline' },
     { id: 'traffic-filters', path: '/traffic', press: 'Filters' },
     { id: 'traffic-trace', path: '/traffic', click: 'main .listrow.clickable' },
     { id: 'mesh', path: '/mesh' },
@@ -67,14 +94,15 @@ const allScenes = [
     { id: 'settings-source', path: '/settings/sources', click: 'main .listrow.clickable' },
     { id: 'settings-tools', path: '/settings/tools' },
     { id: 'settings-notifications', path: '/settings/notifications' },
-    { id: 'settings-webhook-new', path: '/settings/notifications', press: 'Add webhook' },
+    { id: 'settings-webhook-new', path: '/settings/notifications', press: 'Webhook' },
     { id: 'settings-accounts', path: '/settings/accounts' },
-    { id: 'settings-source-new', path: '/settings/sources', press: 'Add source' },
-    { id: 'settings-tool-new', path: '/settings/tools', press: 'Add tool server' },
-    { id: 'settings-account-new', path: '/settings/accounts', press: 'Add account' },
+    { id: 'settings-source-new', path: '/settings/sources', press: 'Source' },
+    { id: 'settings-tool-new', path: '/settings/tools', press: 'Tool server' },
+    { id: 'settings-account-new', path: '/settings/accounts', press: 'Account' },
     { id: 'settings-account-password', path: '/settings/accounts', press: 'More', click: '[role=menuitem][aria-posinset="1"] button' },
+    { id: 'settings-account-role', path: '/settings/accounts', press: 'More', click: '[role=menuitem][aria-posinset="2"] button' },
     { id: 'profile', path: '/profile' },
-    { id: 'profile-token-new', path: '/profile', press: 'New token' },
+    { id: 'profile-token-new', path: '/profile', press: 'Token' },
     { id: 'account-menu', path: '/profile', press: 'Account' },
     { id: 'login', path: '/login', signedOut: true }
 ];
@@ -222,9 +250,10 @@ async function openPage(browserContextId) {
     return sessionId;
 }
 
-// Waits for the shell or login page, the last skeleton, the fonts and the transitions
+// Waits for the shell or login page, the last skeleton, the fonts and the transitions, throwing when the page never draws
 async function settle(sessionId) {
-    await send('Runtime.evaluate', { expression: `new Promise((done) => { const t0 = Date.now(); let quiet = 0; const tick = () => { const ready = document.querySelector('main') && !document.querySelector('.boot') && !document.querySelector('[aria-busy="true"]'); quiet = ready ? quiet + 1 : 0; if (quiet >= 3 || Date.now() - t0 > 10000) done(); else setTimeout(tick, 150); }; tick(); })`, awaitPromise: true }, sessionId);
+    const { result } = await send('Runtime.evaluate', { expression: `new Promise((done) => { const t0 = Date.now(); let quiet = 0; const tick = () => { const drawn = document.querySelector('main') && !document.querySelector('.boot'); const ready = drawn && !document.querySelector('[aria-busy="true"]'); quiet = ready ? quiet + 1 : 0; if (quiet >= 3) done(''); else if (Date.now() - t0 > (drawn ? 10000 : 60000)) done(drawn ? '' : document.querySelector('.boot') ? 'the app stayed on its connecting screen' : 'the app never mounted'); else setTimeout(tick, 150); }; tick(); })`, awaitPromise: true, returnByValue: true }, sessionId);
+    if (result.value) throw new Error(result.value);
     await send('Runtime.evaluate', { expression: 'document.fonts.ready.then(() => new Promise(r => setTimeout(r, 800)))', awaitPromise: true }, sessionId);
 }
 
@@ -254,9 +283,9 @@ async function clickFirst(sessionId, selector) {
     return true;
 }
 
-// Presses the first visible control reading the word, page body before shell, answering whether one was there
+// Presses the first visible control reading the word, the innermost where one holds another, page body before shell, answering whether one was there
 async function press(sessionId, text) {
-    const { result } = await send('Runtime.evaluate', { expression: `(() => { const want = ${JSON.stringify(text)}; const reads = (el) => el.getClientRects().length > 0 && ((el.textContent ?? '').trim() === want || el.getAttribute('aria-label') === want); const inMain = [...document.querySelectorAll('main button, main a, main [role=button]')]; const all = [...document.querySelectorAll('button, a, [role=button]')]; const hit = inMain.find(reads) ?? all.find(reads); if (!hit) return false; hit.click(); return true; })()`, returnByValue: true }, sessionId);
+    const { result } = await send('Runtime.evaluate', { expression: `(() => { const want = ${JSON.stringify(text)}; const reads = (el) => el.getClientRects().length > 0 && ((el.textContent ?? '').trim() === want || el.getAttribute('aria-label') === want); const kinds = ['button', 'a', '[role=button]', '[role=option]', '[role=menuitem]']; const inMain = [...document.querySelectorAll(kinds.map((k) => 'main ' + k).join(', '))]; const all = [...document.querySelectorAll(kinds.join(', '))]; const inner = (el) => reads(el) && ![...el.querySelectorAll(kinds.join(', '))].some(reads); const hit = inMain.find(inner) ?? all.find(inner); if (!hit) return false; hit.click(); return true; })()`, returnByValue: true }, sessionId);
     if (!result.value) {
         const { result: seen } = await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('button, a, [role=button]')].filter((el) => el.getClientRects().length > 0).map((el) => (el.textContent ?? '').trim() || el.getAttribute('aria-label') || '').filter(Boolean).join(', ')`, returnByValue: true }, sessionId);
         console.log(`   controls on the page: ${seen.value}`);
@@ -267,9 +296,9 @@ async function press(sessionId, text) {
     return true;
 }
 
-// The fonts in use, the theme, and the elements reaching past the right edge, which the spec forbids
+// The fonts in use, the theme, and the elements showing past the right edge, which the spec forbids, one clipped inside a scrolling box that ends before the edge not among them
 async function fonts(sessionId) {
-    const { result } = await send('Runtime.evaluate', { expression: `JSON.stringify({ body: getComputedStyle(document.body).fontFamily, sans: document.fonts.check('15px "IBM Plex Sans"'), mono: document.fonts.check('13px "IBM Plex Mono"'), faces: [...document.fonts].filter(f => f.status === 'loaded').map(f => f.family + ' ' + f.weight), scrollX: document.documentElement.scrollWidth > document.documentElement.clientWidth, overflow: [...document.querySelectorAll('body *')].filter((el) => el.getBoundingClientRect().right > document.documentElement.clientWidth + 1 && getComputedStyle(el).position !== 'fixed').slice(0, 4).map((el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\\s+/).join('.') : '') + ' right=' + Math.round(el.getBoundingClientRect().right)), title: document.title, theme: document.documentElement.getAttribute('neo-theme') })`, returnByValue: true }, sessionId);
+    const { result } = await send('Runtime.evaluate', { expression: `JSON.stringify({ body: getComputedStyle(document.body).fontFamily, sans: document.fonts.check('15px "IBM Plex Sans"'), mono: document.fonts.check('13px "IBM Plex Mono"'), faces: [...document.fonts].filter(f => f.status === 'loaded').map(f => f.family + ' ' + f.weight), scrollX: document.documentElement.scrollWidth > document.documentElement.clientWidth, overflow: [...document.querySelectorAll('body *')].filter((el) => { const edge = document.documentElement.clientWidth + 1; if (el.getBoundingClientRect().right <= edge || getComputedStyle(el).position === 'fixed') return false; for (let up = el.parentElement; up && up !== document.body; up = up.parentElement) { if (getComputedStyle(up).overflowX !== 'visible' && up.getBoundingClientRect().right <= edge) return false; } return true; }).slice(0, 4).map((el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\\s+/).join('.') : '') + ' right=' + Math.round(el.getBoundingClientRect().right)), title: document.title, theme: document.documentElement.getAttribute('neo-theme') })`, returnByValue: true }, sessionId);
     return JSON.parse(result.value);
 }
 
@@ -301,6 +330,7 @@ async function main() {
     const { browserContextId } = await send('Target.createBrowserContext');
     const signedOut = await openPage(browserContextId);
     const report = [];
+    const failed = [];
     for (const theme of themes) {
         for (const sessionId of [signedIn, signedOut]) {
             await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] }, sessionId);
@@ -322,18 +352,40 @@ async function main() {
                 const sessionId = scene.signedOut ? signedOut : signedIn;
                 // Views an earlier scene switched, such as the traffic timeline, start from their defaults
                 await send('Runtime.evaluate', { expression: `Object.keys(localStorage).filter((k) => k.startsWith('nebu.')).forEach((k) => localStorage.removeItem(k))` }, sessionId);
-                await navigate(sessionId, scene.path);
-                if (scene.press && !(await press(sessionId, scene.press))) {
-                    console.log(`${name}\tnothing reads ${scene.press} on ${scene.path}`);
+                // A scene whose page never draws is read once more, then reported and fails the run, with no picture written for it
+                let missing = '';
+                let broken;
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    missing = '';
+                    broken = undefined;
+                    try {
+                        if (scene.seed) await send('Runtime.evaluate', { expression: scene.seed, awaitPromise: true }, sessionId).then((r) => { if (r.exceptionDetails) throw new Error(`seed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`); });
+                        await navigate(sessionId, scene.path);
+                        for (const step of scene.steps ?? [{ press: scene.press }, { click: scene.click }]) {
+                            if (step.press && !(await press(sessionId, step.press))) missing = `nothing reads ${step.press} on ${scene.path}`;
+                            else if (step.click && !(await clickFirst(sessionId, step.click))) missing = `nothing matches ${step.click} on ${scene.path}`;
+                            if (missing) break;
+                        }
+                        break;
+                    } catch (err) {
+                        broken = err;
+                    }
+                }
+                if (broken) {
+                    process.exitCode = 1;
+                    failed.push(name);
+                    console.log(`${name}\tFAILED ${broken.message}`);
+                    for (const e of consoleErrors) console.log('   ! ' + String(e).split('\n')[0].slice(0, 200));
                     continue;
                 }
-                if (scene.click && !(await clickFirst(sessionId, scene.click))) {
-                    console.log(`${name}\tnothing matches ${scene.click} on ${scene.path}`);
+                if (missing) {
+                    console.log(`${name}\t${missing}`);
                     continue;
                 }
                 const info = await fonts(sessionId);
-                if (process.env.PROBE) console.log('   probe: ' + (await send('Runtime.evaluate', { expression: process.env.PROBE, returnByValue: true }, sessionId)).result.value);
+                if (process.env.PROBE) console.log('   probe: ' + (await send('Runtime.evaluate', { expression: process.env.PROBE, returnByValue: true, awaitPromise: true }, sessionId).then((r) => r.exceptionDetails?.exception?.description ?? r.result.value)));
                 await shoot(sessionId, name);
+                if (scene.unseed) await send('Runtime.evaluate', { expression: scene.unseed, awaitPromise: true }, sessionId);
                 report.push({ theme, width, scene: scene.id, file: name, ...info, consoleErrors: [...consoleErrors] });
                 console.log(`${name}\tsans=${info.sans}\tmono=${info.mono}\tscrollX=${info.scrollX}\ttheme=${info.theme}\terrors=${consoleErrors.length}`);
                 for (const o of info.overflow) console.log('   > past the right edge: ' + o);
@@ -342,6 +394,7 @@ async function main() {
         }
     }
     console.log('faces ' + JSON.stringify([...new Set(report.flatMap((r) => r.faces))]));
+    if (failed.length) console.log(`failed ${failed.join(', ')}`);
 }
 
 // The first signal removes the account and exits, repeats wait on the same removal

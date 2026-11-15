@@ -5,6 +5,7 @@
 	import { enumLabel } from '#lib/format.js';
 	import { SourceKind, SourceKindSchema, SourceSchema, type ConfigField, type Provider, type SourceStatus } from '#lib/proto/nebu/v1/source_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
+	import Confirm from '#lib/ui/Confirm.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
@@ -76,6 +77,16 @@
 		config = withDefaults(fields, draft.config);
 	}
 
+	async function remove() {
+		try {
+			await rpc.sources.deleteSource({ id });
+			toast.success(`Deleted ${id}`);
+			onclose();
+		} catch (err) {
+			toast.error('Delete failed', reason(err));
+		}
+	}
+
 	async function save() {
 		saving = true;
 		error = undefined;
@@ -93,6 +104,10 @@
 	}
 </script>
 
+{#snippet deleteButton()}
+	<Confirm label="Delete" question="Delete {id}?" danger placement="top-start" onconfirm={remove} />
+{/snippet}
+
 <PanelHeader title={draft ? draft.name || draft.id : 'New source'} subtitle={draft && provider?.name !== (draft.name || draft.id) ? provider?.name : undefined} {onclose} />
 <Stack gap={24}>
 	{#if status?.error}<Str value={status.error} kind="message" color="error" width="100%" />{/if}
@@ -102,7 +117,7 @@
 		</FieldRow>
 		<FieldRow>
 			<Text bind:value={id} label="Id" readonly={editing} mono required />
-			<Text bind:value={name} label="Name" placeholder={id} />
+			<Text bind:value={name} label="Name" unset={id.trim() ? `${id.trim()}, the id` : undefined} />
 		</FieldRow>
 	</FormSection>
 	{#if fields.length}
@@ -111,5 +126,5 @@
 		</FormSection>
 	{/if}
 </Stack>
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!id.trim() || kind === SourceKind.UNSPECIFIED} onsave={save} ondiscard={discard} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} needs={kind === SourceKind.UNSPECIFIED ? 'Pick a provider' : !id.trim() ? 'Give the source an id' : ''} leading={editing && !draft?.seeded ? deleteButton : undefined} onsave={save} ondiscard={discard} />
 

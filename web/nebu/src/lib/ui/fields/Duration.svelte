@@ -1,25 +1,30 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import Stepper from '#lib/ui/fields/Stepper.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
 	type Unit = 'ms' | 's' | 'min' | 'h' | 'd';
 	const factors: Record<Unit, number> = { ms: 1, s: 1000, min: 60_000, h: 3_600_000, d: 86_400_000 };
 
-	// A span as a number and a unit, zero empty under emptyZero, the empty box showing its resolved span
+	// A span as a number and one of the units that can hold it, zero empty under emptyZero with the span it comes to written under it
 	let {
 		value = $bindable(0),
 		base = 'ms',
 		smallest = base,
+		// The largest unit offered, for a span no one states in hours or days
+		largest = 'd',
 		max,
 		label,
 		info,
 		disabled = false,
 		message,
 		emptyZero = false,
-		fallback
-	}: { value?: number; base?: 'ms' | 's'; smallest?: Unit; max?: number; label?: string; info?: string; disabled?: boolean; message?: string; emptyZero?: boolean; fallback?: number } = $props();
+		fallback,
+		// What an empty box comes to in words, when no span says it
+		unset
+	}: { value?: number; base?: 'ms' | 's'; smallest?: Unit; largest?: Unit; max?: number; label?: string; info?: string; disabled?: boolean; message?: string; emptyZero?: boolean; fallback?: number; unset?: string } = $props();
 
 	const id = fieldId();
 	const baseFactor = $derived(base === 'ms' ? 1 : 1000);
@@ -27,7 +32,8 @@
 		const all: Unit[] = ['ms', 's', 'min', 'h', 'd'];
 		const first = Math.max(factors[smallest], baseFactor);
 		const limit = max === undefined ? Infinity : max * baseFactor;
-		return all.filter((u) => factors[u] >= first && factors[u] <= Math.max(limit, first));
+		// A unit is offered while more than one of it fits under the most the span may be
+		return all.filter((u) => factors[u] >= first && factors[u] <= factors[largest] && (factors[u] < limit || factors[u] === first));
 	});
 	const defaultUnit = $derived<Unit>(units.includes('s') ? 's' : (units[0] ?? 'ms'));
 	let unit = $state<Unit | undefined>(undefined);
@@ -73,17 +79,25 @@
 
 	const unitMax = $derived(max === undefined ? undefined : Math.floor((max * baseFactor) / factors[unit ?? defaultUnit]));
 	const resolved = $derived(fallback ? Math.round(((fallback * baseFactor) / factors[unit ?? fit(fallback * baseFactor)]) * 100) / 100 : undefined);
+	// The span an empty box comes to in the largest unit dividing it
+	const rest = $derived.by(() => {
+		if (!fallback) return unset;
+		const u = fit(fallback * baseFactor);
+		return `${Math.round(((fallback * baseFactor) / factors[u]) * 100) / 100} ${u}`;
+	});
+	const blank = $derived(raw === '' || raw === null || raw === undefined);
 </script>
 
 {#snippet unitButtons()}
-	{#each units as u (u)}
+	{#each units.length > 1 ? units : [] as u (u)}
 		<NeoButton text toggle checked={unit === u} color={unit === u ? 'primary' : undefined} role="radio" aria-checked={unit === u} {disabled} onclick={() => pickUnit(u)}>{u}</NeoButton>
 	{/each}
 {/snippet}
 
 <div class="field">
 	<FieldLabel {label} {info} forId={id} />
-	<Stepper {id} bind:raw bind:focused min={0} max={unitMax} fallback={emptyZero ? resolved : undefined} {disabled} {message} ariaLabel={label} tail={unitButtons} onchange={changed} />
+	<Stepper {id} bind:raw bind:focused min={0} max={unitMax} fallback={emptyZero ? resolved : undefined} {disabled} {message} ariaLabel={label} unit={units.length > 1 ? undefined : units[0]} tail={units.length > 1 ? unitButtons : undefined} onchange={changed} />
+	{#if emptyZero && blank && rest !== undefined}<Resting text={rest} />{/if}
 </div>
 
 <style>

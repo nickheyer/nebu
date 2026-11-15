@@ -64,12 +64,12 @@
 			<NumberField bind:value={priority} min={-1000} max={1000} label="Priority" info="Higher is turned away last under load" />
 		</FieldRow>
 		<FieldRow wide>
-			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" emptyZero />
-			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" emptyZero />
+			<Duration bind:value={ttft} base="ms" largest="s" max={600_000} label="Time to first token" info="The longest a request of this objective should wait for its first token" emptyZero unset="no target" />
+			<Duration bind:value={tpot} base="ms" largest="ms" max={60_000} label="Time per output token" info="The longest each token after the first should take" emptyZero unset="no target" />
 		</FieldRow>
 	</FormSection>
 	{#if current?.status?.conditions.length}
-		<Section title="Status" level={3}>
+		<Section title="Checks" level={3}>
 			<Conditions conditions={current.status.conditions} />
 		</Section>
 	{/if}
@@ -78,4 +78,4 @@
 	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
 {/snippet}
 
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} needs={name.trim() ? '' : 'Name the objective'} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />

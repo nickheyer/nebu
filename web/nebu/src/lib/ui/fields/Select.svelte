@@ -3,6 +3,7 @@
 	import { NeoInput, NeoSelect } from '#lib/neo/inputs/index.js';
 	import type { NeoListItem } from '#lib/neo/list/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import { fieldId, listPopover, selectToggle, type Option } from '#lib/ui/fields/types.js';
 
 	// One choice from a list, plain text in the same box once a single option is all there is
@@ -12,6 +13,8 @@
 		label,
 		info,
 		placeholder,
+		// What an empty select comes to, written under it
+		unset,
 		disabled = false,
 		search = false,
 		clearable = false,
@@ -20,7 +23,7 @@
 		error,
 		onchange,
 		loading = false,
-		// A toolbar select, its label standing as the placeholder
+		// A toolbar select, its label inside the box before the choice
 		compact = false,
 		// Sized to the longest option instead of filling its row
 		fit = false,
@@ -31,6 +34,7 @@
 		label?: string;
 		info?: string;
 		placeholder?: string;
+		unset?: string;
 		disabled?: boolean;
 		search?: boolean;
 		clearable?: boolean;
@@ -47,22 +51,28 @@
 	const id = fieldId();
 	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
 	const hint = $derived(error ?? message);
-	const empty = $derived(placeholder ?? (compact ? label : undefined));
+	const empty = $derived(placeholder ?? (compact && label ? 'Any' : undefined));
+	const inside = $derived(compact && label !== undefined);
 	// The one option there is, once chosen, which leaves nothing to pick
 	const only = $derived(options.length === 1 && !clearable && !loading && options[0]!.value === value ? options[0] : undefined);
 </script>
+
+{#snippet lead()}
+	{#if icon}{@render icon()}{/if}
+	<span class="inlabel">{label}</span>
+{/snippet}
 
 <div class="field" class:compact class:fit class:only={only !== undefined}>
 	{#if !compact}<FieldLabel {label} {info} forId={id} {required} />{/if}
 	<div class="box">
 		{#if fit}
 			<span class="sizer" class:iconed={icon !== undefined} aria-hidden="true">
-				{#each options as o (String(o.value))}<span>{o.label}</span>{/each}
-				{#if empty}<span>{empty}</span>{/if}
+				{#each options as o (String(o.value))}<span>{inside ? `${label} ` : ''}{o.label}</span>{/each}
+				{#if empty}<span>{inside ? `${label} ` : ''}{empty}</span>{/if}
 			</span>
 		{/if}
 		{#if only}
-			<NeoInput value={only.label} {id} readonly {disabled} elevation={-1} placement="inside" floating={false} message={hint} {error} width="100%" before={icon} aria-label={label} />
+			<NeoInput value={only.label} {id} readonly {disabled} elevation={-1} placement="inside" floating={false} message={hint} {error} width="100%" before={inside ? lead : icon} aria-label={label} />
 		{:else}
 		<NeoSelect
 			bind:value
@@ -81,7 +91,7 @@
 			{error}
 			nullable={clearable}
 			width="100%"
-			before={icon}
+			before={inside ? lead : icon}
 			aria-label={label}
 			listProps={listPopover}
 			buttonProps={selectToggle}
@@ -89,6 +99,7 @@
 		/>
 		{/if}
 	</div>
+	{#if unset && value === undefined}<Resting text={unset} />{/if}
 </div>
 
 <style>
@@ -141,6 +152,12 @@
 	.fit .box :global(.neo-input-display-content) {
 		flex: 1 1 0;
 		width: 0;
+	}
+	/* A toolbar field keeps its name in the box before what it holds */
+	.inlabel {
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+		white-space: nowrap;
 	}
 	/* A compact select keeps control height */
 	.compact :global(.neo-input-group) {

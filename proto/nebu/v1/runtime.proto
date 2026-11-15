@@ -81,6 +81,14 @@ message Param {
   bool supplied = 23;
   // Shown in the empty control when neither a plan nor a default gives a value, what the runtime keeps unset
   string placeholder = 24;
+  // Values of an INT or FLOAT param that stand for a state instead of a quantity, such as -1 for no limit
+  repeated ParamName names = 25;
+}
+
+// A numeric value a form shows by what it means and keeps off its scale
+message ParamName {
+  string value = 1;
+  string label = 2;
 }
 
 // A value another parameter holds

@@ -163,6 +163,6 @@
 	{/if}
 </Sheet>
 
-<Dialog bind:open={importOpen} title="Import a mesh" confirm="Import" busy={importing} disabled={!importToken.trim()} onconfirm={importMesh}>
+<Dialog bind:open={importOpen} title="Import a mesh" confirm="Import" busy={importing} needs={importToken.trim() ? '' : 'Paste the export token'} onconfirm={importMesh}>
 	<Text bind:value={importToken} label="Export token" mono required />
 </Dialog>

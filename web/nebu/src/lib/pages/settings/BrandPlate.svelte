@@ -1,6 +1,21 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { reason, rpc } from '#lib/api/transport.js';
+	import { live } from '#lib/live/events.svelte.js';
+	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import GithubLogoIcon from 'phosphor-svelte/lib/GithubLogoIcon';
+
+	let version = $state('');
+	let failure = $state('');
+
+	// The build the daemon answers as
+	onMount(() => {
+		rpc.gateway
+			.getGatewayStatus({})
+			.then((r) => (version = `${r.status?.implementation ?? ''} ${r.status?.version ?? ''}`.trim()))
+			.catch((err) => (failure = `Version failed to load: ${reason(err)}`));
+	});
 
 	// A groove is a dark hairline with its lit edge a step down and right
 	const grooves = [
@@ -9,9 +24,10 @@
 	];
 </script>
 
-<Card>
+<!-- The mark beside what is running and where its source lives, last on the page -->
+<Card title="About">
 	<div class="plate">
-		<svg class="art" viewBox="0 0 320 160" role="img" aria-label="nebu">
+		<svg class="art" viewBox="100 4 140 136" role="img" aria-label="nebu">
 			<defs>
 				{#each grooves as g (g.tone)}
 					<linearGradient id="plate-across-{g.tone}"><stop class={g.tone} offset="0" stop-opacity="0" /><stop class={g.tone} offset="0.5" /><stop class={g.tone} offset="1" stop-opacity="0" /></linearGradient>
@@ -58,21 +74,57 @@
 				<path d="M102 0H108V4H106V20H118V4H116V0H122V24H102Z" />
 			</g>
 		</svg>
-		<a class="source" href="https://github.com/nickheyer/nebu" target="_blank" rel="noreferrer" aria-label="GitHub"><GithubLogoIcon size={22} /></a>
+		<div class="facts">
+			<KeyRows rows={[{ label: 'version', value: version, mono: true, copy: true }, { label: 'platform', value: live.host ? `${live.host.os} ${live.host.arch}` : '' }]} />
+			{#if failure}<p class="error-text secondary">{failure}</p>{/if}
+			<a class="source" href="https://github.com/nickheyer/nebu" target="_blank" rel="noreferrer"><GithubLogoIcon size={18} />Source on GitHub</a>
+		</div>
 	</div>
 </Card>
 
 <style>
 	/* The brackets are wells pressed into the card and the slash a lit bar raised over them, under the light every control sits in */
 	.plate {
-		position: relative;
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-4) var(--nebu-space-5);
+		align-items: center;
 		min-width: 0;
 	}
 	.art {
 		display: block;
-		width: 100%;
+		flex: 0 0 9rem;
+		width: 9rem;
 		height: auto;
-		aspect-ratio: 2 / 1;
+	}
+	.facts {
+		display: flex;
+		flex: 1 1 14rem;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+		align-items: flex-start;
+		min-width: 0;
+	}
+	.facts > :global(.rows) {
+		align-self: stretch;
+	}
+	/* The way to the source is a link that says where it goes */
+	.source {
+		display: inline-flex;
+		gap: 6px;
+		align-items: center;
+		min-height: var(--nebu-control);
+		color: var(--neo-color-primary);
+		text-decoration: none;
+		border-radius: var(--neo-border-radius);
+	}
+	.source:hover {
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+	.source:focus-visible {
+		outline: 2px solid var(--neo-color-primary);
+		outline-offset: 2px;
 	}
 	stop.dark,
 	feFlood.dark {
@@ -99,26 +151,5 @@
 	}
 	.word {
 		fill: var(--neo-text-color);
-	}
-	.source {
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		display: grid;
-		place-items: center;
-		width: var(--nebu-control);
-		height: var(--nebu-control);
-		margin: calc((22px - var(--nebu-control)) / 2);
-		color: var(--nebu-text-muted);
-		border-radius: var(--neo-border-radius);
-		transition: color var(--nebu-fast) var(--nebu-ease);
-	}
-	.source:hover,
-	.source:focus-visible {
-		color: var(--neo-text-color);
-	}
-	.source:focus-visible {
-		outline: 2px solid var(--neo-color-primary);
-		outline-offset: -2px;
 	}
 </style>

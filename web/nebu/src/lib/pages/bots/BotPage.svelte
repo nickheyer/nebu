@@ -48,6 +48,7 @@
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
 	import LightningIcon from 'phosphor-svelte/lib/LightningIcon';
 	import MaskHappyIcon from 'phosphor-svelte/lib/MaskHappyIcon';
+	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import PulseIcon from 'phosphor-svelte/lib/PulseIcon';
@@ -294,6 +295,43 @@
 	{/if}
 	<Columns ratio="3/2">
 		{#snippet left()}
+			<!-- Whether the bot is connected and the way to start or stop it sit in one card, its shards listed once it is -->
+			<Card title="Connection" flush={(st?.shards.length ?? 0) > 0}>
+				{#snippet tools()}
+					<StateWord label={enumLabel(BotStateSchema, bot.state)} lamp={botLamp(bot.state)} />
+					{#if running}
+						<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
+					{:else}
+						<NeoButton class="primary" elevation={2} onclick={start}>{#snippet icon()}<PlayIcon size={16} />{/snippet}Start</NeoButton>
+					{/if}
+					<Menu
+						items={[
+							{ label: 'Change token', onclick: openToken },
+							{ label: 'Delete bot', danger: true, divider: true, onclick: () => (deleteOpen = true) }
+						]}
+					/>
+				{/snippet}
+				{#if st?.shards.length}
+					{#if bot.error}<p class="fault error-text secondary">{bot.error}</p>{/if}
+					<List head={{ primary: 'Shard', facts: ['State', 'Servers', 'Latency'] }}>
+						{#each st.shards as s (s.id)}
+							<ListRow
+								lamp={s.connected ? 'success' : 'error'}
+								shape={s.connected ? 'filled' : 'hollow'}
+								primary="shard {s.id}"
+								primaryTip={[s.connectedAt ? `connected ${when(s.connectedAt)}` : '', s.error].filter(Boolean).join('\n') || undefined}
+								facts={[{ value: s.connected ? 'connected' : 'not connected', tip: s.error || undefined }, { value: num(s.guilds) }, { value: ms(s.latencyMs) }]}
+							/>
+						{/each}
+					</List>
+				{:else if bot.error}
+					<Empty icon={PlugsIcon} text="Not connected" hint={bot.error} />
+				{:else if running}
+					<Empty icon={PlugsIcon} text="Connecting to Discord" />
+				{:else}
+					<Empty icon={PlugsIcon} text="Not connected" hint="The bot is stopped. Start connects it to Discord with its token." />
+				{/if}
+			</Card>
 			{#if guilds.length}
 				<Card title="Servers" flush>
 					<List head={{ primary: 'Server', facts: ['Members', 'Channels'] }}>
@@ -303,51 +341,16 @@
 					</List>
 				</Card>
 			{/if}
-			{#if st?.shards.length}
-				<Card title="Shards" flush>
-					<List head={{ primary: 'Shard', facts: ['Servers', 'Latency'] }}>
-						{#each st.shards as s (s.id)}
-							<ListRow
-								lamp={s.connected ? 'success' : 'error'}
-								shape={s.connected ? 'filled' : 'hollow'}
-								primary="shard {s.id}"
-								primaryTip={[s.connectedAt ? `connected ${when(s.connectedAt)}` : '', s.error].filter(Boolean).join('\n') || undefined}
-								facts={[{ value: num(s.guilds) }, { value: ms(s.latencyMs) }]}
-							/>
-						{/each}
-					</List>
-				</Card>
-			{/if}
-			{#if !guilds.length && !st?.shards.length}
-				<Card title="Connection">
-					<Empty icon={PlugsIcon} text={running ? 'Connecting' : 'Not connected'} />
-				</Card>
-			{/if}
 		{/snippet}
 		{#snippet right()}
 			<Card title="Details">
-				{#snippet tools()}
-					<StateWord label={enumLabel(BotStateSchema, bot.state)} lamp={botLamp(bot.state)} />
-					{#if running}
-						<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
-					{:else}
-						<NeoButton elevation={2} onclick={start}>Start</NeoButton>
-					{/if}
-					<Menu
-						items={[
-							{ label: 'Change token', onclick: openToken },
-							{ label: 'Delete bot', danger: true, divider: true, onclick: () => (deleteOpen = true) }
-						]}
-					/>
-				{/snippet}
 				<KeyRows
 					rows={[
 						{ label: 'username', value: st?.username ?? '' },
 						{ label: 'invite', value: st?.inviteUrl ?? '', href: st?.inviteUrl, copy: true, tip: st?.inviteUrl },
 						{ label: 'started', value: st?.startedAt ? ago(st.startedAt, clockTick.now) : '', tip: when(st?.startedAt) || undefined },
 						{ label: 'created', value: when(bot.createdAt) },
-						{ label: 'updated', value: when(bot.updatedAt) },
-						{ label: 'error', value: bot.error, color: 'error' }
+						{ label: 'changed', value: when(bot.updatedAt) === when(bot.createdAt) ? '' : when(bot.updatedAt) }
 					]}
 				/>
 			</Card>
@@ -361,7 +364,7 @@
 			<NeoButton class="primary" elevation={2} onclick={addPersona}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Persona</NeoButton>
 		{/snippet}
 		{#if spec.personas.length === 0}
-			<Empty icon={MaskHappyIcon} text="No personas" action="Persona" onclick={addPersona} />
+			<Empty icon={MaskHappyIcon} text="No personas" hint="A persona is a character the bot answers as, with its own model and prompt" />
 		{:else}
 			<List head={{ primary: 'Persona', secondary: 'Model' }}>
 				<NeoSortableProvider bind:items={personaItems} axis="y" onDragEnd={reorderPersonas}>
@@ -407,7 +410,7 @@
 			<NeoButton class="primary" elevation={2} onclick={addAutomation}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Automation</NeoButton>
 		{/snippet}
 		{#if spec.automations.length === 0}
-			<Empty icon={LightningIcon} text="No automations" action="Automation" onclick={addAutomation} />
+			<Empty icon={LightningIcon} text="No automations" hint="An automation has the bot act on a schedule or when a message matches" />
 		{:else}
 			<List head={{ primary: 'Automation', secondary: 'Trigger', facts: ['Action'] }}>
 				{#each spec.automations as a, i (a.id)}
@@ -496,7 +499,7 @@
 			<Select bind:value={sendChannel} options={sendChannels} label="Channel" disabled={!sendGuild} />
 		</FieldRow>
 		<FieldRow>
-			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={spec.personas[0]?.name} />
+			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable unset={spec.personas[0]?.name} />
 			<Segmented bind:value={sendKind} options={sendKinds} label="Kind" info="Text posts as written, the others ask the persona" />
 		</FieldRow>
 		<Textarea bind:value={sendContent} label={sendKind === ActionKind.TEXT ? 'Message' : 'Prompt'} rows={3} />
@@ -527,13 +530,18 @@
 	{@render sendTab()}
 {/if}
 
-<Dialog bind:open={tokenOpen} title="Change token" confirm="Change" busy={tokenBusy} disabled={!newToken.trim()} onconfirm={changeToken}>
+<Dialog bind:open={tokenOpen} title="Change token" confirm="Change" busy={tokenBusy} needs={newToken.trim() ? '' : 'Paste the new token'} onconfirm={changeToken}>
 	<Secret bind:value={newToken} label="Discord bot token" set={bot.tokenSet} required />
 </Dialog>
 
 <NameConfirm bind:open={deleteOpen} title="Delete bot" name={bot.name} message="Disconnects the bot" onconfirm={remove} />
 
 <style>
+	/* What went wrong with a bot that still holds a connection sits over its shards */
+	.fault {
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-3);
+		overflow-wrap: anywhere;
+	}
 	.commit {
 		padding: 0 var(--nebu-card-pad);
 	}

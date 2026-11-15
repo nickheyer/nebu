@@ -66,11 +66,10 @@
 		animation: nebu-reveal 220ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--i) * 20ms);
 	}
+	/* What an option means sits under its name, so every option reads the same however long its line */
 	.line {
 		display: inline-flex;
-		flex-wrap: wrap;
-		gap: 0 var(--nebu-space-2);
-		align-items: baseline;
+		flex-direction: column;
 		min-width: 0;
 		overflow-wrap: anywhere;
 	}

@@ -2,10 +2,11 @@
 	import { tick } from 'svelte';
 	import { num } from '#lib/format.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
-	import { decimalsOf, land, place, stride, type Curve, type Span } from '#lib/ui/fields/scale.js';
+	import Resting from '#lib/ui/fields/Resting.svelte';
+	import { decimalsOf, land, place, stride, ticks, type Curve, type Named, type Span } from '#lib/ui/fields/scale.js';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
-	// A number dragged along a rail or typed over its reading, unset while its knob rests before the rail
+	// A number dragged along a labelled rail or typed in the box beside its name, an unset one leaving the box empty over the line saying what it rests on
 	let {
 		value = $bindable(),
 		min = 0,
@@ -17,8 +18,16 @@
 		info,
 		disabled = false,
 		message,
-		placeholder,
+		// What an unset value comes to, a number drawn as a hollow knob at its place
+		resting,
+		// The words for what an unset value comes to, when the number or word alone does not say it
+		restingText,
+		restingWord,
+		// Numbers shown by what they mean, one outside the rail taking the knob off it
+		names = [],
 		optional = false,
+		// Typed numbers stop at the rail's ends, off for a rail that only suggests a range
+		bounded = true,
 		// A shorter rail and knob, for a narrow column of settings
 		inline = false,
 		onchange
@@ -33,28 +42,39 @@
 		info?: string;
 		disabled?: boolean;
 		message?: string;
-		placeholder?: string;
+		resting?: number | string;
+		restingText?: string;
+		restingWord?: string;
+		names?: Named[];
 		optional?: boolean;
+		bounded?: boolean;
 		inline?: boolean;
 		onchange?: (n: number | undefined) => void;
 	} = $props();
 
 	const id = fieldId();
-	// Pixels between the rest and the rail
-	const gap = 6;
-	const span = $derived<Span>({ min, max, step, curve });
 	const decimals = $derived(decimalsOf(step));
-	const docked = $derived(optional && value === undefined);
-	// The number an unset value comes to, when its placeholder is one
-	const idle = $derived(placeholder !== undefined && placeholder.trim() !== '' && Number.isFinite(Number(placeholder)) ? Number(placeholder) : undefined);
-	const at = $derived(value === undefined ? 0 : place(value, span));
-	const ghost = $derived(docked && idle !== undefined ? place(idle, span) : 0);
-	const reading = $derived(value === undefined ? '' : write(value));
-	const hint = $derived(idle === undefined ? (placeholder ?? '') : write(idle));
-	// The unit follows a number, never the words standing in for one
-	const measure = $derived(value !== undefined || idle !== undefined ? unit : undefined);
+	const name = $derived(value === undefined ? undefined : names.find((n) => n.value === value));
+	// A named number outside the rail has no place on it
+	const off = $derived(name !== undefined && (name.value < min || name.value > max));
+	// The rail's span, stretched to hold a number typed past its ends
+	const span = $derived<Span>({ min: value === undefined || off ? min : Math.min(min, value), max: value === undefined || off ? max : Math.max(max, value), step, curve });
+	// The number an unset value comes to, when it is one the rail holds
+	const rest = $derived.by(() => {
+		const n = typeof resting === 'number' ? resting : resting === undefined || resting.trim() === '' ? NaN : Number(resting);
+		return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
+	});
+	const unset = $derived(value === undefined);
+	// A hollow knob marks where an unset value rests, no knob when it rests on no number
+	const ghost = $derived(unset && rest !== undefined);
+	const bare = $derived(off || (unset && rest === undefined && optional));
+	const at = $derived(value !== undefined && !off ? place(value, span) : rest !== undefined ? place(rest, span) : 0);
+	const reading = $derived(value === undefined ? '' : name ? name.label : write(value));
 	// Stops few enough to mark each one on the rail
-	const stops = $derived(curve === 'linear' && max > min && (max - min) / step <= 10 ? Math.round((max - min) / step) : 0);
+	const stops = $derived(curve === 'linear' && span.max > span.min && (span.max - span.min) / step <= 10 ? Math.round((span.max - span.min) / step) : 0);
+	const size = $derived(inline ? 16 : 20);
+	let width = $state(0);
+	const scale = $derived(ticks(span, Math.max(0, width - size), 6.4));
 
 	let rail = $state<HTMLElement>();
 	let knob = $state<HTMLButtonElement>();
@@ -64,6 +84,8 @@
 	let pointed = $state(false);
 	let typing = $state(false);
 	let draft = $state('');
+	// The text the box opened with, so a box left as it was changes nothing
+	let opened = '';
 	// Pixels from the knob's centre to where the pointer took hold of it
 	let grab = 0;
 	let dropped = false;
@@ -86,14 +108,10 @@
 		onchange?.(n);
 	}
 
-	// The value under a pointer, none while it is over the rest
-	function under(e: PointerEvent): number | undefined {
+	// The value under a pointer along the rail the knob travels
+	function under(e: PointerEvent): number {
 		const box = rail!.getBoundingClientRect();
-		const size = knob!.offsetWidth;
-		const lead = optional ? size + gap : 0;
-		const x = e.clientX - box.left - grab;
-		if (optional && x < size + gap / 2) return undefined;
-		return land((x - lead - size / 2) / (box.width - lead - size), span);
+		return land((e.clientX - box.left - grab - size / 2) / (box.width - size), { min, max, step, curve });
 	}
 
 	// Takes hold of the knob where it is, or brings it to a press anywhere else along the rail
@@ -101,9 +119,9 @@
 		if (disabled || e.button !== 0) return;
 		e.preventDefault();
 		const face = knob!.getBoundingClientRect();
-		const off = e.clientX - (face.left + face.width / 2);
-		const onKnob = Math.abs(off) <= face.width / 2 + 2;
-		grab = onKnob ? off : 0;
+		const from = e.clientX - (face.left + face.width / 2);
+		const onKnob = !bare && Math.abs(from) <= face.width / 2 + 2;
+		grab = onKnob ? from : 0;
 		held = true;
 		pointed = true;
 		touched = e.pointerType === 'touch' ? e.clientX : undefined;
@@ -131,32 +149,35 @@
 		touched = undefined;
 	}
 
-	// Steps from the value, an unset one first taking the number it comes to or the rail's start
+	// Steps from the value, one with no place on the rail first taking the number it rests on or the rail's start
 	function bump(up: boolean, times: number) {
-		if (value === undefined) return take(idle ?? min);
+		if (value === undefined || off) return take(rest ?? min);
 		const next = value + (up ? step : -step) * times;
-		take(Number(Math.min(Math.max(max, value), Math.max(Math.min(min, value), next)).toFixed(Math.max(decimals, decimalsOf(value)))));
+		take(Number(Math.min(span.max, Math.max(span.min, next)).toFixed(Math.max(decimals, decimalsOf(value)))));
 	}
 
-	// Opens the reading for typing, starting it with a character already pressed
+	// Opens the box for typing, starting it with a character already pressed
 	async function edit(first?: string) {
 		typing = true;
-		draft = first ?? (value === undefined ? '' : plain(value));
+		opened = value === undefined || name ? '' : plain(value);
+		draft = first ?? opened;
 		await tick();
 		figure?.focus({ preventScroll: true });
 		if (first === undefined) figure?.select();
 		else figure?.setSelectionRange(draft.length, draft.length);
 	}
 
+	const negative = $derived(min < 0 || names.some((n) => n.value < 0));
+
 	// Arrows step, page keys stride, home and end take the rail's ends, delete unsets, a digit starts typing
 	function keyed(e: KeyboardEvent) {
 		pointed = false;
 		if (disabled || e.metaKey || e.ctrlKey || e.altKey) return;
 		const k = e.key;
-		const numeric = (k >= '0' && k <= '9') || (k === '-' && min < 0) || ((k === '.' || k === ',') && decimals > 0);
+		const numeric = (k >= '0' && k <= '9') || (k === '-' && negative) || ((k === '.' || k === ',') && decimals > 0);
 		if (k === 'ArrowRight' || k === 'ArrowUp') bump(true, e.shiftKey ? 10 : 1);
 		else if (k === 'ArrowLeft' || k === 'ArrowDown') bump(false, e.shiftKey ? 10 : 1);
-		else if (k === 'PageUp' || k === 'PageDown') take(stride(value ?? idle ?? min, k === 'PageUp', span));
+		else if (k === 'PageUp' || k === 'PageDown') take(stride(value === undefined || off ? (rest ?? min) : value, k === 'PageUp', { min, max, step, curve }));
 		else if (k === 'Home') take(min);
 		else if (k === 'End') take(max);
 		else if ((k === 'Delete' || k === 'Backspace') && optional) take(undefined);
@@ -166,12 +187,12 @@
 		e.preventDefault();
 	}
 
-	// Keeps digits, one leading minus where the rail goes below zero and one point where steps are fractional
+	// Keeps digits, one leading minus where a number may go below zero and one point where steps are fractional
 	function clean(s: string): string {
 		let out = '';
 		for (const ch of s) {
 			if (ch >= '0' && ch <= '9') out += ch;
-			else if (ch === '-' && min < 0 && out === '') out += ch;
+			else if (ch === '-' && negative && out === '') out += ch;
 			else if ((ch === '.' || ch === ',') && decimals > 0 && !out.includes('.')) out += '.';
 		}
 		return out;
@@ -183,11 +204,16 @@
 		draft = text;
 	}
 
-	// Takes the typed number as typed, past the rail's ends too, an emptied reading unsetting an optional value
+	// Takes the typed number, held to the rail's ends when they bind, an emptied box unsetting an optional value
 	function commit() {
+		if (draft === opened) return;
 		if (draft === '') {
 			if (optional) take(undefined);
-		} else if (Number.isFinite(Number(draft))) take(Number(draft));
+			return;
+		}
+		const n = Number(draft);
+		if (!Number.isFinite(n)) return;
+		take(bounded && !names.some((x) => x.value === n) ? Math.min(max, Math.max(min, n)) : n);
 	}
 
 	function left() {
@@ -204,16 +230,46 @@
 		dropped = e.key === 'Escape';
 		knob?.focus({ preventScroll: true });
 	}
+
+	// What the value rests on in words, a named number by its name and a number with its unit
+	const restWords = $derived.by(() => {
+		if (restingText !== undefined) return restingText;
+		if (resting === undefined || resting === '') return undefined;
+		const n = Number(resting);
+		if (!Number.isFinite(n)) return String(resting);
+		return names.find((x) => x.value === n)?.label ?? [write(n), unit].filter(Boolean).join(' ');
+	});
+	// Named numbers offered as buttons, all but the one set and the one the value rests on
+	const offers = $derived(names.filter((n) => n.value !== value && String(n.value) !== String(resting ?? '')));
+	const spoken = $derived(value === undefined ? ['unset', restWords === undefined ? '' : `rests on ${restWords}`].filter(Boolean).join(', ') : [reading, name ? '' : unit].filter(Boolean).join(' '));
 </script>
 
-<div class="slider" class:optional class:docked class:held class:pointed class:disabled class:dense={inline} class:worded={!typing && value === undefined && idle === undefined} style:--t={at} style:--ghost={ghost} style:--stops={stops}>
+<div class="slider" class:ghost class:bare class:held class:pointed class:disabled class:dense={inline} style:--t={at} style:--stops={stops} style:--knob="{size}px">
 	<span class="name"><FieldLabel {label} {info} forId={id} /></span>
+	<label class="reading" class:empty={!typing && reading === ''}>
+		<input
+			bind:this={figure}
+			class="figure"
+			class:worded={!typing && name !== undefined}
+			type="text"
+			inputmode={decimals > 0 ? 'decimal' : 'numeric'}
+			autocomplete="off"
+			spellcheck="false"
+			size="1"
+			style:--chars={Math.max(5, (typing ? draft : reading).length)}
+			value={typing ? draft : reading}
+			aria-label={unit ? `${label} in ${unit}` : `${label} as a number`}
+			{disabled}
+			onfocus={() => !typing && edit()}
+			oninput={typed}
+			onblur={left}
+			onkeydown={figureKeyed}
+		/>{#if unit && (typing || !name)}<span class="unit">{unit}</span>{/if}
+	</label>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="rail" bind:this={rail} onpointerdown={press} onpointermove={drag} onpointerup={release} onpointercancel={drop} onlostpointercapture={drop}>
-		{#if optional}<span class="rest"></span>{/if}
+	<div class="rail" bind:this={rail} bind:clientWidth={width} onpointerdown={press} onpointermove={drag} onpointerup={release} onpointercancel={drop} onlostpointercapture={drop}>
 		<span class="groove" class:stepped={stops > 0}>
-			{#if ghost > 0}<span class="planned"></span>{/if}
-			{#if !docked}<span class="fill"></span>{/if}
+			{#if !unset && !off}<span class="fill"></span>{/if}
 		</span>
 		<button
 			bind:this={knob}
@@ -223,67 +279,42 @@
 			role="slider"
 			aria-label={label}
 			aria-orientation="horizontal"
-			aria-valuemin={min}
-			aria-valuemax={max}
+			aria-valuemin={span.min}
+			aria-valuemax={span.max}
 			aria-valuenow={value}
-			aria-valuetext={[reading || hint, measure].filter(Boolean).join(' ') || undefined}
+			aria-valuetext={spoken}
 			{disabled}
 			onkeydown={keyed}
 			onblur={() => (pointed = false)}
 		></button>
 	</div>
-	<span class="reading">
-		<input
-			bind:this={figure}
-			class="figure"
-			type="text"
-			inputmode={decimals > 0 ? 'decimal' : 'numeric'}
-			autocomplete="off"
-			spellcheck="false"
-			tabindex="-1"
-			size="1"
-			style:--chars={Math.max(1, (typing ? draft : reading || hint).length)}
-			value={typing ? draft : reading}
-			placeholder={hint}
-			aria-label={`${label} typed`}
-			{disabled}
-			onfocus={() => !typing && edit()}
-			oninput={typed}
-			onblur={left}
-			onkeydown={figureKeyed}
-		/>{#if typing ? unit : measure}<span class="unit">{unit}</span>{/if}
-	</span>
+	<div class="scale" aria-hidden="true">
+		{#each scale as t, i (t.value)}
+			<span class="mark" class:first={i === 0} class:last={i === scale.length - 1 && scale.length > 1} style:--at={t.at}>{t.label}</span>
+		{/each}
+	</div>
+	{#if optional}
+		<div class="resting"><Resting word={restingWord} text={restWords} offers={offers.map((n) => ({ label: n.label, pick: () => take(n.value) }))} set={value !== undefined} about={label} onreset={() => take(undefined)} /></div>
+	{/if}
 	{#if message}<span class="secondary message">{message}</span>{/if}
 </div>
 
 <style>
-	/* The name and the reading share a line over the rail */
+	/* The name and the box share a line over the rail, the scale under it */
 	.slider {
 		--knob: 20px;
-		--lead: 0px;
 
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
 		grid-template-areas:
 			'name reading'
 			'rail rail'
+			'scale scale'
+			'resting resting'
 			'message message';
 		column-gap: var(--nebu-space-3);
-		row-gap: 4px;
 		align-items: center;
 		min-width: 0;
-	}
-	.optional {
-		--lead: calc(var(--knob) + 6px);
-	}
-	/* Words standing in for an unset number give way to the name, numbers never do */
-	.worded {
-		grid-template-columns: auto minmax(0, 1fr);
-	}
-	.dense {
-		--knob: 16px;
-
-		row-gap: 0;
 	}
 	.name {
 		grid-area: name;
@@ -292,27 +323,24 @@
 	.rail {
 		position: relative;
 		grid-area: rail;
-		height: var(--nebu-input-height);
+		height: 28px;
 		cursor: pointer;
 		touch-action: pan-y;
 	}
 	.dense .rail {
-		height: 24px;
-	}
-	.groove,
-	.rest {
-		position: absolute;
-		top: 50%;
-		background: color-mix(in srgb, currentcolor 10%, var(--neo-background-color));
-		border-radius: 999px;
-		box-shadow: var(--neo-box-shadow-inset-1);
+		height: 22px;
 	}
 	.groove {
+		position: absolute;
+		top: 50%;
 		right: 0;
-		left: var(--lead);
+		left: 0;
 		height: 6px;
 		margin-top: -3px;
 		overflow: hidden;
+		background: color-mix(in srgb, currentcolor 14%, var(--neo-background-color));
+		border-radius: 999px;
+		box-shadow: var(--neo-box-shadow-inset-1);
 		container-type: inline-size;
 	}
 	/* A rail of few stops marks each one, dark on the bare rail and light under the fill */
@@ -331,36 +359,20 @@
 	.stepped .fill::after {
 		--dot: color-mix(in srgb, var(--neo-background-color) 75%, transparent);
 	}
-	/* A notch of rail set apart, where the knob rests while the value is unset */
-	.rest {
-		left: 0;
-		width: var(--knob);
-		height: 6px;
-		margin-top: -3px;
-	}
-	.fill,
-	.planned {
+	.fill {
 		position: absolute;
 		top: 0;
 		bottom: 0;
 		left: 0;
-		border-radius: inherit;
-	}
-	.fill {
 		width: calc(var(--knob) / 2 + var(--t) * (100% - var(--knob)));
 		background: var(--neo-color-primary);
+		border-radius: inherit;
 		transition: width var(--nebu-normal) var(--nebu-settle);
-	}
-	/* What an unset value comes to, hatched as planned memory is */
-	.planned {
-		width: calc(var(--knob) / 2 + var(--ghost) * (100% - var(--knob)));
-		background: repeating-linear-gradient(135deg, var(--nebu-steel) 0 3px, transparent 3px 6px);
-		transition: width var(--nebu-slow) var(--nebu-settle);
 	}
 	.knob {
 		position: absolute;
 		top: 50%;
-		left: calc(var(--lead) + var(--t) * (100% - var(--lead) - var(--knob)));
+		left: calc(var(--t) * (100% - var(--knob)));
 		display: grid;
 		place-items: center;
 		width: var(--knob);
@@ -378,24 +390,32 @@
 		cursor: grab;
 		transition:
 			left var(--nebu-normal) var(--nebu-settle),
-			scale var(--nebu-fast) var(--nebu-ease);
+			scale var(--nebu-fast) var(--nebu-ease),
+			opacity var(--nebu-fast) var(--nebu-ease);
 		appearance: none;
 		touch-action: none;
 	}
-	/* A set knob carries the accent on its face, a resting one is bare */
+	/* A set knob carries the accent on its face, one resting where an unset value falls is bare */
 	.knob::after {
 		width: 6px;
 		height: 6px;
 		background: var(--neo-color-primary);
 		border-radius: 50%;
 		content: '';
-		transition: scale var(--nebu-normal) var(--nebu-settle);
 	}
-	.docked .knob {
-		left: 0;
+	.ghost .knob::after {
+		content: none;
 	}
-	.docked .knob::after {
-		scale: 0;
+	/* A rail whose value rests on no number shows no knob until the keys reach it */
+	.bare .knob {
+		opacity: 0;
+		pointer-events: none;
+	}
+	.bare .knob:focus-visible {
+		opacity: 1;
+	}
+	.bare .knob::after {
+		content: none;
 	}
 	.rail:hover .knob {
 		scale: 1.08;
@@ -427,62 +447,95 @@
 		box-shadow: 0 0 0 1px rgb(0 0 0 / 8%);
 		scale: 1;
 	}
+	/* The box is a well the number is typed in, as wide as the number it holds */
 	.reading {
 		display: inline-flex;
 		grid-area: reading;
+		gap: 4px;
 		align-items: baseline;
-		justify-content: flex-end;
 		min-width: 0;
+		min-height: 26px;
+		padding: 3px 8px;
 		font-size: var(--nebu-text-secondary);
 		white-space: nowrap;
+		border-radius: 7px;
+		box-shadow: var(--neo-box-shadow-inset-1);
+		cursor: text;
+		transition: box-shadow var(--nebu-fast) var(--nebu-ease);
 	}
-	/* The reading is plain text until the pointer or the keys reach it, then a shallow well to type in */
+	.reading:focus-within {
+		box-shadow: var(--neo-box-shadow-inset-2);
+	}
 	.figure {
-		width: calc(var(--chars) * 1ch + 10px);
-		margin: -2px 0;
-		padding: 2px 5px;
+		width: calc(var(--chars) * 1ch);
+		min-width: 5ch;
+		margin: 0;
+		padding: 0;
 		font: inherit;
 		font-variant-numeric: tabular-nums;
 		color: inherit;
 		text-align: right;
 		background: none;
 		border: 0;
-		border-radius: 6px;
 		outline: none;
-		transition: box-shadow var(--nebu-fast) var(--nebu-ease);
 	}
 	@supports (field-sizing: content) {
 		.figure {
 			width: auto;
-			min-width: calc(1ch + 10px);
 			field-sizing: content;
 		}
 	}
-	.worded .figure {
-		flex: 0 1 auto;
-		min-width: 0;
-		text-overflow: ellipsis;
-	}
-	.figure:hover:not(:disabled),
-	.figure:focus {
-		box-shadow: var(--neo-box-shadow-inset-1);
-	}
 	.held .figure {
 		color: var(--neo-color-primary);
-	}
-	.figure::placeholder {
-		color: var(--nebu-text-faint);
-		opacity: 1;
-	}
-	/* Digits with no unit after them end on the rail's end, their well reaching past it */
-	.figure:last-child {
-		margin-right: -5px;
 	}
 	.unit {
 		color: var(--nebu-text-muted);
 	}
 	.disabled .reading {
 		color: var(--nebu-disabled-text);
+	}
+	/* Each mark sits under its place on the rail, the ends inside the rail's own edges */
+	.scale {
+		position: relative;
+		grid-area: scale;
+		height: 16px;
+		margin: 0 calc(var(--knob) / 2);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		line-height: 16px;
+		color: var(--nebu-text-muted);
+	}
+	.mark {
+		position: absolute;
+		left: calc(var(--at) * 100%);
+		white-space: nowrap;
+		translate: -50% 0;
+	}
+	.mark::before {
+		position: absolute;
+		top: -5px;
+		left: 50%;
+		width: 1px;
+		height: 4px;
+		background: var(--nebu-border-strong);
+		content: '';
+	}
+	.mark.first {
+		left: calc(var(--knob) / -2);
+		translate: 0 0;
+	}
+	.mark.last {
+		right: calc(var(--knob) / -2);
+		left: auto;
+		translate: 0 0;
+	}
+	.mark.first::before,
+	.mark.last::before {
+		content: none;
+	}
+	.resting {
+		grid-area: resting;
+		min-width: 0;
 	}
 	.message {
 		grid-area: message;

@@ -24,7 +24,7 @@
 	<div class="head">
 		<div class="heading">
 			<svelte:element this={`h${level}`} class="title">{title}</svelte:element>
-			{#if info}<InfoTip text={info} />{/if}
+			{#if info}<InfoTip text={info} about={title} />{/if}
 		</div>
 		{#if tools}<div class="tools">{@render tools()}</div>{/if}
 	</div>

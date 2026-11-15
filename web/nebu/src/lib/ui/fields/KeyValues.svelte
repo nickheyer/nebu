@@ -11,10 +11,12 @@
 		info,
 		keyLabel = 'Key',
 		valueLabel = 'Value',
+		// The word on the button that adds a row
+		addLabel = 'Entry',
 		secret = false,
 		fixedKeys = false,
 		disabled = false
-	}: { value?: Record<string, string>; label?: string; info?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean } = $props();
+	}: { value?: Record<string, string>; label?: string; info?: string; keyLabel?: string; valueLabel?: string; addLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean } = $props();
 
 	let rows = $state<{ k: string; v: string }[]>(Object.entries(value).map(([k, v]) => ({ k, v })));
 
@@ -33,16 +35,8 @@
 	}
 </script>
 
-{#snippet addButton()}
-	{#if !fixedKeys}
-		<NeoButton text onclick={add} {disabled} aria-label="Add {label ?? 'entry'}" title="Add">
-			{#snippet icon()}<PlusIcon size={16} />{/snippet}
-		</NeoButton>
-	{/if}
-{/snippet}
-
 <div class="field">
-	<FieldLabel {label} {info} end={addButton} />
+	<FieldLabel {label} {info} />
 	{#if rows.length}
 		<div class="heads" aria-hidden="true">
 			<span class="head">{keyLabel}</span>
@@ -69,6 +63,14 @@
 			{/if}
 		</div>
 	{/each}
+	{#if !fixedKeys}
+		<span class="add">
+			<NeoButton text onclick={add} {disabled}>
+				{#snippet icon()}<PlusIcon size={16} />{/snippet}
+				{addLabel}
+			</NeoButton>
+		</span>
+	{/if}
 </div>
 
 <style>
@@ -99,6 +101,11 @@
 	.pair :global(.neo-input-group) {
 		flex: 1 1 0;
 		min-width: 0;
+	}
+	/* The button that adds a row sits where the row will appear */
+	.add {
+		display: inline-flex;
+		align-self: flex-start;
 	}
 	/* A fixed key is a label, read but never typed in */
 	.key {

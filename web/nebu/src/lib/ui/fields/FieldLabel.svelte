@@ -1,15 +1,16 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import NeoLabel from '#lib/neo/inputs/common/NeoLabel.svelte';
-	import Tip from '#lib/ui/Tip.svelte';
+	import InfoTip from '#lib/ui/InfoTip.svelte';
 
-	// The line over a control, its words carrying the info line as a tooltip, and whatever trails to the right
+	// The line over a control, its info behind a button after the words, and whatever trails to the right
 	let { label, info, forId, required = false, end }: { label?: string; info?: string; forId?: string; required?: boolean; end?: Snippet } = $props();
 </script>
 
 {#if label}
-	<span class="fieldlabel" class:informed={info !== undefined}>
-		<Tip text={info} tag="span"><NeoLabel {label} for={forId} {required} /></Tip>
+	<span class="fieldlabel">
+		<NeoLabel {label} for={forId} {required} />
+		{#if info}<InfoTip text={info} about={label} />{/if}
 		{#if end}<span class="fill"></span>{@render end()}{/if}
 	</span>
 {/if}
@@ -31,12 +32,5 @@
 		overflow: visible;
 		white-space: normal;
 		text-overflow: clip;
-	}
-	/* A label holding an info line wears the dotted rule of a term with a definition */
-	.informed :global(.neo-label) {
-		text-decoration: underline dotted var(--nebu-text-faint);
-		text-decoration-thickness: 1px;
-		text-underline-offset: 3px;
-		cursor: help;
 	}
 </style>

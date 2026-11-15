@@ -24,6 +24,8 @@
 		buttons = true,
 		// Takes a decimal point whatever the step
 		fraction = false,
+		// Numbers the box takes whatever its bounds, such as a named -1
+		allowed = [],
 		onchange
 	}: {
 		id?: string;
@@ -42,17 +44,18 @@
 		tail?: Snippet;
 		buttons?: boolean;
 		fraction?: boolean;
+		allowed?: number[];
 		onchange?: () => void;
 	} = $props();
 
 	const decimals = $derived(Math.max(0, (String(step).split('.')[1] ?? '').length));
-	const negative = $derived(min === undefined || min < 0);
+	const negative = $derived(min === undefined || min < 0 || allowed.some((n) => n < 0));
 	const text = $derived(raw === null || raw === undefined ? '' : String(raw));
 	const parsed = $derived(text === '' ? undefined : Number(text));
 	// Text that is a number the bounds allow, or nothing at all
-	const valid = $derived(parsed === undefined || (Number.isFinite(parsed) && (min === undefined || parsed >= min) && (max === undefined || parsed <= max)));
+	const valid = $derived(parsed === undefined || (Number.isFinite(parsed) && (allowed.includes(parsed) || ((min === undefined || parsed >= min) && (max === undefined || parsed <= max)))));
 	const outOfRange = $derived.by(() => {
-		if (parsed === undefined || !Number.isFinite(parsed)) return '';
+		if (parsed === undefined || !Number.isFinite(parsed) || allowed.includes(parsed)) return '';
 		if (min !== undefined && parsed < min) return `At least ${min}`;
 		if (max !== undefined && parsed > max) return `At most ${max}`;
 		return '';
@@ -93,7 +96,7 @@
 		if (text === '') return;
 		const n = Number(text);
 		if (!Number.isFinite(n)) raw = '';
-		else if ((min !== undefined && n < min) || (max !== undefined && n > max)) raw = String(clamp(n));
+		else if (!allowed.includes(n) && ((min !== undefined && n < min) || (max !== undefined && n > max))) raw = String(clamp(n));
 		onchange?.();
 	}
 
@@ -129,7 +132,7 @@
 	type="text"
 	inputmode={decimals > 0 || fraction ? 'decimal' : 'numeric'}
 	{id}
-	placeholder={placeholder ?? (fallback === undefined ? '' : String(fallback))}
+	{placeholder}
 	{disabled}
 	{message}
 	error={shownError}

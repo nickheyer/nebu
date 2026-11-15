@@ -102,7 +102,7 @@
 						dense
 						rows={[
 							{ label: 'link class', value: linkLabel(plan.linkClass) },
-							{ label: 'TTFT ratio', value: plan.ttftRatio ? plan.ttftRatio.toFixed(2) : '' },
+							{ label: 'Time to first token ratio', value: plan.ttftRatio ? plan.ttftRatio.toFixed(2) : '' },
 							{ label: 'TPT ratio', value: plan.tptRatio ? plan.tptRatio.toFixed(2) : '' },
 							{ label: 'samples', value: num(plan.ratioSamples) },
 							...plan.sources.map((s, i) => ({ label: `source ${i + 1}`, value: s }))

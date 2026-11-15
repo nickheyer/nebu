@@ -137,7 +137,7 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	wg.Wait()
 	for i, pr := range p.probes {
 		res := results[i]
-		profile.Probes = append(profile.Probes, &v1.ProbeResult{ProbeId: pr.ID(), Status: res.Status, Detail: res.Detail})
+		profile.Probes = append(profile.Probes, &v1.ProbeResult{ProbeId: pr.ID(), Description: pr.Description(), Status: res.Status, Detail: res.Detail})
 		if res.Status != v1.ProbeStatus_PROBE_STATUS_OK {
 			continue
 		}

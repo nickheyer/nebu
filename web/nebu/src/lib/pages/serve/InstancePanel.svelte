@@ -234,7 +234,7 @@
 					</FieldRow>
 				</FormSection>
 			</Stack>
-			<SaveBar dirty={adapterName !== '' || adapterPath !== ''} saving={loadingAdapter} label="Load" disabled={!adapterName} leading={stopButton} onsave={loadAdapter} ondiscard={clearAdapter} />
+			<SaveBar dirty={adapterName !== '' || adapterPath !== ''} saving={loadingAdapter} label="Load" needs={adapterName || !adapterPath ? '' : 'Name the adapter'} leading={stopButton} onsave={loadAdapter} ondiscard={clearAdapter} />
 	{:else if active === 'ranks'}
 		<List head={{ primary: 'Process', secondary: 'Endpoint' }}>
 			{#each inst.ranks as r (r.rank)}

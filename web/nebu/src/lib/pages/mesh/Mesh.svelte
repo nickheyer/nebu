@@ -215,7 +215,7 @@
 			<NeoButton class="primary" elevation={2} href={planFormationHref()}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Formation</NeoButton>
 		{/snippet}
 		{#if formations.length === 0}
-			<Empty icon={StackIcon} text="No formations" action="Plan one" href={planFormationHref()} />
+			<Empty icon={StackIcon} text="No formations" hint="A formation runs one model across several nodes of the mesh" />
 		{:else}
 			<List head={{ primary: 'Formation', secondary: 'Shape', facts: ['Nodes', 'Speed'] }}>
 				{#each formations as f (f.id)}

@@ -71,7 +71,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 		for _, p := range m.GetParams() {
 			rows = append(rows, []string{p.GetName(), text.Enum(p.GetType()), cmp.Or(p.GetDefault(), p.GetPlaceholder()), strings.Join(p.GetChoices(), ","), p.GetDescription()})
 		}
-		table(w, []string{"NAME", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
+		table(w, []string{"NAME", "TYPE", "UNSET", "CHOICES", "DESCRIPTION"}, rows)
 	})
 }
 

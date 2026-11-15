@@ -4,6 +4,7 @@
 	import { NeoInput } from '#lib/neo/inputs/index.js';
 	import DirectoryBrowser, { type BrowseFilter } from '#lib/ui/fields/DirectoryBrowser.svelte';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 	import FolderOpenIcon from 'phosphor-svelte/lib/FolderOpenIcon';
 
@@ -11,14 +12,16 @@
 		value = $bindable(''),
 		label,
 		info,
-		placeholder,
+		// What an empty box comes to, written under it
+		unset,
+		required = false,
 		filter = 'any',
 		disabled = false,
 		message,
 		error,
 		icon,
 		onchange
-	}: { value?: string; label?: string; info?: string; placeholder?: string; filter?: BrowseFilter; disabled?: boolean; message?: string; error?: string; icon?: Snippet; onchange?: (v: string) => void } = $props();
+	}: { value?: string; label?: string; info?: string; unset?: string; required?: boolean; filter?: BrowseFilter; disabled?: boolean; message?: string; error?: string; icon?: Snippet; onchange?: (v: string) => void } = $props();
 
 	const id = fieldId();
 	let open = $state(false);
@@ -36,8 +39,9 @@
 {/snippet}
 
 <div class="field">
-	<FieldLabel {label} {info} forId={id} />
-	<NeoInput bind:value {id} {placeholder} {disabled} elevation={-1} placement="inside" floating={false} width="100%" message={error ?? message} {error} autocomplete="off" class="mono-input" before={icon} after={browse} aria-label={label} oninput={() => onchange?.(value)} />
+	<FieldLabel {label} {info} forId={id} {required} />
+	<NeoInput bind:value {id} {disabled} {required} elevation={-1} placement="inside" floating={false} width="100%" message={error ?? message} {error} autocomplete="off" class="mono-input" before={icon} after={browse} aria-label={label} oninput={() => onchange?.(value)} />
+	{#if unset && value === ''}<Resting text={unset} />{/if}
 </div>
 <DirectoryBrowser bind:open start={value} {filter} onpick={picked} />
 

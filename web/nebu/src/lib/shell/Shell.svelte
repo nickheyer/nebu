@@ -4,25 +4,27 @@
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import { motion } from '#lib/ui/motion.svelte.js';
 	import BottomBar from '#lib/shell/BottomBar.svelte';
+	import { immersion } from '#lib/shell/chrome.svelte.js';
 	import Rail from '#lib/shell/Rail.svelte';
 	import TopBar from '#lib/shell/TopBar.svelte';
 
 	let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} data-motion={motion.enabled ? 'on' : 'off'}>
+<!-- A page that takes the whole window keeps the shell mounted and out of view, so leaving it changes nothing else -->
+<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} class:immersive={immersion.on} data-motion={motion.enabled ? 'on' : 'off'}>
 	{#if !viewport.mobile}
-		<Rail />
+		<div class="chrome"><Rail /></div>
 	{/if}
 	<div class="body">
-		<TopBar />
+		<div class="chrome"><TopBar /></div>
 		<main class="content">
 			<div class="page">
 				{@render children()}
 			</div>
 		</main>
 		{#if viewport.mobile}
-			<BottomBar />
+			<div class="chrome foot"><BottomBar /></div>
 		{/if}
 	</div>
 </div>
@@ -33,6 +35,7 @@
 		--nebu-pad-top: var(--nebu-space-5);
 		--nebu-pad-bottom: var(--nebu-space-6);
 		--nebu-rail-width: 232px;
+		--nebu-bottom: 0px;
 
 		display: flex;
 		min-height: 100dvh;
@@ -40,12 +43,32 @@
 	.shell.collapsed {
 		--nebu-rail-width: 68px;
 	}
+	/* The wrappers of the rail and the bars take no box of their own */
+	.chrome {
+		display: contents;
+	}
+	.shell.immersive .chrome {
+		display: none;
+	}
+	.shell.immersive .page {
+		max-width: none;
+	}
 	.shell.mobile {
 		--nebu-rail-width: 0px;
+		--nebu-bottom: 56px;
 		--nebu-card-pad-base: var(--nebu-space-4);
 		--nebu-gutter: var(--nebu-space-4);
 		--nebu-pad-top: var(--nebu-space-4);
 		--nebu-pad-bottom: var(--nebu-space-5);
+	}
+	/* A page holding the whole window sets every measure of the shell around it to nothing, on any width */
+	.shell.immersive {
+		--nebu-rail-width: 0px;
+		--nebu-bottom: 0px;
+		--nebu-top: 0px;
+		--nebu-gutter: 0px;
+		--nebu-pad-top: 0px;
+		--nebu-pad-bottom: 0px;
 	}
 	.body {
 		display: flex;

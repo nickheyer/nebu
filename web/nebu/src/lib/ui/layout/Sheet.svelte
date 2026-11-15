@@ -6,7 +6,7 @@
 	import { hatch } from '#lib/ui/motion.svelte.js';
 	import { provideSheetFoot } from '#lib/ui/layout/sheet.svelte.js';
 
-	// The list and the open record, beside it, in a drawer or full screen by width
+	// The list and the open record, beside it, in a drawer or full screen by width, an opened sheet taking the keys itself
 	let {
 		open = $bindable(false),
 		onclose,
@@ -15,7 +15,9 @@
 		children,
 		width = 560,
 		// A record holding a table, which takes the wider share of the page
-		wide = false
+		wide = false,
+		// The edge a drawer slides in from, the one its trigger sits on
+		side = 'right'
 	}: {
 		open?: boolean;
 		onclose?: () => void;
@@ -24,6 +26,7 @@
 		children: Snippet;
 		width?: number;
 		wide?: boolean;
+		side?: 'left' | 'right';
 	} = $props();
 
 	const drawer = $derived(wide ? Math.max(width, 880) : width);
@@ -62,11 +65,11 @@
 		{#if list}<div class="list">{@render list()}</div>{/if}
 		{#if !beside}
 			{#if viewport.mobile}
-				<NeoDialog bind:open modal full filled placement="center" elevation={2} padding="0" borderless slide={!viewport.reducedMotion} onclose={closed}>
+				<NeoDialog bind:open modal full filled tabindex={-1} data-focus="self" placement="center" elevation={2} padding="0" borderless slide={!viewport.reducedMotion} onclose={closed}>
 					<div class="sheet mobile">{@render record()}</div>
 				</NeoDialog>
 			{:else}
-				<NeoDrawer bind:open filled placement="right" width="min({drawer}px, 96vw)" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
+				<NeoDrawer bind:open filled tabindex={-1} data-focus="self" placement={side} width="min({drawer}px, 96vw)" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
 					<div class="sheet" style:width="min({drawer}px, 96vw)">{@render record()}</div>
 				</NeoDrawer>
 			{/if}

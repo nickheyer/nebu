@@ -27,17 +27,20 @@
 	<div class="table">
 		<div class="head listhead" aria-hidden="true">
 			<span class="headname">Weights</span>
-			<span class="context">Context</span>
+			<span class="context">Fits in, up to a context of</span>
 			<span class="size">Size</span>
 			<span class="act"></span>
 		</div>
 		{#each groups as g (g.name)}
 			{@const name = g.name || g.formatId}
+			{@const what = contexts.get({ sourceId, repo, revision, group: g.name })?.what}
 			<div class="row">
 				<span class="icon"><CubeIcon size={18} /></span>
-				<span class="name mono">{name}</span>
-				{#if stored.has(g.name)}<Tip text="Stored" tag="span"><span class="stored"><CheckCircleIcon size={16} weight="fill" /></span></Tip>{/if}
-				<span class="context"><ContextPill {contexts} of={{ sourceId, repo, revision, group: g.name }} /></span>
+				<span class="name">
+					<span class="file"><span class="mono">{name}</span>{#if stored.has(g.name)}<Tip text="Stored" tag="span"><span class="stored" role="img" aria-label="Stored"><CheckCircleIcon size={16} weight="fill" /></span></Tip>{/if}</span>
+					{#if what}<span class="what">{what}</span>{/if}
+				</span>
+				<span class="context"><span class="cap">Fits in</span><ContextPill {contexts} of={{ sourceId, repo, revision, group: g.name }} /></span>
 				<span class="size">{bytes(g.bytes)}</span>
 				<span class="act">
 					{#if stored.has(g.name)}
@@ -52,16 +55,19 @@
 {/if}
 
 <style>
-	/* Rows share the file list's measures so the two tabs line up */
+	/* One grid for the head and every row, so each column lines up down the table */
 	.table {
-		display: flex;
-		flex-direction: column;
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content;
+		column-gap: var(--nebu-space-3);
 		min-width: 0;
+		container-type: inline-size;
 	}
 	.head,
 	.row {
-		display: flex;
-		gap: 8px;
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
 		align-items: center;
 		padding: 0 var(--nebu-row-inset, var(--nebu-space-2));
 	}
@@ -75,25 +81,36 @@
 		border-bottom: 1px solid var(--nebu-border);
 	}
 	.headname {
-		flex: 1 1 auto;
+		grid-column: 1 / 3;
 	}
 	.row {
-		min-height: 40px;
-		padding-top: 2px;
-		padding-bottom: 2px;
+		min-height: 44px;
+		padding-top: var(--nebu-space-1);
+		padding-bottom: var(--nebu-space-1);
 		border-bottom: 1px solid var(--nebu-border);
 		animation: nebu-reveal 220ms var(--nebu-settle) backwards;
 	}
 	.icon {
 		display: inline-flex;
-		flex: 0 0 auto;
 		color: var(--nebu-text-muted);
 	}
+	/* A file name alone says little, so what the weights are sits under it once they are read */
 	.name {
-		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
 		min-width: 0;
 		font-size: 13px;
 		overflow-wrap: anywhere;
+	}
+	.file {
+		display: inline-flex;
+		gap: 6px;
+		align-items: center;
+		min-width: 0;
+	}
+	.what {
+		font-size: var(--nebu-text-caption);
+		color: var(--nebu-text-muted);
 	}
 	.stored {
 		display: inline-flex;
@@ -102,10 +119,15 @@
 	}
 	.context {
 		display: inline-flex;
-		flex: 0 0 4.5rem;
+		gap: 6px;
+		align-items: center;
+	}
+	.cap {
+		display: none;
+		font-size: var(--nebu-text-caption);
+		color: var(--nebu-text-muted);
 	}
 	.size {
-		flex: 0 0 auto;
 		min-width: 7ch;
 		font-size: var(--nebu-text-secondary);
 		font-variant-numeric: tabular-nums;
@@ -118,8 +140,35 @@
 	}
 	.act {
 		display: inline-flex;
-		flex: 0 0 auto;
 		justify-content: flex-end;
 		min-width: 36px;
+	}
+	/* A narrow table gives the name its own line and sets the fit and size under it, the fit named in place of the head */
+	@container (max-width: 34rem) {
+		.table {
+			grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+		}
+		.head {
+			display: none;
+		}
+		.row {
+			row-gap: 2px;
+		}
+		.name {
+			grid-column: 2 / 4;
+		}
+		.act {
+			grid-column: 4;
+			grid-row: 1 / 3;
+		}
+		.context {
+			grid-column: 2;
+		}
+		.size {
+			grid-column: 3;
+		}
+		.cap {
+			display: inline;
+		}
 	}
 </style>

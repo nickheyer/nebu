@@ -1,33 +1,45 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { reason, rpc } from '#lib/api/transport.js';
 import { FitVerdict, type FitRow } from '#lib/proto/nebu/v1/estimate_pb.js';
+import { ModelKind, ModelKindSchema, type Descriptor } from '#lib/proto/nebu/v1/model_pb.js';
+import { enumLabel } from '#lib/format.js';
 import type { Lamp } from '#lib/ui/status.js';
-import { contextLabel } from '#lib/pages/models/models.js';
+import { contextLabel, paramLabel } from '#lib/pages/models/models.js';
 
+// A weight group of a repository at a revision
 export type ContextRef = { sourceId: string; repo: string; revision: string; group: string };
-export type ContextFit = { lamp: Lamp; label: string; tip: string };
+// Where the weights fit in words, the largest context they reach there, and the whole of it as a sentence
+export type ContextFit = { lamp: Lamp; where: string; context: string; tip: string };
 // What is known of one weight group, nothing while its plan is on the way
-export type ContextState = { fit?: ContextFit; error?: string; warnings: string[] };
+export type ContextState = { fit?: ContextFit; what: string; error?: string; warnings: string[] };
 
-export const contextTones: { lamp: Lamp; label: string }[] = [
-	{ lamp: 'success', label: 'Fits in device memory' },
-	{ lamp: 'warning', label: 'Fits in system + device memory' },
-	{ lamp: 'error', label: 'No fit' }
+const tones: { lamp: Lamp; where: string; label: string }[] = [
+	{ lamp: 'success', where: 'Device', label: 'Fits in device memory' },
+	{ lamp: 'warning', where: 'Device + system', label: 'Fits in device and system memory together' },
+	{ lamp: 'error', where: 'No fit', label: 'Fits in no memory this host has' }
 ];
 
 function rank(v: FitVerdict | undefined): number {
 	return v === FitVerdict.FITS ? 3 : v === FitVerdict.PARTIAL ? 2 : v === FitVerdict.NO ? 1 : 0;
 }
 
-// The largest context a weight group reaches on this host over every runtime, lit by the memory it takes
+// The largest context one weight group reaches on this host over every runtime, by the memory it takes
 export function contextFit(rows: FitRow[]): ContextFit | undefined {
 	const plans = rows.filter((r) => r.plan).map((r) => ({ context: r.context || Number(r.plan?.params['n_ctx'] ?? 0), verdict: r.plan?.verdict }));
 	if (plans.length === 0) return undefined;
 	const top = Math.max(...plans.map((p) => rank(p.verdict)));
 	const best = Math.max(...plans.filter((p) => rank(p.verdict) === top).map((p) => p.context));
-	const tone = top === 3 ? contextTones[0]! : top === 2 ? contextTones[1]! : contextTones[2]!;
-	if (top < 2) return { lamp: tone.lamp, label: 'No fit', tip: tone.label };
-	return best > 0 ? { lamp: tone.lamp, label: contextLabel(best), tip: `${tone.label} at ${contextLabel(best)} context` } : { lamp: tone.lamp, label: 'Fits', tip: tone.label };
+	const tone = top === 3 ? tones[0]! : top === 2 ? tones[1]! : tones[2]!;
+	if (top < 2) return { lamp: tone.lamp, where: tone.where, context: '', tip: tone.label };
+	const context = best > 0 ? contextLabel(best) : '';
+	return { lamp: tone.lamp, where: tone.where, context, tip: [tone.label, context ? `at ${context} context` : ''].filter(Boolean).join(' ') };
+}
+
+// What a weight group is in a few words, its architecture, size and precision, and its kind when it is no language model
+export function describe(d: Descriptor | undefined): string {
+	if (!d) return '';
+	const kind = d.kind === ModelKind.UNSPECIFIED || d.kind === ModelKind.LANGUAGE ? '' : enumLabel(ModelKindSchema, d.kind);
+	return [d.architecture, paramLabel(d.parameterCount), d.bitsPerWeight > 0 ? `${d.bitsPerWeight.toFixed(1)} bits per weight` : '', kind].filter(Boolean).join(', ');
 }
 
 function keyOf(r: ContextRef): string {
@@ -60,8 +72,8 @@ export class Contexts {
 			this.#active++;
 			rpc.estimate
 				.inspect({ sourceId: ref.sourceId, repo: ref.repo, revision: ref.revision, groups: [ref.group] })
-				.then((res) => this.#states.set(key, { fit: contextFit(res.rows.filter((r) => r.group === ref.group)), warnings: res.warnings }))
-				.catch((err) => this.#states.set(key, { error: reason(err), warnings: [] }))
+				.then((res) => this.#states.set(key, { fit: contextFit(res.rows.filter((r) => r.group === ref.group)), what: describe(res.descriptors.find((d) => d.group === ref.group)), warnings: res.warnings }))
+				.catch((err) => this.#states.set(key, { what: '', error: reason(err), warnings: [] }))
 				.finally(() => {
 					this.#active--;
 					this.#next();

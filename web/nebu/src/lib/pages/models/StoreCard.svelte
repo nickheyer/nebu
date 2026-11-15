@@ -6,30 +6,37 @@
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Bar, { type Segment } from '#lib/ui/Bar.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
+	import Swatch from '#lib/ui/Swatch.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import RecycleIcon from 'phosphor-svelte/lib/RecycleIcon';
 
 	const store = $derived(live.store);
-	const used = $derived(store ? Number(store.blobBytes + store.partialBytes + store.cacheBytes) : 0);
+	const files = $derived(store ? Number(store.blobBytes + store.partialBytes + store.cacheBytes) : 0);
 	const limit = $derived(store ? Number(store.maxBytes) : 0);
 	// The filesystem holding the store bounds the bar when no limit is set
 	const disk = $derived(store ? live.host?.storage.find((s) => s.uses.includes('store')) : undefined);
+	// What the store takes on its disk as the host measures it, the figure the Host page shows for it
+	const measured = $derived(Object.entries(disk?.useBytes ?? {}).find(([k]) => k.split(', ').includes('store'))?.[1]);
+	const used = $derived(Math.max(files, Number(measured ?? 0n)));
 	const total = $derived(limit > 0 ? Math.max(limit, used) : disk ? Number(disk.totalBytes) : used);
-	const reading = $derived(limit > 0 ? `${bytes(used)} of ${bytes(limit)}` : disk ? `${bytes(used)}, ${bytes(disk.freeBytes)} free` : bytes(used));
+	const reading = $derived(limit > 0 ? `${bytes(used)} of ${bytes(limit)}` : bytes(used));
 
-	// The store's files, unfinished downloads and caches, then the rest of the disk, all in warning colour past the limit
-	const segments = $derived.by((): Segment[] => {
+	// The store's models, unfinished downloads, caches with its index, then the rest of the disk, all in warning colour past the limit
+	const parts = $derived.by((): Segment[] => {
 		if (!store) return [];
-		if (limit > 0 && used > limit) return [{ kind: 'warning', label: 'over the limit', bytes: used }];
+		if (limit > 0 && used > limit) return [{ kind: 'warning', label: 'Over the limit', bytes: used }];
 		const own: Segment[] = [
-			{ kind: 'used', label: 'models', bytes: Number(store.blobBytes) },
-			{ kind: 'reservation', label: 'unfinished downloads', bytes: Number(store.partialBytes) },
-			{ kind: 'planned', label: 'caches', bytes: Number(store.cacheBytes) }
+			{ kind: 'used', label: 'Models', bytes: Number(store.blobBytes) },
+			{ kind: 'reservation', label: 'Unfinished downloads', bytes: Number(store.partialBytes) },
+			{ kind: 'planned', label: 'Caches and index', bytes: Number(store.cacheBytes) + (used - files) }
 		];
-		if (limit > 0) return [...own, { kind: 'free', label: 'free', bytes: limit - used }];
+		if (limit > 0) return [...own, { kind: 'free', label: 'Left under the limit', bytes: limit - used }];
 		if (!disk) return own;
-		return [...own, { kind: 'other', label: 'other files', bytes: Math.max(0, Number(disk.totalBytes - disk.freeBytes) - used) }, { kind: 'free', label: 'free', bytes: Number(disk.freeBytes) }];
+		return [...own, { kind: 'other', label: 'Other files on the disk', bytes: Math.max(0, Number(disk.totalBytes - disk.freeBytes) - used) }, { kind: 'free', label: 'Free on the disk', bytes: Number(disk.freeBytes) }];
 	});
+	const segments = $derived(parts);
+	// Every fill the bar can show with what it holds, so the bar reads without a pointer over it
+	const legend = $derived(parts.filter((p) => p.bytes > 0 || p.kind === 'used'));
 
 	let cleaning = $state(false);
 
@@ -49,7 +56,7 @@
 
 <Card title="Store">
 	{#snippet tools()}
-		<NeoButton text aria-label="Clean up" loading={cleaning} onclick={collect}>{#snippet icon()}<RecycleIcon size={20} />{/snippet}</NeoButton>
+		<NeoButton text loading={cleaning} onclick={collect}>{#snippet icon()}<RecycleIcon size={16} />{/snippet}Clean up</NeoButton>
 	{/snippet}
 	{#if !store}
 		<Skeleton rows={1} kind="bars" />
@@ -57,6 +64,11 @@
 		<div class="gauge">
 			<span class="track"><Bar {segments} {total} format={(n) => bytes(n)} /></span>
 			<span class="reading">{reading}</span>
+		</div>
+		<div class="legend" aria-label="Legend">
+			{#each legend as p (p.label)}
+				<span class="item"><Swatch kind={p.kind} />{p.label}<span class="held">{bytes(p.bytes)}</span></span>
+			{/each}
 		</div>
 	{/if}
 </Card>
@@ -72,6 +84,23 @@
 		display: flex;
 		flex: 1 1 auto;
 		min-width: 4rem;
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-1) var(--nebu-space-4);
+		font-size: var(--nebu-text-caption);
+		color: var(--nebu-text-muted);
+	}
+	.item {
+		display: inline-flex;
+		gap: 6px;
+		align-items: center;
+		white-space: nowrap;
+	}
+	.held {
+		font-variant-numeric: tabular-nums;
+		color: var(--neo-text-color);
 	}
 	.reading {
 		flex: 0 0 auto;

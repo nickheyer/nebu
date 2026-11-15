@@ -38,7 +38,7 @@ func (p *Puller) Export(ctx context.Context, req *v1.ExportRequest) (*v1.Task, e
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("%w: nothing to export", store.ErrNotStored)
 	}
-	title := fmt.Sprintf("export %d models to %s", len(selected), dir)
+	title := fmt.Sprintf("export %s to %s", models(len(selected)), dir)
 	return p.Tasks.Start(kindExport, title, map[string]string{"dir": dir}, func(ctx context.Context, h *tasks.Handle) error {
 		return p.export(ctx, h, selected, dir)
 	}), nil

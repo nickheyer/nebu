@@ -29,7 +29,7 @@
 	import Launch, { type LaunchStart } from '#lib/pages/serve/Launch.svelte';
 	import SlotEditor from '#lib/pages/serve/SlotEditor.svelte';
 	import SlotRow from '#lib/pages/serve/SlotRow.svelte';
-	import { slotHref, slotUpdate, terminal } from '#lib/pages/serve/serve.js';
+	import { launchEntry, slotHref, slotUpdate, terminal } from '#lib/pages/serve/serve.js';
 	import { serveTabs } from '#lib/pages/serve/tabs.js';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -163,6 +163,8 @@
 		}
 	}
 
+	const launch = $derived(launchEntry(live));
+
 	function dismiss(id: string) {
 		prefs.serveDismissed = [...prefs.serveDismissed, id];
 	}
@@ -178,17 +180,19 @@
 
 {#snippet launchTools()}
 	{#if slots.length + loose.length > 0}
-		<span class="filter"><MultiSelect bind:value={filters} options={filterOptions} label="Filter" compact /></span>
+		<span class="filter"><MultiSelect bind:value={filters} options={filterOptions} label="Show" compact /></span>
 	{/if}
 	<span class="fill"></span>
-	<NeoButton text href={slotHref('new')}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Slot</NeoButton>
-	<NeoButton class="primary" elevation={2} href="/serve/launch">{#snippet icon()}<PlayIcon size={16} />{/snippet}Launch</NeoButton>
+	<span class="acts">
+		<NeoButton text href={slotHref('new')}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Slot</NeoButton>
+		<NeoButton class="primary" elevation={2} href={launch.href}>{#snippet icon()}<PlayIcon size={16} />{/snippet}{launch.label}</NeoButton>
+	</span>
 {/snippet}
 
 <!-- Slots, empty or holding a model, then the models running outside any slot, in one table -->
 {#snippet servingCard()}
 	<Card tools={launchTools} flush>
-		<List head={{ primary: 'Name', secondary: 'Model' }}>
+		<List head={{ primary: 'Name', secondary: 'Model', facts: ['State'] }}>
 			<NeoSortableProvider bind:items={sortItems} axis="y" onDragEnd={() => void reordered()}>
 				{#each sortItems as item, index (item.id)}
 					{@const slot = slotById.get(String(item.id))}
@@ -248,7 +252,7 @@
 		</Card>
 	{:else if slots.length === 0 && loose.length === 0}
 		<Card tools={launchTools}>
-			<Empty icon={PlayIcon} text="Nothing serving" />
+			<Empty icon={PlayIcon} text="Nothing serving" hint={live.models.size === 0 ? 'A launch runs a stored model, and none is stored yet' : 'A launch runs a stored model and gives it a route'} />
 		</Card>
 	{:else}
 		{@render servingCard()}
@@ -291,10 +295,19 @@
 {/if}
 
 <style>
+	/* The filter gives way to the buttons, which keep one line beside it */
 	.filter {
 		display: inline-flex;
-		width: 14rem;
-		max-width: 100%;
+		flex: 1 1 9.5rem;
+		min-width: 9.5rem;
+		max-width: 14rem;
+	}
+	.acts {
+		display: inline-flex;
+		flex: 0 0 auto;
+		margin-left: auto;
+		gap: var(--nebu-space-2);
+		align-items: center;
 	}
 	.sortrow {
 		display: grid;

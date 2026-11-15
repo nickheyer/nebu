@@ -277,15 +277,20 @@
   // Sync dialog state with component state
   $effect(() => {
     if (!ref || ref.open === open || !isNative) return;
-    if (open && modal) return ref.showModal();
+    if (open && modal) {
+      ref.showModal();
+      if (ref.dataset.focus === 'self') ref.focus({ preventScroll: true });
+      return;
+    }
     if (open) return ref.show();
     if (ref.requestClose) return ref.requestClose();
     ref.close();
   });
 
+  // A dialog marked to take the keys itself is focused in place of its first control
   const focusElement = debounce(() => {
     if (!open || !ref) return;
-    getFocusableElement(ref)?.focus({ preventScroll: true });
+    (ref.dataset.focus === 'self' ? ref : getFocusableElement(ref))?.focus({ preventScroll: true });
   }, 100);
 
   const trapFocus = (e: SvelteEvent<FocusEvent>) => {

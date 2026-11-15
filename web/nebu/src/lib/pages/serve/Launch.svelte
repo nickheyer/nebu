@@ -162,6 +162,17 @@
 	const verdict = $derived(formationPlan?.verdict ?? plan?.verdict);
 	const context = $derived(Number(plan?.params['n_ctx'] ?? 0));
 	const ready = $derived(model !== undefined && runtime !== undefined && (swap || planOnly || name.trim() !== '') && (!swap || canaryPercent === 0 || canarySeconds > 0));
+	// Nothing stored to launch, which leaves the dialog pointing at where models come from
+	const none = $derived(live.ready && live.models.size === 0 && !model);
+	// What the launch still needs before it can run
+	const missing = $derived.by(() => {
+		if (ready || none) return '';
+		if (!model) return 'Pick a model';
+		if (runtimes === undefined) return 'Listing runtimes';
+		if (!runtime) return 'No installed runtime runs this model';
+		if (!swap && !planOnly && name.trim() === '') return 'Name the launch';
+		return 'Give the canary a step length';
+	});
 
 	function shapeLine(s: Shape): string {
 		switch (s) {
@@ -507,7 +518,7 @@
 	<Stack gap={12}>
 		<Checklist bind:value={span} options={nodeDevices} label="Nodes and devices" />
 		<FieldRow>
-			<Select bind:value={() => (shape === Shape.UNSPECIFIED ? undefined : shape), (v) => (shape = v ?? Shape.UNSPECIFIED)} options={shapes} label="Shape" placeholder={formationPlan?.shape ? enumLabel(ShapeSchema, formationPlan.shape) : undefined} clearable />
+			<Select bind:value={() => (shape === Shape.UNSPECIFIED ? undefined : shape), (v) => (shape = v ?? Shape.UNSPECIFIED)} options={shapes} label="Shape" unset={formationPlan?.shape ? `${enumLabel(ShapeSchema, formationPlan.shape)}, as planned` : undefined} clearable />
 			<Segmented bind:value={() => (profile === PlanProfile.AUTO ? undefined : profile), (v) => (profile = v ?? PlanProfile.AUTO)} options={profiles} label="Tuned for" clearable />
 		</FieldRow>
 		{#if formationPlan?.candidates.length}
@@ -526,9 +537,9 @@
 	</Stack>
 {/snippet}
 
-<Dialog bind:open {title} width="broad" persistent confirm={planOnly ? undefined : swap ? 'Swap' : 'Launch'} busy={running} disabled={!ready} footer={failure} onconfirm={run} onclose={() => leave()}>
-	{#if live.ready && live.models.size === 0 && !model}
-		<Empty icon={CubeIcon} text="No models stored" action="Discover" href="/discover" />
+<Dialog bind:open {title} width={none ? 'narrow' : 'broad'} persistent={!none} confirm={none ? 'Find a model' : planOnly ? undefined : swap ? 'Swap' : 'Launch'} busy={running} needs={none ? '' : missing} footer={failure} onconfirm={none ? () => leave('/discover') : run} onclose={() => leave()}>
+	{#if none}
+		<Empty icon={CubeIcon} text="No models stored" hint="A launch runs a model from the store. Discover finds one and pulls it in." />
 	{:else}
 		<Picker bind:value={modelPick} fetch={fetchModels} label="Model" current={model ? modelPhrase(model) : undefined} required />
 		{#if parts.length}
@@ -543,7 +554,7 @@
 			</div>
 		{/if}
 		{#if model && runtimes !== undefined && usable.length === 0}
-			<Empty icon={EngineIcon} text="No runtime installed for this model" action="Runtimes" href="/runtimes" />
+			<Empty icon={EngineIcon} text="No runtime installed for this model" action="Install a runtime" href="/runtimes" />
 		{:else if model && runtime}
 			<FieldRow>
 				{#if !swap && !planOnly}

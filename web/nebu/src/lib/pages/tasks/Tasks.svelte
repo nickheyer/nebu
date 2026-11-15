@@ -25,7 +25,7 @@
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { hostTabs } from '#lib/pages/host/tabs.js';
 	import TaskPanel from '#lib/pages/tasks/TaskPanel.svelte';
-	import { active, progressFacts, progressLabel, taskKinds } from '#lib/pages/tasks/tasks.js';
+	import { active, progressFacts, progressLabel, taskKinds, type RunPlace } from '#lib/pages/tasks/tasks.js';
 	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
 
 	let { id = '' }: { id?: string } = $props();
@@ -80,12 +80,23 @@
 		return 'skipped';
 	}
 
+	// When a run ended comes first, so a row cut to one fact still says when it ran
 	function historyFacts(t: Task) {
 		return [
-			{ value: duration(t.startedAt ?? t.createdAt, t.finishedAt, clockTick.now), tip: 'duration' },
-			{ value: t.finishedAt ? ago(t.finishedAt, clockTick.now) : '', tip: `finished ${when(t.finishedAt)}` }
+			{ value: t.finishedAt ? ago(t.finishedAt, clockTick.now) : '\u2014', tip: t.finishedAt ? when(t.finishedAt) : 'Not finished' },
+			{ value: duration(t.startedAt ?? t.createdAt, t.finishedAt, clockTick.now) }
 		];
 	}
+
+	// Where the open task stands among the runs folded into its row, with the runs either side of it
+	const place = $derived.by((): RunPlace | undefined => {
+		for (const g of groups) {
+			const runs = [g.head, ...g.rest];
+			const at = runs.findIndex((t) => t.id === id);
+			if (at >= 0 && runs.length > 1) return { at: at + 1, of: runs.length, newer: runs[at - 1]?.id, older: runs[at + 1]?.id };
+		}
+		return undefined;
+	});
 </script>
 
 {#snippet bar(t: Task)}
@@ -131,7 +142,7 @@
 {#snippet historyCard()}
 	<Card title="History" flush>
 		{#snippet tools()}
-			{#if kinds.length || states.length}<NeoButton text onclick={() => ((kinds = []), (states = []))}>Clear active</NeoButton>{/if}
+			{#if kinds.length || states.length}<NeoButton text onclick={() => ((kinds = []), (states = []))}>Clear filters</NeoButton>{/if}
 			<span class="filter"><MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact /></span>
 			<span class="filter"><MultiSelect bind:value={states} options={stateOptions} label="State" compact /></span>
 		{/snippet}
@@ -142,7 +153,7 @@
 		{:else if history.items.length === 0}
 			<Empty icon={ListChecksIcon} text={kinds.length || states.length ? 'No tasks match' : 'No tasks'} />
 		{:else}
-			<List head={{ primary: 'Task', facts: ['Duration', 'Finished'] }}>
+			<List head={{ primary: 'Task', facts: ['Finished', 'Took'] }}>
 				{#each groups as g (g.head.id)}
 					{#snippet runs()}
 						{#each g.rest as t (t.id)}
@@ -154,7 +165,7 @@
 					<ListRow primary={capitalize(g.head.title)} primaryKind="text" primaryWidth="32ch" facts={historyFacts(g.head)} selected={g.head.id === id} onclick={() => open(g.head)} expand={g.rest.length ? runs : undefined}>
 						{#snippet leading()}{@render historyLeading(g.head)}{/snippet}
 						{#snippet badges()}
-							{#if g.rest.length}<span class="repeat" title="{g.rest.length + 1} runs in a row">×{num(g.rest.length + 1)}</span>{/if}
+							{#if g.rest.length}<span class="repeat">{num(g.rest.length + 1)} runs, the latest shown</span>{/if}
 						{/snippet}
 					</ListRow>
 				{/each}
@@ -173,7 +184,7 @@
 
 <Sheet open={id !== ''} onclose={() => goto('/tasks')} {list}>
 	{#if id}
-		<TaskPanel {id} onclose={() => goto('/tasks')} />
+		<TaskPanel {id} {place} onclose={() => goto('/tasks')} />
 	{/if}
 </Sheet>
 

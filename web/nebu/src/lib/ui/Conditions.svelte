@@ -3,23 +3,43 @@
 	import { when } from '#lib/format.js';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import { passingCondition, reasonWords } from '#lib/ui/status.js';
+	import { failingReason, passingCondition, reasonWords, type DotShape, type Lamp } from '#lib/ui/status.js';
 
-	// Each check with its reason, filled while it holds, a passing state listed only while it lasts
+	// Each check with its reason, green while it holds, red with its message when it fails, grey when it does not apply, a passing state listed only while it lasts
 	let { conditions = [] }: { conditions?: Condition[] } = $props();
 
-	const shown = $derived(conditions.filter((c) => !passingCondition(c.type) || c.status === ConditionStatus.TRUE));
+	type Row = { type: string; words: string; lamp: Lamp; shape: DotShape; state: string; message: string; since: string };
+
+	const rows = $derived(
+		conditions
+			.filter((c) => !passingCondition(c.type) || c.status === ConditionStatus.TRUE)
+			.map((c): Row => {
+				const holds = c.status === ConditionStatus.TRUE;
+				const failed = !holds && !passingCondition(c.type) && failingReason(c.reason);
+				const type = reasonWords(c.type);
+				const reason = reasonWords(c.reason);
+				return {
+					type,
+					// A reason that only repeats the check's name says nothing more
+					words: reason === type ? '' : reason,
+					lamp: passingCondition(c.type) ? 'warning' : holds ? 'success' : failed ? 'error' : 'muted',
+					shape: holds || failed ? 'filled' : 'hollow',
+					state: passingCondition(c.type) ? 'under way' : holds ? 'holds' : failed ? 'failing' : 'does not apply',
+					message: failed || passingCondition(c.type) ? c.message : '',
+					since: when(c.lastTransitionTime)
+				};
+			})
+	);
 </script>
 
-{#if shown.length}
+{#if rows.length}
 	<div class="conditions">
-		{#each shown as c (c.type)}
-			{@const holds = c.status === ConditionStatus.TRUE}
-			<Tip facts={[{ label: 'message', value: c.message }, { label: 'since', value: when(c.lastTransitionTime) }].filter((f) => f.value !== '')} placement="top-start" tag="div" class="condtip">
+		{#each rows as r (r.type)}
+			<Tip facts={[{ label: 'state', value: r.state }, { label: 'since', value: r.since }].filter((f) => f.value !== '')} placement="top-start" tag="div" class="condtip">
 				<div class="cond">
-					<Dot lamp={passingCondition(c.type) ? 'warning' : holds ? 'primary' : 'muted'} shape={holds ? 'filled' : 'hollow'} label={holds ? 'holds' : 'does not hold'} />
-					<span class="type">{reasonWords(c.type)}</span>
-					<span class="reason muted">{reasonWords(c.reason)}</span>
+					<Dot lamp={r.lamp} shape={r.shape} label={r.state} />
+					<span class="type">{r.type}</span>
+					<span class="reason" class:muted={r.lamp !== 'error'} class:error-text={r.lamp === 'error'}>{[r.words, r.message].filter(Boolean).join(', ') || r.state}</span>
 				</div>
 			</Tip>
 		{/each}

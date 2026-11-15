@@ -8,10 +8,12 @@
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
 	import { clock, ms, num, pct, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
+	import { launchEntry } from '#lib/pages/serve/serve.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { TraceKind, type Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
+	import Dialog from '#lib/ui/Dialog.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import Facts from '#lib/ui/Facts.svelte';
 	import List from '#lib/ui/List.svelte';
@@ -72,11 +74,8 @@
 	let stats = $state<Trace[]>([]);
 	let statsSettled = $state(false);
 	let statsError = $state('');
-	let toolbarWidth = $state(0);
-
-	// Kind and status, then the route and the range, fold into the filters popover as the card narrows
-	const ranged = $derived(windowId === 'range' ? 220 : 0);
-	const fold = $derived<'none' | 'some' | 'all'>(viewport.mobile ? 'all' : toolbarWidth === 0 || toolbarWidth >= 1080 + ranged ? 'none' : toolbarWidth >= 740 + ranged ? 'some' : 'all');
+	// The filter row stands open on a window with room for it, a narrow one opening it as a dialog when asked
+	let filtersOpen = $state(untrack(() => !viewport.mobile));
 
 	$effect(() => {
 		prefs.trafficWindow = windowId;
@@ -203,7 +202,9 @@
 	});
 	const facts = $derived(windowFacts(windowed, bounds.from, end, attainment));
 
-	const activeFilters = $derived(route !== undefined || kinds.length + statusClasses.length + nodeIds.length + objectiveNames.length > 0 || fairness.trim() !== '');
+	// How many filters hold a value, which rides on the button that opens them
+	const filterCount = $derived((route !== undefined ? 1 : 0) + [kinds, statusClasses, nodeIds, objectiveNames].filter((f) => f.length > 0).length + (fairness.trim() !== '' ? 1 : 0));
+	const activeFilters = $derived(filterCount > 0);
 	const nodes = $derived([...live.nodes.values()].map((n) => ({ value: n.id, label: n.name || n.id })));
 	const objectives = $derived([...live.objectives.values()].map((o) => ({ value: o.name, label: o.name })));
 	const kindOptions = traceKinds.map((k) => ({ value: k, label: kindWord(k) }));
@@ -258,7 +259,7 @@
 
 	function durationTip(t: Trace): string {
 		const first = ttft(t);
-		const lines = [`TTFT ${first === undefined ? '—' : ms(first)}`, `${num(t.promptTokens)} prompt, ${num(t.completionTokens)} completion`, `${num(t.cachedTokens)} cached`];
+		const lines = [`time to first token ${first === undefined ? '—' : ms(first)}`, `${num(t.promptTokens)} prompt, ${num(t.completionTokens)} completion`, `${num(t.cachedTokens)} cached`];
 		return isShed(t) && t.error ? [t.error, ...lines].join('\n') : lines.join('\n');
 	}
 
@@ -276,52 +277,35 @@
 	<Duration bind:value={toAgo} base="s" label="To, ago" info="Now when empty" emptyZero />
 {/snippet}
 
-{#snippet popover()}
-	{#if fold === 'all'}
-		<Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} />
-	{/if}
-	{#if fold !== 'none'}
-		<MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact />
-		<MultiSelect bind:value={statusClasses} options={statusOptions} label="Status" compact />
-	{/if}
-	{#if fold === 'all' && windowId === 'range'}{@render rangeFields()}{/if}
+<!-- Every filter sits in one row under the toolbar, which a narrow screen opens as a dialog over the list -->
+{#snippet filterFields()}
+	<Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} />
+	<MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact />
+	<MultiSelect bind:value={statusClasses} options={statusOptions} label="Status" compact />
 	{#if nodes.length > 1}<MultiSelect bind:value={nodeIds} options={nodes} label="Node" compact search={nodes.length > 8} />{/if}
 	{#if objectives.length}<MultiSelect bind:value={objectiveNames} options={objectives} label="Objective" compact search={objectives.length > 8} />{/if}
 	<Text bind:value={fairness} label="Fairness id" compact max={64} mono />
-	{#if activeFilters}
-		<div class="clear"><NeoButton text onclick={clearFilters}>Clear active</NeoButton></div>
-	{/if}
 {/snippet}
 
 {#snippet toolbar()}
-	<div class="bar" bind:clientWidth={toolbarWidth}>
-		<Toolbar>
-			{#if fold !== 'all'}
-				<span class="route"><Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} /></span>
-			{/if}
-			{#if fold === 'none'}
-				<span class="kind"><MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact /></span>
-				<span class="status"><MultiSelect bind:value={statusClasses} options={statusOptions} label="Status" compact /></span>
-			{/if}
-			<span class="window"><Select bind:value={windowId} options={windowOptions} onchange={windowChanged} /></span>
-			{#if windowId === 'range' && fold !== 'all'}
-				<Pop placement="bottom-start" width="22rem">
-					{#snippet content()}{@render rangeFields()}{/snippet}
-					<NeoButton elevation={2}>{#snippet icon()}<ClockIcon size={18} />{/snippet}{rangeLabel}</NeoButton>
-				</Pop>
-			{/if}
-			<NeoButton text aria-label={paused ? 'Resume' : 'Pause'} title={paused ? 'Resume' : 'Pause'} onclick={togglePause}>
-				{#snippet icon()}{#if paused}<PlayIcon size={18} />{:else}<PauseIcon size={18} />{/if}{/snippet}
-			</NeoButton>
-			<Pop placement="bottom-start" width="20rem">
-				{#snippet content()}{@render popover()}{/snippet}
-				<NeoButton elevation={2}>{#snippet icon()}<FunnelIcon size={18} />{/snippet}Filters</NeoButton>
+	<Toolbar>
+		<Select bind:value={windowId} options={windowOptions} label="Window" compact fit onchange={windowChanged} />
+		{#if windowId === 'range'}
+			<Pop placement="bottom-start" width="22rem">
+				{#snippet content()}{@render rangeFields()}{/snippet}
+				<NeoButton elevation={2}>{#snippet icon()}<ClockIcon size={18} />{/snippet}{rangeLabel}</NeoButton>
 			</Pop>
-			{#if !viewport.mobile}
-				<span class="push"><Segmented bind:value={view} options={[{ value: 'list', label: 'List' }, { value: 'timeline', label: 'Timeline' }]} /></span>
-			{/if}
-		</Toolbar>
-	</div>
+		{/if}
+		<NeoButton text aria-pressed={paused} color={paused ? 'primary' : undefined} onclick={togglePause}>
+			{#snippet icon()}{#if paused}<PlayIcon size={18} />{:else}<PauseIcon size={18} />{/if}{/snippet}
+			{paused ? 'Resume' : 'Pause'}
+		</NeoButton>
+		<NeoButton elevation={2} toggle checked={filtersOpen} color={filtersOpen || filterCount ? 'primary' : undefined} aria-expanded={filtersOpen} aria-label={filterCount ? `Filters, ${filterCount} set` : 'Filters'} onclick={() => (filtersOpen = !filtersOpen)}>
+			{#snippet icon()}<FunnelIcon size={18} weight={filterCount ? 'fill' : 'regular'} />{/snippet}
+			Filters{#if filterCount}<span class="count">{filterCount}</span>{/if}
+		</NeoButton>
+		<span class="push"><Segmented bind:value={view} options={[{ value: 'list', label: 'List' }, { value: 'timeline', label: 'Timeline' }]} aria="View" /></span>
+	</Toolbar>
 {/snippet}
 
 {#snippet head()}
@@ -342,16 +326,22 @@
 	{:else if windowId === 'range'}
 		<Empty icon={PulseIcon} text="No requests in the range" action="Live 5m" onclick={() => (windowId = '5m')} />
 	{:else if live.ready && live.routes.size === 0}
-		<Empty icon={PulseIcon} text="No requests" action="Launch" href="/serve/launch" primary />
+		<Empty icon={PulseIcon} text="No requests" hint="Nothing is being served, so the gateway has no request to take" action={launchEntry(live).long} href={launchEntry(live).href} primary />
 	{:else}
-		<Empty icon={PulseIcon} text="No requests" action="Chat" href="/chat" primary />
+		<Empty icon={PulseIcon} text="No requests" hint="Requests sent to the gateway are listed here as they arrive" action="Open chat" href="/chat" />
 	{/if}
 {/snippet}
 
 {#snippet listCard()}
 	<Card flush>
 		{#snippet tools()}{@render toolbar()}{/snippet}
-		{#if view === 'timeline' && !viewport.mobile && statsSettled && !statsError && windowed.length}
+		{#if !viewport.mobile && (filtersOpen || filterCount)}
+			<div class="filterbar dense">
+				{#if filtersOpen}<div class="filters">{@render filterFields()}</div>{/if}
+				{#if filterCount}<span class="clear"><NeoButton text onclick={clearFilters}>Clear filters</NeoButton></span>{/if}
+			</div>
+		{/if}
+		{#if view === 'timeline' && statsSettled && !statsError}
 			<Timeline traces={windowed} {endpoints} from={bounds.from} to={end} {now} href={hrefOf} {nodeName} />
 		{/if}
 		{#if !list.settled}
@@ -401,6 +391,15 @@
 
 <PageHeader tabs={gatewayHeaderTabs} active="traffic" />
 
+{#if viewport.mobile}
+	<Dialog bind:open={filtersOpen} title="Filters" confirm="Show requests" onconfirm={() => (filtersOpen = false)}>
+		<div class="stack dense">{@render filterFields()}</div>
+		{#snippet footer()}
+			{#if filterCount}<NeoButton text onclick={clearFilters}>Clear filters</NeoButton>{/if}
+		{/snippet}
+	</Dialog>
+{/if}
+
 <Sheet open={traceId !== ''} onclose={close} {head} list={listCard}>
 	{#if traceId}
 		{#key traceId}
@@ -410,38 +409,45 @@
 </Sheet>
 
 <style>
-	.bar {
+	/* The filters fill the row and the clear button ends it, under the button that opens them */
+	.filterbar {
 		display: flex;
+		gap: var(--nebu-space-2);
+		align-items: flex-start;
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-3);
+	}
+	.filters {
+		display: grid;
 		flex: 1 1 auto;
-		min-width: 0;
-	}
-	.route {
-		display: flex;
-		flex: 0 1 14rem;
-		min-width: 10rem;
-	}
-	.kind {
-		display: flex;
-		flex: 0 0 10.5rem;
-	}
-	.status {
-		display: flex;
-		flex: 0 0 9.5rem;
-	}
-	.window {
-		display: flex;
-		flex: 0 0 10rem;
-	}
-	.route > :global(*),
-	.kind > :global(*),
-	.status > :global(*),
-	.window > :global(*) {
-		flex: 1 1 auto;
+		grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+		gap: var(--nebu-space-2);
 		min-width: 0;
 	}
 	.clear {
+		display: inline-flex;
+		flex: 0 0 auto;
+		align-items: center;
+		min-height: var(--nebu-control);
+		margin-left: auto;
+	}
+	.stack {
 		display: flex;
-		justify-content: flex-end;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+	}
+	/* How many filters are set rides on the button that opens them */
+	.count {
+		display: inline-grid;
+		place-items: center;
+		min-width: 18px;
+		height: 18px;
+		margin-left: 6px;
+		padding: 0 5px;
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		color: var(--neo-background-color);
+		background: var(--neo-color-primary);
+		border-radius: 9px;
 	}
 	.routecell {
 		display: flex;

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { create } from '@bufbuild/protobuf';
 	import { onMount, untrack } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { NeoButton, NeoCloseButton } from '#lib/neo/buttons/index.js';
 	import { NeoPill } from '#lib/neo/pill/index.js';
@@ -10,11 +11,13 @@
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { session as account } from '#lib/auth/session.svelte.js';
-	import { pct } from '#lib/format.js';
+	import { num, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { ChatTurnSchema, type Conversation } from '#lib/proto/nebu/v1/chat_pb.js';
+	import { launchEntry } from '#lib/pages/serve/serve.js';
+	import { ChatTurnSchema, type ChatTurn, type Conversation } from '#lib/proto/nebu/v1/chat_pb.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import type { ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
+	import { immersion } from '#lib/shell/chrome.svelte.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
@@ -39,13 +42,17 @@
 	import { byDay, ChatSession, chooseImages, imageSizes, modelMode, modelOptions, takesImages, videoFps, type PendingCall } from '#lib/pages/chat/chat.svelte.js';
 	import SettingsPanel from '#lib/pages/chat/SettingsPanel.svelte';
 	import Turn from '#lib/pages/chat/Turn.svelte';
+	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
+	import ArrowsInIcon from 'phosphor-svelte/lib/ArrowsInIcon';
+	import ArrowsOutIcon from 'phosphor-svelte/lib/ArrowsOutIcon';
 	import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
 	import ChatsIcon from 'phosphor-svelte/lib/ChatsIcon';
-	import GearIcon from 'phosphor-svelte/lib/GearIcon';
 	import PaperclipIcon from 'phosphor-svelte/lib/PaperclipIcon';
 	import PaperPlaneRightIcon from 'phosphor-svelte/lib/PaperPlaneRightIcon';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
+	import SparkleIcon from 'phosphor-svelte/lib/SparkleIcon';
 	import StopIcon from 'phosphor-svelte/lib/StopIcon';
 
 	let { id = '' }: { id?: string } = $props();
@@ -61,7 +68,8 @@
 	let scroller = $state<HTMLDivElement>();
 	let box = $state<HTMLDivElement>();
 	let flow = $state<HTMLDivElement>();
-	let pinned = true;
+	// Whether the thread follows its newest words, off once the person scrolls up to read
+	let pinned = $state(true);
 	let listOpen = $state(false);
 	let settingsOpen = $state(false);
 	let openError = $state('');
@@ -163,18 +171,42 @@
 	const anyReady = $derived(models.some((m) => m.ready));
 	const canSend = $derived(text.trim() !== '' && session.model !== '' && !session.busy && !session.opening);
 	const shown = $derived(session.turns.filter((t) => t.role !== 'tool'));
-	const last = $derived(session.turns[session.turns.length - 1]);
 	const lastAssistant = $derived(session.turns.findLast((t) => t.role === 'assistant'));
 	const userFallback = $derived(account.displayName || 'You');
-	const assistantFallback = $derived(session.conversation.model || session.model);
+	// The model the conversation was last sent to names its answers, the word for it when it has none
+	const assistantFallback = $derived(session.conversation.model || session.model || 'The model');
 	const userName = $derived(session.settings.userName || userFallback);
 	const assistantName = $derived(session.settings.assistantName || assistantFallback);
 	const draftTurn = $derived(create(ChatTurnSchema, { role: 'assistant', text: session.draft, toolCalls: session.draftCalls }));
 	const groups = $derived(byDay(conversations.items));
 	const noRoute = $derived(modelsLoaded && !modelsError && !anyReady);
 	const quiet = $derived(shown.length === 0 && !session.busy);
-	const columns = $derived(viewport.ultrawide);
-	const settingsColumn = $derived(columns && prefs.chatSettingsOpen);
+	// Theater gives the whole window to the thread, the app's rail and bars and the columns beside it standing down
+	const theater = $derived(prefs.chatTheater);
+	const columns = $derived(viewport.ultrawide && !theater);
+	// The settings stand beside the thread they tune wherever the window has the room, and open over it only on a narrow one
+	const settingsBeside = $derived(!viewport.mobile);
+	// Open beside the thread on a wide window until the person says otherwise, and in theater only once asked for there
+	let theaterSettings = $state(false);
+	const settingsColumn = $derived(settingsBeside && (theater ? theaterSettings : (prefs.chatSettingsOpen ?? viewport.ultrawide)));
+	// Tokens the last answer left in the context and the most the route holds, both known only after an answer
+	const contextUsed = $derived(lastAssistant ? lastAssistant.promptTokens + lastAssistant.completionTokens : 0);
+	const contextMax = $derived(current?.inventory.context_length ?? 0);
+	const facts = $derived(current ? [contextMax ? `${num(contextMax)} tokens of context` : '', current.inventory.quantization, ...(current.inventory.modalities ?? []).filter((m) => m !== 'text').map((m) => `reads ${m}s`)].filter(Boolean) : []);
+
+	$effect(() => {
+		if (!theater) return;
+		untrack(() => (theaterSettings = false));
+		return immersion.enter();
+	});
+
+	// T turns theater on and off and escape leaves it, unless the keys are going into a box or a dialog
+	function theaterKey(e: KeyboardEvent) {
+		const el = e.target as HTMLElement | null;
+		const typing = el?.closest('input, textarea, select, [contenteditable], [role=dialog], dialog') !== null;
+		if (e.key === 'Escape' && theater && !typing && !e.defaultPrevented) prefs.chatTheater = false;
+		else if ((e.key === 't' || e.key === 'T') && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) prefs.chatTheater = !theater;
+	}
 	const sizeOptions = imageSizes.map((s) => ({ value: s, label: s }));
 	const fpsOptions = videoFps.map((f) => ({ value: f, label: String(f) }));
 
@@ -244,8 +276,34 @@
 	}
 
 	function toggleSettings() {
-		if (columns) prefs.chatSettingsOpen = !prefs.chatSettingsOpen;
-		else settingsOpen = true;
+		if (!settingsBeside) settingsOpen = true;
+		else if (theater) theaterSettings = !theaterSettings;
+		else prefs.chatSettingsOpen = !settingsColumn;
+	}
+
+	function closeSettings() {
+		if (theater) theaterSettings = false;
+		else prefs.chatSettingsOpen = false;
+	}
+
+	function latest() {
+		pinned = true;
+		if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: viewport.reducedMotion ? 'auto' : 'smooth' });
+	}
+
+	// Messages shown after one, which a rewrite of it removes
+	function laterThan(turn: ChatTurn): number {
+		return shown.length - 1 - shown.indexOf(turn);
+	}
+
+	// Removes one message and leaves the rest, a conversation emptied by it giving way to a new one
+	async function deleteTurn(turn: ChatTurn) {
+		try {
+			if (!(await session.deleteTurn(turn))) void goto('/chat', { replace: true });
+		} catch (err) {
+			toast.error('Delete failed', reason(err));
+		}
+		conversations.refresh();
 	}
 
 	function newConversation() {
@@ -292,10 +350,15 @@
 	}
 </script>
 
+<!-- The search shows once there is a conversation to find or a search to clear -->
 {#snippet search()}
 	<Toolbar>
-		<span class="find"><SearchBox bind:value={query} width="100%" /></span>
-		<NeoButton elevation={2} aria-label="New conversation" onclick={newConversation}>{#snippet icon()}<PlusIcon size={20} />{/snippet}</NeoButton>
+		{#if query || conversations.items.length}
+			<span class="find"><SearchBox bind:value={query} width="100%" /></span>
+		{:else}
+			<span class="fill"></span>
+		{/if}
+		<NeoButton elevation={2} onclick={newConversation}>{#snippet icon()}<PlusIcon size={16} />{/snippet}New</NeoButton>
 	</Toolbar>
 {/snippet}
 
@@ -308,7 +371,7 @@
 		{#if query}
 			<Empty text="No matches" action="Clear search" onclick={() => (query = '')} />
 		{:else}
-			<Empty text="No conversations" />
+			<Empty icon={ChatsCircleIcon} text="No conversations" hint="Each one is kept here once its first message is sent" />
 		{/if}
 	{:else}
 		{#each groups as g (g.label)}
@@ -336,44 +399,65 @@
 	{/key}
 {/snippet}
 
+{#snippet settingsToggle()}
+	<NeoButton text aria-label="Settings" title="Settings" aria-pressed={settingsBeside ? settingsColumn : undefined} color={settingsColumn ? 'primary' : undefined} onclick={toggleSettings}>{#snippet icon()}<SlidersHorizontalIcon size={20} />{/snippet}</NeoButton>
+{/snippet}
+
 {#snippet head()}
-	<Toolbar>
+	<div class="bar dense">
 		{#if !columns}
-			<NeoButton text aria-label="Conversations" onclick={() => (listOpen = true)}>{#snippet icon()}<ChatsIcon size={20} />{/snippet}</NeoButton>
+			<NeoButton text aria-label="Conversations" title="Conversations" onclick={() => (listOpen = true)}>{#snippet icon()}<ChatsIcon size={20} />{/snippet}</NeoButton>
 		{/if}
 		<span class="model">
-			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} label="Model" compact disabled={noRoute} current={session.model} />
+			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} label="Model" placeholder={noRoute ? 'None is being served' : 'Pick one'} compact disabled={noRoute} current={session.model} />
 		</span>
-		<span class="push">
-			<NeoButton text aria-label="Settings" aria-pressed={columns ? settingsColumn : undefined} onclick={toggleSettings}>{#snippet icon()}<GearIcon size={20} />{/snippet}</NeoButton>
+		<span class="tools">
+			<NeoButton text aria-label={theater ? 'Leave theater mode' : 'Theater mode'} title={theater ? 'Leave theater mode (t)' : 'Theater mode (t)'} aria-pressed={theater} color={theater ? 'primary' : undefined} onclick={() => (prefs.chatTheater = !theater)}>
+				{#snippet icon()}{#if theater}<ArrowsInIcon size={20} />{:else}<ArrowsOutIcon size={20} />{/if}{/snippet}
+			</NeoButton>
+			{@render settingsToggle()}
 		</span>
-	</Toolbar>
+	</div>
+{/snippet}
+
+{#snippet hero()}
+	<div class="hero">
+		<span class="orb" aria-hidden="true"><SparkleIcon size={36} weight="fill" /></span>
+		<h2 class="greeting">{assistantName}</h2>
+		{#if facts.length}<p class="secondary">{facts.join(' \u00b7 ')}</p>{/if}
+	</div>
 {/snippet}
 
 {#snippet messages()}
 	{#if session.opening}
 		<Skeleton kind="text" rows={6} />
 	{:else if openError && shown.length === 0}
-		<Empty icon={ChatsCircleIcon} text="Conversation failed to open" hint={openError} action="New" onclick={newConversation} />
+		<Empty icon={ChatsCircleIcon} text="Conversation failed to open" hint={openError} action="Start a new one" onclick={newConversation} />
 	{:else if quiet && !modelsLoaded}
 		<Skeleton kind="text" rows={2} />
 	{:else if quiet && modelsError}
-		<Empty icon={PlayIcon} text="Routes failed to list" hint={modelsError} action="Retry" onclick={loadModels} />
+		<Empty icon={PlayIcon} text="Models failed to list" hint={modelsError} action="Retry" onclick={loadModels} />
 	{:else if quiet && !anyReady}
 		{#if account.reads}
-			<Empty icon={PlayIcon} text="No ready route" action="Launch" href="/serve/launch" primary />
+			<Empty icon={PlayIcon} text="No model is being served" hint="Chat talks to a model once one is launched and ready" action={launchEntry(live).long} href={launchEntry(live).href} primary />
 		{:else}
-			<Empty icon={PlayIcon} text="No ready route" />
+			<Empty icon={PlayIcon} text="No model is being served" hint="Chat talks to a model once one is launched and ready" />
 		{/if}
+	{:else if quiet}
+		{@render hero()}
 	{/if}
-	{#each shown as turn, i (i)}
+	{#each shown as turn (turn.id || turn)}
+		{@const idle = !session.busy && !session.opening}
 		<Turn
 			{turn}
 			{session}
 			name={turn.role === 'user' ? userName : assistantName}
 			traceLinks={account.reads}
 			pending={turn === lastAssistant ? session.pending : []}
-			onretry={turn === last && !session.busy && (turn.error || turn.stop === 'cancelled') ? () => attempt('Retry failed', () => session.retry(servers, mode)) : undefined}
+			later={laterThan(turn)}
+			onedit={idle && (turn.role !== 'user' || session.model !== '') ? (text: string) => attempt('Edit failed', () => session.editTurn(turn, text, servers, mode)) : undefined}
+			onretry={idle && session.model !== '' ? () => attempt('Ask again failed', () => session.retryTurn(turn, servers, mode)) : undefined}
+			ondelete={idle ? () => deleteTurn(turn) : undefined}
 			onrun={(c: PendingCall) => attempt('Tool call failed', () => session.runCall(c, servers))}
 			onskip={(c: PendingCall) => attempt('Tool call failed', () => session.skipCall(c, servers))}
 		/>
@@ -382,7 +466,7 @@
 		{#if mode === 'video'}
 			<Turn turn={draftTurn} {session} name={assistantName} streaming>
 				<div class="track">
-					<span class="bar"><NeoProgressBar value={session.videoProgress ?? 0} elevation={-1} height="8px" width="100%" color="primary" /></span>
+					<span class="bar-fill"><NeoProgressBar value={session.videoProgress ?? 0} elevation={-1} height="8px" width="100%" color="primary" /></span>
 					<span class="num secondary">{session.videoProgress === null ? 'Queued' : pct(session.videoProgress)}</span>
 				</div>
 			</Turn>
@@ -402,14 +486,15 @@
 
 {#snippet sendButton()}
 	{#if session.busy}
-		<NeoButton elevation={2} onclick={stop}>{#snippet icon()}<StopIcon size={20} />{/snippet}Stop</NeoButton>
+		<NeoButton elevation={3} rounded aria-label="Stop" onclick={stop}>{#snippet icon()}<StopIcon size={20} weight="fill" />{/snippet}Stop</NeoButton>
 	{:else}
-		<NeoButton class="primary" elevation={2} disabled={!canSend} onclick={send}>{#snippet icon()}<PaperPlaneRightIcon size={20} />{/snippet}Send</NeoButton>
+		<NeoButton class="primary" elevation={3} rounded disabled={!canSend} onclick={send}>{#snippet icon()}<PaperPlaneRightIcon size={20} weight="fill" />{/snippet}Send</NeoButton>
 	{/if}
 {/snippet}
 
+<!-- The message box and its controls are one console raised from the stage, the box a well pressed into it -->
 {#snippet composer()}
-	<div class="composer">
+	<div class="dock">
 		{#if media}
 			<FieldRow>
 				<Select value={session.media.imageSize} options={sizeOptions} label="Size" onchange={(v) => v && (session.media.imageSize = v)} />
@@ -418,7 +503,7 @@
 					<Slider bind:value={() => session.media.imageCount, (n) => (session.media.imageCount = n ?? 1)} min={1} max={4} label="Images" />
 				{:else}
 					<Slider bind:value={() => session.media.videoSeconds, (n) => (session.media.videoSeconds = n ?? 1)} min={1} max={30} unit="s" label="Length" />
-					<Select value={session.media.videoFps} options={fpsOptions} label="FPS" onchange={(v) => v && (session.media.videoFps = v)} />
+					<Select value={session.media.videoFps} options={fpsOptions} label="Frames per second" onchange={(v) => v && (session.media.videoFps = v)} />
 				{/if}
 			</FieldRow>
 		{:else if attach && attachments.length}
@@ -430,20 +515,31 @@
 		{/if}
 		<div class="line">
 			{#if attach && !media}
-				<span class="beside"><NeoButton text aria-label="Attach" onclick={attachImages}>{#snippet icon()}<PaperclipIcon size={20} />{/snippet}</NeoButton></span>
+				<span class="beside"><NeoButton text aria-label="Attach images" title="Attach images" onclick={attachImages}>{#snippet icon()}<PaperclipIcon size={20} />{/snippet}</NeoButton></span>
 			{/if}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="box" bind:this={box} {onkeydown}>
-				<Textarea bind:value={text} placeholder={media ? 'Prompt' : 'Message'} rows={1} maxRows={8} disabled={session.model === ''} />
+				<Textarea bind:value={text} placeholder={session.model === '' ? 'No model to write to' : media ? `Describe what ${assistantName} should make` : `Write to ${assistantName}`} rows={1} maxRows={10} disabled={session.model === ''} />
 			</div>
 			<span class="beside">{@render sendButton()}</span>
+		</div>
+		<div class="under">
+			<span class="hint">Enter sends, Shift and Enter starts a new line</span>
+			{#if contextUsed > 0 && contextMax > 0}
+				<span class="gauge" title="{num(contextUsed)} of {num(contextMax)} tokens of context in use">
+					<span class="meter"><NeoProgressBar value={Math.min(100, (contextUsed / contextMax) * 100)} elevation={-1} height="6px" width="100%" color={contextUsed / contextMax > 0.85 ? 'warning' : 'primary'} immediate /></span>
+					<span class="num">{pct((contextUsed / contextMax) * 100)} of context</span>
+				</span>
+			{/if}
 		</div>
 	</div>
 {/snippet}
 
+<svelte:window onkeydown={theaterKey} />
+
 <PageHeader title={id && session.conversation.title ? session.conversation.title : undefined} />
 
-<div class="chat" class:mobile={viewport.mobile}>
+<div class="chat" class:theater>
 	{#if columns}
 		<div class="col side">
 			<Card flush grow tools={search}>
@@ -452,30 +548,41 @@
 		</div>
 	{/if}
 	<div class="col main">
-		<Card flush grow tools={head} footer={composer}>
-			<div class="scroll thread hairline" class:centred={quiet && !session.opening && (!anyReady || !!modelsError || !!openError)} bind:this={scroller} {onscroll}>
-				<div class="flow" bind:this={flow}>{@render messages()}</div>
+		<section class="stage" aria-label="Conversation">
+			{@render head()}
+			<div class="well">
+				<div class="scroll thread" class:centred={quiet && !session.opening} bind:this={scroller} {onscroll}>
+					<div class="flow" bind:this={flow}>{@render messages()}</div>
+				</div>
+				{#if !pinned}
+					<span class="jump" transition:fade={{ duration: 120 }}>
+						<NeoButton elevation={3} rounded aria-label="Jump to the latest message" title="Jump to the latest message" onclick={latest}>{#snippet icon()}<ArrowDownIcon size={18} />{/snippet}</NeoButton>
+					</span>
+				{/if}
 			</div>
-		</Card>
+			{@render composer()}
+		</section>
 		{#if !columns}
-			<Sheet bind:open={listOpen} width={360}>
+			<Sheet bind:open={listOpen} width={360} side="left">
 				<PanelHeader title="Conversations" onclose={() => (listOpen = false)} />
 				<div class="sheetsearch">{@render search()}</div>
 				<div class="sheetlist">{@render conversationList()}</div>
 			</Sheet>
+		{/if}
+		{#if !settingsBeside}
 			<Sheet bind:open={settingsOpen} width={400}>
 				<PanelHeader title="Settings" onclose={() => (settingsOpen = false)} />
 				{@render settingsForm()}
 			</Sheet>
 		{/if}
-		<Dialog bind:open={renameOpen} title="Rename conversation" confirm="Rename" busy={renameBusy} disabled={!renameTitle.trim()} onconfirm={rename}>
+		<Dialog bind:open={renameOpen} title="Rename conversation" confirm="Rename" busy={renameBusy} needs={renameTitle.trim() ? '' : 'Give it a title'} onconfirm={rename}>
 			<Text bind:value={renameTitle} label="Title" max={64} />
 		</Dialog>
 	</div>
 	{#if settingsColumn}
 		<div class="col settings">
 			<Card title="Settings" flush grow>
-				{#snippet tools()}<NeoCloseButton text aria-label="Close settings" onclick={() => (prefs.chatSettingsOpen = false)} />{/snippet}
+				{#snippet tools()}<NeoCloseButton text aria-label="Close settings" onclick={closeSettings} />{/snippet}
 				<div class="scroll form">{@render settingsForm()}</div>
 			</Card>
 		</div>
@@ -485,16 +592,20 @@
 <style>
 	/* Fills the viewport under the top bar so only the columns scroll */
 	.chat {
-		--chat-below: 0px;
-		--chat-measure: 46rem;
+		--chat-measure: 48rem;
 
 		display: flex;
 		gap: var(--nebu-space-5);
-		height: calc(100dvh - var(--nebu-top, 60px) - 1px - var(--nebu-pad-top) - var(--nebu-pad-bottom) - var(--chat-below));
+		height: calc(100dvh - var(--nebu-top, 60px) - 1px - var(--nebu-pad-top) - var(--nebu-pad-bottom) - var(--nebu-bottom, 0px));
 		min-height: 0;
 	}
-	.chat.mobile {
-		--chat-below: 56px;
+	/* Theater gives the thread the whole window, a wider measure and larger words */
+	.chat.theater {
+		--chat-measure: 60rem;
+
+		height: 100dvh;
+		font-size: 17px;
+		animation: nebu-reveal 260ms var(--nebu-settle) backwards;
 	}
 	.col {
 		display: flex;
@@ -508,7 +619,42 @@
 		flex: 1 1 auto;
 	}
 	.settings {
-		flex: 0 0 352px;
+		flex: 0 0 360px;
+	}
+	/* The stage is one slab holding the bar, the well the thread scrolls in and the console under it */
+	.stage {
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+		min-width: 0;
+		min-height: 0;
+		padding: var(--nebu-space-3) var(--nebu-space-4) var(--nebu-space-4);
+		background: var(--neo-background-color);
+		border-radius: var(--neo-border-radius-md);
+		box-shadow: var(--neo-box-shadow-raised-2), var(--nebu-machined);
+	}
+	.theater .stage {
+		padding: var(--nebu-space-3) var(--nebu-space-5) var(--nebu-space-5);
+		border-radius: 0;
+		box-shadow: none;
+	}
+	.bar {
+		display: flex;
+		flex: 0 0 auto;
+		gap: var(--nebu-space-2);
+		align-items: center;
+		min-width: 0;
+	}
+	/* The thread is read through a window pressed into the stage */
+	.well {
+		position: relative;
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		min-height: 0;
+		border-radius: var(--neo-border-radius-md);
+		box-shadow: var(--neo-box-shadow-inset-3);
 	}
 	.scroll {
 		display: flex;
@@ -523,6 +669,7 @@
 		padding: 0 var(--nebu-card-pad);
 	}
 	.thread {
+		border-radius: inherit;
 		scrollbar-gutter: stable both-edges;
 	}
 	.form {
@@ -530,7 +677,7 @@
 		padding-bottom: var(--nebu-space-3);
 		scrollbar-gutter: stable;
 	}
-	/* The thread and the box under it share one reading column in the middle of the card */
+	/* The thread and the console under it share one reading column in the middle of the stage */
 	.flow {
 		display: flex;
 		flex: 1 0 auto;
@@ -545,11 +692,49 @@
 	.centred .flow {
 		justify-content: center;
 	}
+	/* A new conversation opens on the model it talks to, its mark on an orb raised from the well */
+	.hero {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-2);
+		align-items: center;
+		padding: var(--nebu-space-6) 0;
+		text-align: center;
+	}
+	.orb {
+		display: grid;
+		place-items: center;
+		width: 88px;
+		height: 88px;
+		margin-bottom: var(--nebu-space-3);
+		color: var(--neo-color-primary);
+		background: var(--neo-background-color);
+		border-radius: 50%;
+		box-shadow: var(--neo-box-shadow-convex-4), var(--nebu-machined);
+	}
+	.greeting {
+		max-width: 100%;
+		font-size: var(--nebu-text-title);
+		overflow-wrap: anywhere;
+	}
+	.jump {
+		position: absolute;
+		right: var(--nebu-space-4);
+		bottom: var(--nebu-space-4);
+		display: inline-flex;
+	}
 	.model {
 		display: flex;
-		flex: 1 1 0;
+		flex: 1 1 12rem;
 		min-width: 0;
 		max-width: 32rem;
+	}
+	.tools {
+		display: inline-flex;
+		flex: 0 0 auto;
+		gap: var(--nebu-space-1);
+		align-items: center;
+		margin-left: auto;
 	}
 	.model > :global(*) {
 		flex: 1 1 auto;
@@ -566,14 +751,19 @@
 		margin: var(--nebu-space-3) calc(-1 * (var(--nebu-sheet-pad) + var(--nebu-scroll-pad))) 0 calc(-1 * var(--nebu-sheet-pad));
 		--nebu-row-inset: var(--nebu-sheet-pad);
 	}
-	.composer {
+	.dock {
 		display: flex;
-		flex: 1 1 auto;
+		flex: 0 0 auto;
 		flex-direction: column;
-		gap: var(--nebu-space-3);
-		max-width: var(--chat-measure);
+		gap: var(--nebu-space-2);
+		width: 100%;
+		max-width: calc(var(--chat-measure) + 2 * var(--nebu-space-4));
 		min-width: 0;
 		margin: 0 auto;
+		padding: var(--nebu-space-3) var(--nebu-space-4);
+		background: var(--neo-background-color);
+		border-radius: 20px;
+		box-shadow: var(--neo-box-shadow-raised-3), var(--nebu-machined);
 	}
 	.find {
 		display: flex;
@@ -595,11 +785,34 @@
 		flex: 1 1 auto;
 		min-width: 0;
 	}
+	.box :global(.neo-textarea-group) {
+		margin: 0;
+	}
 	.beside {
 		display: inline-flex;
 		flex: 0 0 auto;
 		align-items: center;
 		min-height: var(--nebu-input-height);
+	}
+	.under {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-1) var(--nebu-space-4);
+		align-items: center;
+		justify-content: space-between;
+		min-height: 20px;
+		font-size: var(--nebu-text-caption);
+		color: var(--nebu-text-muted);
+	}
+	.gauge {
+		display: inline-flex;
+		gap: var(--nebu-space-2);
+		align-items: center;
+		margin-left: auto;
+	}
+	.meter {
+		display: inline-flex;
+		width: 72px;
 	}
 	.track {
 		display: flex;
@@ -607,7 +820,7 @@
 		align-items: center;
 		max-width: 32rem;
 	}
-	.bar {
+	.bar-fill {
 		display: flex;
 		flex: 1 1 auto;
 		min-width: 0;
@@ -616,5 +829,26 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--nebu-space-2);
+	}
+	/* A narrow window gives its width to the words, the stage losing its own frame */
+	@media (max-width: 720px) {
+		.stage {
+			gap: var(--nebu-space-2);
+			padding: 0;
+			box-shadow: none;
+		}
+		.thread {
+			padding: 0 var(--nebu-space-3);
+		}
+		.dock {
+			padding: var(--nebu-space-2) var(--nebu-space-3);
+			border-radius: 16px;
+		}
+		.hint {
+			display: none;
+		}
+		.under:not(:has(.gauge)) {
+			display: none;
+		}
 	}
 </style>

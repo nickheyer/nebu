@@ -17,7 +17,7 @@
 	import Tip from '#lib/ui/Tip.svelte';
 	import { compactBelow, useList, weightOf, type ListSlot } from '#lib/ui/list.svelte.js';
 	import type { DotShape, Lamp } from '#lib/ui/status.js';
-	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 
 	export type Fact = { value: string; tip?: string; mono?: boolean };
 
@@ -74,8 +74,8 @@
 	let open = $state(false);
 	let width = $state(0);
 	const compact = $derived(list ? list.compact : width > 0 && width < compactBelow);
-	const shownFacts = $derived(list ? facts.slice(0, 2) : facts.filter((f) => f.value !== '').slice(0, 2));
-	const dropped = $derived(compact && (secondary !== undefined || facts.slice(1).some((f) => f.value !== '')));
+	const shownFacts = $derived(list ? facts.slice(0, 3) : facts.filter((f) => f.value !== '').slice(0, 3));
+	const dropped = $derived(compact && ((secondary !== undefined && secondary !== '') || facts.slice(1).some((f) => f.value !== '')));
 	const expandable = $derived(expand !== undefined || dropped);
 	const clickable = $derived(href !== undefined || onclick !== undefined);
 	const primaryWidthCh = $derived(primaryWidth ?? (primaryKind === 'repo' || primaryKind === 'path' ? '40ch' : primaryKind === 'message' ? '64ch' : '24ch'));
@@ -94,7 +94,7 @@
 		if (expandable) slots.push('caret');
 		list.primaryWeight = weightOf(primaryWidthCh, 1);
 		list.secondaryWeight = weightOf(secondaryWidth, 1.4);
-		return list.use(slots, Math.min(2, facts.length));
+		return list.use(slots, Math.min(3, facts.length));
 	});
 
 	function inControl(target: EventTarget | null): boolean {
@@ -133,8 +133,8 @@
 {/snippet}
 
 {#snippet caret()}
-	<NeoButton text aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} onclick={() => (open = !open)}>
-		{#snippet icon()}<span class="caret" class:open><CaretRightIcon size={16} /></span>{/snippet}
+	<NeoButton text aria-label={open ? 'Collapse' : 'Expand'} title={open ? 'Show less' : 'Show more'} aria-expanded={open} onclick={() => (open = !open)}>
+		{#snippet icon()}<span class="caret" class:open><CaretDownIcon size={16} /></span>{/snippet}
 	</NeoButton>
 {/snippet}
 
@@ -146,8 +146,12 @@
 			<div class="expanded">
 				{#if dropped}
 					<div class="dropped">
-						{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}
-						{#each facts.slice(1).filter((f) => f.value !== '') as f, i (i)}<span class="fact" class:mono={f.mono}>{f.value}</span>{/each}
+						{#if secondary !== undefined && secondary !== ''}
+							<span class="was">{#if list?.head?.secondary}<span class="heading">{list.head.secondary}</span>{/if}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" /></span>
+						{/if}
+						{#each facts.slice(1) as f, i (i)}
+							{#if f.value !== ''}<span class="was">{#if list?.head?.facts?.[i + 1]}<span class="heading">{list.head.facts[i + 1]}</span>{/if}<span class="fact" class:mono={f.mono}>{f.value}</span></span>{/if}
+						{/each}
 					</div>
 				{/if}
 				{@render expand?.()}
@@ -330,6 +334,10 @@
 		flex: 1 1 0;
 		min-width: 12rem;
 	}
+	/* A shared instrument column is as wide as its widest gauge needs, eight rem at the least */
+	.cell.instrument {
+		min-width: 8rem;
+	}
 	.fact {
 		display: inline-block;
 		font-variant-numeric: tabular-nums;
@@ -360,7 +368,7 @@
 		transition: transform var(--nebu-normal) var(--nebu-settle);
 	}
 	.caret.open {
-		transform: rotate(90deg);
+		transform: rotate(180deg);
 	}
 	.below {
 		display: flex;
@@ -382,5 +390,17 @@
 	}
 	.dropped .fact {
 		text-align: left;
+	}
+	/* What a compact row moved under itself keeps the heading of the column it came from */
+	.was {
+		display: inline-flex;
+		gap: 6px;
+		align-items: baseline;
+		min-width: 0;
+	}
+	.heading {
+		flex: 0 0 auto;
+		font-size: var(--nebu-text-caption);
+		color: var(--nebu-text-muted);
 	}
 </style>

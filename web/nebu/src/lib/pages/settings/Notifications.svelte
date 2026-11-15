@@ -17,6 +17,7 @@
 	import { SettingsForm } from '#lib/pages/settings/form.svelte.js';
 	import { webhookEvents, webhookFormats } from '#lib/pages/settings/webhooks.js';
 	import BellIcon from 'phosphor-svelte/lib/BellIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
 	let { tabs }: { tabs: HeaderTab[] } = $props();
 
@@ -90,14 +91,14 @@
 {#snippet list()}
 	<Card title="Webhooks" flush>
 		{#snippet tools()}
-			<NeoButton class="primary" elevation={2} onclick={() => edit(undefined)}>Add webhook</NeoButton>
+			<NeoButton class="primary" elevation={2} onclick={() => edit(undefined)}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Webhook</NeoButton>
 		{/snippet}
 		{#if form.error && !form.ready}
 			<Empty text="Settings failed to load" hint={form.error} action="Retry" onclick={() => form.load()} />
 		{:else if !form.ready}
 			<Skeleton rows={3} secondary="16ch" facts={2} />
 		{:else if webhooks.length === 0}
-			<Empty icon={BellIcon} text="No webhooks" action={open ? undefined : 'Add webhook'} onclick={() => edit(undefined)} />
+			<Empty icon={BellIcon} text="No webhooks" hint="A webhook is sent a message when a model fails, or a task fails or succeeds" />
 		{:else}
 			<List head={{ primary: 'Webhook', secondary: 'Host', facts: ['Format', 'Events'], action: 'Enabled' }}>
 				{#each webhooks as w (w.id)}

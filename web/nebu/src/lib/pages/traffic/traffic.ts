@@ -108,14 +108,14 @@ export function windowFacts(traces: Trace[], from: number, end: number, extra: F
 	return [
 		{
 			id: 'rate',
-			label: 'Requests',
+			label: 'Request rate',
 			value: perMinute(traces.length / minutes),
 			spark: split((l) => l.length),
 			facts: [{ label: 'in window', value: num(traces.length) }, { label: 'rejected', value: num(traces.filter(isShed).length) }, ...extra]
 		},
 		{
 			id: 'errors',
-			label: 'Errors',
+			label: 'Error rate',
 			value: pct(errorRate, 1),
 			lamp: errorRate >= 5 ? 'error' : errorRate > 0 ? 'warning' : undefined,
 			spark: errors,
@@ -126,7 +126,8 @@ export function windowFacts(traces: Trace[], from: number, end: number, extra: F
 		},
 		{
 			id: 'ttft',
-			label: 'First token',
+			label: 'Time to first token',
+			note: 'median',
 			value: ttfts.length ? ms(median(ttfts)) : '—',
 			spark: split((l) => median(l.map(ttft).filter(defined))),
 			facts: [
@@ -137,7 +138,8 @@ export function windowFacts(traces: Trace[], from: number, end: number, extra: F
 		},
 		{
 			id: 'tpot',
-			label: 'Per token',
+			label: 'Time per output token',
+			note: 'median',
 			value: tpots.length ? ms(median(tpots)) : '—',
 			spark: split((l) => median(l.map(tpot).filter(defined))),
 			facts: [

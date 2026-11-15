@@ -113,7 +113,7 @@
 	<Facts {items} />
 </Card>
 
-<Dialog bind:open={tokenOpen} title="Join token" confirm="Copy" busy={copying} disabled={ttl <= 0} onconfirm={copyToken}>
+<Dialog bind:open={tokenOpen} title="Join token" confirm="Copy" busy={copying} needs={ttl <= 0 ? 'Say how long the token is valid' : ''} onconfirm={copyToken}>
 	<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="Valid for" />
 </Dialog>
 

@@ -28,7 +28,7 @@
 
 {#snippet actionAdvanced()}
 	<FieldRow>
-		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" placeholder={acting?.model || undefined} clearable current={action.model || undefined} />
+		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" unset={acting?.model ? `${acting.model}, the persona's` : undefined} clearable current={action.model || undefined} />
 		<Switch bind:checked={action.reply} label="Reply to the message" />
 	</FieldRow>
 {/snippet}
@@ -76,7 +76,7 @@
 	</FormSection>
 	<FormSection title="Where">
 		{#if personas.length > 1}
-			<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={personas[0]?.name} />
+			<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable unset={personas[0]?.name} />
 		{/if}
 		{#if guilds.length}
 			<FieldRow>

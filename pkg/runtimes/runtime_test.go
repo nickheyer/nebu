@@ -1,6 +1,7 @@
 package runtimes
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,46 @@ func TestRegistryRefusesBrokenRuntimes(t *testing.T) {
 	}
 	if _, err := New([]Runtime{shaped{id: "a", methods: adopt}, shaped{id: "a", methods: adopt}}); err == nil {
 		t.Fatal("duplicate id should be refused")
+	}
+}
+
+func TestNamesStandForNumbersOffTheScale(t *testing.T) {
+	limit := &v1.Param{Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Placeholder: "-1", Names: []*v1.ParamName{{Value: "-1", Label: "no limit"}}}
+	if err := checkForm(limit); err != nil {
+		t.Fatalf("a named number under the scale: %v", err)
+	}
+	for name, p := range map[string]*v1.Param{
+		"on a string":              {Name: "p", Type: v1.ParamType_PARAM_TYPE_STRING, Names: []*v1.ParamName{{Value: "-1", Label: "auto"}}},
+		"for text":                 {Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Names: []*v1.ParamName{{Value: "auto", Label: "auto"}}},
+		"for a fraction of an int": {Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Names: []*v1.ParamName{{Value: "0.5", Label: "half"}}},
+		"without a label":          {Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Names: []*v1.ParamName{{Value: "-1"}}},
+		"given twice":              {Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Names: []*v1.ParamName{{Value: "-1", Label: "auto"}, {Value: "-1.0", Label: "none"}}},
+	} {
+		if err := checkForm(p); err == nil || !strings.Contains(err.Error(), "name") {
+			t.Errorf("a name %s should be refused: %v", name, err)
+		}
+	}
+	for name, p := range map[string]*v1.Param{
+		"default":     {Name: "p", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Default: "-1"},
+		"placeholder": {Name: "p", Type: v1.ParamType_PARAM_TYPE_FLOAT, Placeholder: "-1"},
+	} {
+		if err := checkForm(p); err == nil || !strings.Contains(err.Error(), "below its scale") {
+			t.Errorf("an unnamed %s under the scale should be refused: %v", name, err)
+		}
+	}
+	named := 0
+	for _, rt := range registry(t).List() {
+		for _, p := range rt.Params() {
+			for _, n := range p.GetNames() {
+				named++
+				if v, err := strconv.ParseFloat(n.GetValue(), 64); err != nil || v < 0 && p.GetMin() <= v {
+					t.Errorf("%s param %s keeps %s on its scale", rt.ID(), p.GetName(), n.GetValue())
+				}
+			}
+		}
+	}
+	if named == 0 {
+		t.Fatal("no shipped param names a number")
 	}
 }
 

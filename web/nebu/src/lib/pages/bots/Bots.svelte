@@ -112,9 +112,9 @@
 	{:else if list.error}
 		<Empty text={list.error} action="Retry" onclick={() => list.refresh()} />
 	{:else if bots.length === 0}
-		<Empty icon={RobotIcon} text="No bots" action="Bot" onclick={openNew} />
+		<Empty icon={RobotIcon} text="No bots" hint="A bot answers on Discord as the personas you give it" />
 	{:else}
-		<List head={{ primary: 'Bot', secondary: 'State', facts: ['Servers'] }}>
+		<List head={{ primary: 'Bot', facts: ['State', 'Servers'] }}>
 			{#each bots as b (b.id)}
 				{@const on = running(b)}
 				<ListRow
@@ -122,9 +122,7 @@
 					shape={on ? 'filled' : 'hollow'}
 					primary={b.name}
 					primaryTip={botTip(b)}
-					secondary={enumLabel(BotStateSchema, b.state)}
-					secondaryWidth="12ch"
-					facts={[{ value: on ? num(b.status?.guilds) : '' }]}
+					facts={[{ value: enumLabel(BotStateSchema, b.state) }, { value: on ? num(b.status?.guilds) : '\u2014', tip: on ? undefined : 'Known once the bot is running' }]}
 					onclick={() => goto(`/bots/${b.id}/status`)}
 				>
 					{#snippet leading()}<Avatar url={b.status?.avatarUrl} size={24} />{/snippet}
@@ -141,11 +139,11 @@
 	{/if}
 </Card>
 
-<Dialog bind:open title="New bot" confirm="Create" busy={creating} disabled={!name.trim() || !token.trim()} onconfirm={createBot}>
+<Dialog bind:open title="New bot" confirm="Create" busy={creating} needs={!name.trim() ? 'Name the bot' : !token.trim() ? 'Paste its Discord token' : ''} onconfirm={createBot}>
 	<Text bind:value={name} label="Name" max={64} required />
 	<Row gap={8} align="flex-end" wrap={false}>
 		<Cell min="10rem"><Secret bind:value={token} label="Discord bot token" required /></Cell>
-		<span class="trail"><NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Check</NeoButton></span>
+		<span class="trail"><NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Check the token</NeoButton></span>
 	</Row>
 	{#if probed}
 		<Row gap={12} align="flex-start" wrap={false}>

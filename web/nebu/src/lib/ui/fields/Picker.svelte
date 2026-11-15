@@ -5,6 +5,7 @@
 	import type { NeoListItem, NeoListContext, NeoListSelectedItem } from '#lib/neo/list/index.js';
 	import { isCancel, reason } from '#lib/api/transport.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import { fieldId, listPopover, selectToggle, type Option, type PickerFetch } from '#lib/ui/fields/types.js';
 
 	let {
@@ -13,6 +14,8 @@
 		label,
 		info,
 		placeholder,
+		// What an empty picker comes to, written under it
+		unset,
 		disabled = false,
 		clearable = false,
 		required = false,
@@ -20,7 +23,7 @@
 		error,
 		pageSize = 25,
 		current,
-		// A toolbar picker, its label standing as the placeholder
+		// A toolbar picker, its label inside the box before the choice
 		compact = false,
 		trailing,
 		onchange
@@ -30,6 +33,7 @@
 		label?: string;
 		info?: string;
 		placeholder?: string;
+		unset?: string;
 		disabled?: boolean;
 		clearable?: boolean;
 		required?: boolean;
@@ -112,6 +116,10 @@
 	{/if}
 {/snippet}
 
+{#snippet lead()}
+	<span class="inlabel">{label}</span>
+{/snippet}
+
 <div class="field" class:compact>
 	{#if !compact}<FieldLabel {label} {info} forId={id} {required} />{/if}
 	<NeoSelect
@@ -123,7 +131,8 @@
 		filter={() => true}
 		sort={() => 0}
 		search
-		placeholder={placeholder ?? (compact ? label : undefined)}
+		placeholder={placeholder ?? (compact && label ? 'Any' : undefined)}
+		before={compact && label ? lead : undefined}
 		display={named}
 		{disabled}
 		{clearable}
@@ -141,9 +150,16 @@
 		{trailing}
 		onChange={(v) => onchange?.(v as V | undefined)}
 	/>
+	{#if unset && value === undefined}<Resting text={unset} />{/if}
 </div>
 
 <style>
+	/* A toolbar field keeps its name in the box before what it holds */
+	.inlabel {
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+		white-space: nowrap;
+	}
 	.field {
 		display: flex;
 		flex-direction: column;

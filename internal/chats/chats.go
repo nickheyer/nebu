@@ -3,6 +3,8 @@ package chats
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -76,18 +78,146 @@ func (m *Manager) List(ctx context.Context, owner db.ChatOwner) ([]*v1.Conversat
 	return list, nil
 }
 
-// Fetches one of the owner's conversations with its turns
+// Fetches one of the owner's conversations with its turns, naming and saving any turn stored without an id
 func (m *Manager) Get(ctx context.Context, owner db.ChatOwner, id string) (*v1.Conversation, error) {
 	c, err := m.DB.GetConversation(ctx, owner, id)
 	if db.IsNotFound(err) {
 		return nil, fmt.Errorf("%w %q", ErrUnknownConversation, id)
 	}
-	return c, err
+	if err != nil {
+		return nil, err
+	}
+	named, err := nameTurns(c.GetTurns())
+	if err != nil {
+		return nil, err
+	}
+	if named {
+		if _, err := m.DB.PutConversation(ctx, owner, c); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+// Gives every turn without an id one of its own, answering whether any was given
+func nameTurns(turns []*v1.ChatTurn) (bool, error) {
+	named := false
+	for _, t := range turns {
+		if t.GetId() != "" {
+			continue
+		}
+		var b [12]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return false, err
+		}
+		t.Id = hex.EncodeToString(b[:])
+		named = true
+	}
+	return named, nil
+}
+
+// Removes one turn of the owner's conversation, with the tool turns answering its calls, every other turn
+// staying as it is. The conversation goes with its last turn, and nil is answered for it
+func (m *Manager) DeleteTurn(ctx context.Context, owner db.ChatOwner, id, turnID string) (*v1.Conversation, error) {
+	return m.rewrite(ctx, owner, id, turnID, func(turns []*v1.ChatTurn, at int) ([]*v1.ChatTurn, error) {
+		calls := map[string]bool{}
+		for _, c := range turns[at].GetToolCalls() {
+			calls[c.GetId()] = true
+		}
+		var kept []*v1.ChatTurn
+		for i, t := range turns {
+			if i == at || t.GetRole() == "tool" && calls[t.GetToolCallId()] {
+				continue
+			}
+			kept = append(kept, t)
+		}
+		return kept, nil
+	})
+}
+
+// Rewrites the text of one turn of the owner's conversation in place and drops every turn after it
+func (m *Manager) EditTurn(ctx context.Context, owner db.ChatOwner, id, turnID, text string) (*v1.Conversation, error) {
+	return m.rewrite(ctx, owner, id, turnID, func(turns []*v1.ChatTurn, at int) ([]*v1.ChatTurn, error) {
+		turns[at].Text = text
+		// What the old text produced no longer describes the turn
+		if turns[at].GetRole() == "assistant" {
+			turns[at].Error, turns[at].Stop = "", "stop"
+		}
+		return turns[:at+1], nil
+	})
+}
+
+// Rewinds the owner's conversation for the model to answer again from a turn. A user turn stays
+// as the last one, an assistant turn goes, and every turn after either goes with it, every turn
+// before staying as it is. A tool turn is not asked again, the answer that called it is
+func (m *Manager) RetryTurn(ctx context.Context, owner db.ChatOwner, id, turnID string) (*v1.Conversation, error) {
+	return m.rewrite(ctx, owner, id, turnID, func(turns []*v1.ChatTurn, at int) ([]*v1.ChatTurn, error) {
+		switch turns[at].GetRole() {
+		case "user":
+			return turns[:at+1], nil
+		case "tool":
+			return nil, fmt.Errorf("%w: turn %q is a tool's answer, ask again from the turn that called the tool", ErrChat, turnID)
+		}
+		if at == 0 {
+			return nil, fmt.Errorf("%w: no turn comes before turn %q for the model to answer", ErrChat, turnID)
+		}
+		return turns[:at], nil
+	})
+}
+
+// Applies a change to the turns of the owner's conversation around one of them and saves what is
+// left, releasing the images only the removed turns held. A conversation left with no turn is deleted
+func (m *Manager) rewrite(ctx context.Context, owner db.ChatOwner, id, turnID string, change func(turns []*v1.ChatTurn, at int) ([]*v1.ChatTurn, error)) (*v1.Conversation, error) {
+	if err := checkID(turnID, "turn"); err != nil {
+		return nil, err
+	}
+	c, err := m.Get(ctx, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	at := -1
+	for i, t := range c.GetTurns() {
+		if t.GetId() == turnID {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return nil, fmt.Errorf("%w: turn %q of conversation %q", ErrUnknownConversation, turnID, id)
+	}
+	before := FileIDs(c)
+	if c.Turns, err = change(c.GetTurns(), at); err != nil {
+		return nil, err
+	}
+	kept := map[string]bool{}
+	for _, f := range FileIDs(c) {
+		kept[f] = true
+	}
+	var dropped []string
+	for _, f := range before {
+		if !kept[f] {
+			dropped = append(dropped, f)
+		}
+	}
+	var saved *v1.Conversation
+	if len(c.GetTurns()) == 0 {
+		if _, err := m.DB.DeleteConversation(ctx, owner, id); err != nil {
+			return nil, err
+		}
+	} else if saved, err = m.Put(ctx, owner, c); err != nil {
+		return nil, err
+	}
+	if len(dropped) > 0 {
+		if err := m.DeleteFiles(ctx, owner, dropped); err != nil {
+			m.Log.Warn("chat images not removed with their turns", "conversation", id, "err", err)
+		}
+	}
+	return saved, nil
 }
 
 // Saves a conversation for the owner, replacing one with the same id. The
-// title is taken from the first user turn when empty. A replaced conversation
-// keeps its creation time.
+// title is taken from the first user turn when empty, a turn without an id is
+// given one, and a replaced conversation keeps its creation time.
 func (m *Manager) Put(ctx context.Context, owner db.ChatOwner, c *v1.Conversation) (*v1.Conversation, error) {
 	if c == nil {
 		return nil, fmt.Errorf("%w: conversation is required", ErrChat)
@@ -98,9 +228,19 @@ func (m *Manager) Put(ctx context.Context, owner db.ChatOwner, c *v1.Conversatio
 	if len(c.GetTurns()) == 0 {
 		return nil, fmt.Errorf("%w: a conversation needs at least one turn, delete it instead of emptying it", ErrChat)
 	}
+	seen := map[string]bool{}
 	for i, t := range c.GetTurns() {
 		if t.GetRole() != "user" && t.GetRole() != "assistant" && t.GetRole() != "tool" {
 			return nil, fmt.Errorf("%w: turn %d has role %q, want user, assistant or tool", ErrChat, i+1, t.GetRole())
+		}
+		if t.GetId() != "" {
+			if err := checkID(t.GetId(), "turn"); err != nil {
+				return nil, err
+			}
+			if seen[t.GetId()] {
+				return nil, fmt.Errorf("%w: turn %d repeats the id %q of an earlier turn", ErrChat, i+1, t.GetId())
+			}
+			seen[t.GetId()] = true
 		}
 		for _, f := range append(append([]*v1.ChatFile{}, t.GetImages()...), t.GetMedia()...) {
 			if f.GetId() == "" && f.GetUrl() == "" && f.GetError() == "" {
@@ -114,6 +254,9 @@ func (m *Manager) Put(ctx context.Context, owner db.ChatOwner, c *v1.Conversatio
 		}
 	}
 	saved := proto.Clone(c).(*v1.Conversation)
+	if _, err := nameTurns(saved.GetTurns()); err != nil {
+		return nil, err
+	}
 	saved.Title = strings.TrimSpace(saved.GetTitle())
 	if saved.Title == "" {
 		saved.Title = Title(saved.GetTurns())

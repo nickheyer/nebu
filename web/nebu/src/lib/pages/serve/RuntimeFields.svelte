@@ -60,8 +60,8 @@
 </script>
 
 <FieldRow>
-	<Select bind:value={() => (runtimes ? runtimeId || undefined : undefined), (v) => setRuntime(v ?? '')} options={runtimeOptions} label="Runtime" loading={!runtimes} placeholder={optional && runtimes ? 'Any' : undefined} clearable={optional} error={known && runtimeId !== '' && installs.length === 0 ? 'Not installed' : undefined} />
+	<Select bind:value={() => (runtimes ? runtimeId || undefined : undefined), (v) => setRuntime(v ?? '')} options={runtimeOptions} label="Runtime" loading={!runtimes} clearable={optional} unset={optional && runtimes ? 'the runtime each launch needs for its model' : undefined} error={known && runtimeId !== '' && installs.length === 0 ? 'Not installed' : undefined} />
 	{#if running}
-		<Select bind:value={() => installId || undefined, (v) => (installId = v ?? '')} options={installOptions} label="Install" info="Left empty, each launch runs the newest" placeholder={name(installs[0]!)} clearable error={unmet(running) || undefined} />
+		<Select bind:value={() => installId || undefined, (v) => (installId = v ?? '')} options={installOptions} label="Install" clearable unset={`the newest, now ${name(installs[0]!)}`} error={unmet(running) || undefined} />
 	{/if}
 </FieldRow>

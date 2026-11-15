@@ -210,7 +210,7 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("backend", "Compute backend", groupPlacement, "--backend", "", "cpu, cuda0, or diffusion=cuda0,te=cpu", nil, true),
 		strParam("params_backend", "Weights backend", groupPlacement, "--params-backend", "", "disk, cpu, or diffusion=disk,te=cpu", nil, true),
 		strParam("max_vram", "Device memory budget", groupPlacement, "--max-vram", "", "GiB, or cuda0=6,vulkan0=4", nil, true),
-		intParam("threads", "CPU threads", groupPlacement, "--threads", "-1", "threads", "-1 for every physical core", -1, 0, 1, true),
+		named("-1", "every physical core", intParam("threads", "CPU threads", groupPlacement, "--threads", "-1", "threads", "-1 for every physical core", 1, 0, 1, true)),
 		strParam("split_mode", "Split mode", groupPlacement, "--split-mode", "", "layer, row, or diffusion=row,te=layer", nil, true),
 		strParam("rpc_servers", "RPC servers", groupPlacement, "--rpc-servers", "", "host:port, comma separated", nil, true),
 		boolParam("mmap", "Memory map weights", groupPlacement, "--mmap", true),
@@ -246,9 +246,9 @@ func (SDCpp) Params() []*v1.Param {
 			"euler for transformers, lcm for PiD, euler_a for UNets"),
 		sampling("scheduler", "Scheduler", groupDefaults, "--scheduler", v1.ParamType_PARAM_TYPE_STRING, "", sdSchedulers, 0, 0, 0,
 			"family scheduler: flux, flux2, ltx2, logit_normal, lcm, or discrete"),
-		intParam("seed", "Seed", groupDefaults, "--seed", "42", "", "seed of a request that names none, -1 for random", -1, 0, 1, true),
+		named("-1", "random", intParam("seed", "Seed", groupDefaults, "--seed", "42", "", "seed of a request that names none, -1 for random", 0, 0, 1, true)),
 		intParam("batch_count", "Images per request", groupDefaults, "--batch-count", "1", "images", "", 1, 64, 1, true),
-		intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 uses the family default", -1, 12, 1, true),
+		named("-1", "the family's", intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 uses the family default", 1, 12, 1, true)),
 		floatParam("strength", "Strength", groupDefaults, "--strength", "0.75", "", 0, 1, 0.05, true),
 		strParam("negative_prompt", "Negative prompt", groupDefaults, "--negative-prompt", "", "", nil, true),
 		strParam("sigmas", "Custom sigmas", groupDefaults, "--sigmas", "", "14.61,7.8,3.5,0.0", nil, true),
@@ -289,7 +289,7 @@ func (SDCpp) Params() []*v1.Param {
 		floatParam("vace_strength", "VACE strength", groupVideo, "--vace-strength", "1", "", 0, 2, 0.05, true),
 
 		// High noise defaults, the first stage of a Wan 2.2 A14B pair
-		intParam("high_noise_steps", "High noise steps", groupHighNoise, "--high-noise-steps", "-1", "steps", "-1 splits at the MoE boundary", -1, 150, 1, true),
+		named("-1", "to the MoE boundary", intParam("high_noise_steps", "High noise steps", groupHighNoise, "--high-noise-steps", "-1", "steps", "-1 splits at the MoE boundary", 1, 150, 1, true)),
 		floatParam("high_noise_cfg_scale", "High noise guidance scale", groupHighNoise, "--high-noise-cfg-scale", "7", "", 0, 30, 0.5, true),
 		floatParam("high_noise_img_cfg_scale", "High noise image guidance scale", groupHighNoise, "--high-noise-img-cfg-scale", "0", "0 matches the guidance scale", 0, 30, 0.5, true),
 		floatParam("high_noise_guidance", "High noise distilled guidance", groupHighNoise, "--high-noise-guidance", "3.5", "", 0, 30, 0.5, true),
@@ -1135,7 +1135,7 @@ func (SDCpp) Policy() *estimate.Policy {
 		States: func(s *estimate.Scope) []*v1.ParamState {
 			return []*v1.ParamState{
 				bounds("on_device", 0, float64(sdPartCount(s.Descriptor)), 1),
-				bounds("threads", -1, cpuThreads(s.Host), 1),
+				bounds("threads", 1, cpuThreads(s.Host), 1),
 			}
 		},
 	}

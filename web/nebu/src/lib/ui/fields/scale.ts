@@ -3,6 +3,12 @@ export type Curve = 'linear' | 'geometric';
 
 export type Span = { min: number; max: number; step: number; curve: Curve };
 
+// A number a form shows by what it means, such as -1 for no limit
+export type Named = { value: number; label: string };
+
+// A labelled mark under a rail
+export type Tick = { value: number; label: string; at: number };
+
 // Geometric once a rail has too many steps to give each a pixel, linear below that
 export function curveOf(min: number, max: number, step: number): Curve {
 	return (max - min) / step >= 256 ? 'geometric' : 'linear';
@@ -51,4 +57,55 @@ export function stride(v: number, up: boolean, s: Span): number {
 		if (next !== here) return next;
 	}
 	return here;
+}
+
+const grouped = new Intl.NumberFormat('en-US');
+
+// A scale mark in few characters, binary thousands for counts stepped in powers of two and the plain number otherwise
+export function tickLabel(v: number, s: Span): string {
+	const binary = Number.isInteger(s.step) && s.step >= 32 && (s.step & (s.step - 1)) === 0;
+	if (binary && v >= 2 ** 20 && v % 2 ** 20 === 0) return `${v / 2 ** 20}M`;
+	if (binary && v >= 1024 && v % 1024 === 0) return `${v / 1024}K`;
+	return Number.isInteger(v) ? grouped.format(v) : v.toFixed(Math.max(decimalsOf(s.step), decimalsOf(v)));
+}
+
+// The values a rail labels, both ends always and every power of two between them on a geometric one
+export function marks(s: Span): number[] {
+	if (s.max <= s.min) return [s.min];
+	const out = [s.min];
+	if (s.curve === 'geometric') {
+		for (let p = 2 ** Math.ceil(Math.log2(Math.max(s.step, s.min + s.step))); p < s.max; p *= 2) {
+			if (p > s.min && Number.isInteger(p / s.step)) out.push(p);
+		}
+	}
+	out.push(s.max);
+	return out;
+}
+
+// Marks that fit a rail of the given pixels without touching, the ends kept and the inner ones thinned to every nth
+export function ticks(s: Span, width: number, charPx: number): Tick[] {
+	const all = marks(s).map((value) => ({ value, label: tickLabel(value, s), at: place(value, s) }));
+	if (all.length <= 2 || width <= 0) return all;
+	const first = all[0]!;
+	const last = all[all.length - 1]!;
+	const between = all.slice(1, -1);
+	const gap = 12;
+	const size = (t: Tick) => t.label.length * charPx;
+	// An inner mark is centred on its place, the ends sit inside the rail
+	const fits = (inner: Tick[]) => {
+		let edge = size(first) + gap;
+		for (const t of inner) {
+			const left = t.at * width - size(t) / 2;
+			if (left < edge) return false;
+			edge = left + size(t) + gap;
+		}
+		return edge <= width - size(last);
+	};
+	for (let every = 1; every <= between.length; every++) {
+		for (let from = 0; from < every; from++) {
+			const inner = between.filter((_, i) => i % every === from);
+			if (inner.length && fits(inner)) return [first, ...inner, last];
+		}
+	}
+	return [first, last];
 }

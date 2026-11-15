@@ -33,7 +33,7 @@
 			{#if title !== undefined}
 				<div class="heading">
 					<h2 class="title">{title}</h2>
-					{#if info}<InfoTip text={info} />{/if}
+					{#if info}<InfoTip text={info} about={title} />{/if}
 				</div>
 			{/if}
 			{#if tools}<div class="tools dense">{@render tools()}</div>{/if}

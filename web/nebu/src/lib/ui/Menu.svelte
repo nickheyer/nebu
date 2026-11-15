@@ -56,7 +56,7 @@
 </script>
 
 <span class="menu" bind:this={trigger}>
-	<NeoMenu items={menu} {onSelect} placement="bottom-end">
+	<NeoMenu items={menu} {onSelect} placement="bottom-end" filled>
 		<NeoButton text aria-label={label}>
 			{#snippet icon()}<DotsThreeIcon size={20} weight="bold" />{/snippet}
 		</NeoButton>

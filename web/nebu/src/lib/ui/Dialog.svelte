@@ -4,13 +4,14 @@
 	import { NeoDialog } from '#lib/neo/floating/dialog/index.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 
-	// A modal form with a title, fields that scroll when taller than the window, Cancel and one primary action
+	// A modal form with a title, fields that scroll when taller than the window, Cancel and one primary action that says what it still needs
 	let {
 		open = $bindable(false),
 		title,
 		confirm,
 		busy = false,
-		disabled = false,
+		// What the form still needs before its action can run, empty once it needs nothing
+		needs = '',
 		danger = false,
 		width = 'narrow',
 		cancel = 'Cancel',
@@ -25,7 +26,7 @@
 		title: string;
 		confirm?: string;
 		busy?: boolean;
-		disabled?: boolean;
+		needs?: string;
 		danger?: boolean;
 		width?: 'narrow' | 'wide' | 'full' | 'broad';
 		cancel?: string;
@@ -76,9 +77,10 @@
 		<div class="footer">
 			{#if footer}<div class="status">{@render footer()}</div>{/if}
 			<span class="fill"></span>
+			{#if needs && confirm}<span class="needs secondary" aria-live="polite">{needs}</span>{/if}
 			<NeoButton text onclick={close}>{confirm ? cancel : 'Close'}</NeoButton>
 			{#if confirm}
-				<NeoButton class={danger ? 'danger' : 'primary'} elevation={2} loading={busy} {disabled} onclick={() => onconfirm?.()}>{confirm}</NeoButton>
+				<NeoButton class={danger ? 'danger' : 'primary'} elevation={2} loading={busy} disabled={needs !== ''} onclick={() => onconfirm?.()}>{confirm}</NeoButton>
 			{/if}
 		</div>
 	</div>
@@ -146,5 +148,9 @@
 		min-width: 0;
 		font-size: var(--nebu-text-secondary);
 		color: var(--nebu-text-muted);
+	}
+	.needs {
+		min-width: 0;
+		text-align: right;
 	}
 </style>

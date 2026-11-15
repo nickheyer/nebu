@@ -3,7 +3,7 @@
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
-	// A toggle after its label on one line, hugging it when compact, under it when stacked
+	// A toggle at the end of its label's row, hugging the label when compact, under it when stacked
 	let {
 		checked = $bindable(false),
 		label,
@@ -26,21 +26,26 @@
 </div>
 
 <style>
+	/* The label takes the row and the toggle ends it, the row no wider than one column of a form */
 	.switchline {
 		display: flex;
 		gap: var(--nebu-space-3);
 		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		max-width: 26rem;
 		min-width: 0;
 		min-height: var(--nebu-input-height);
 	}
-	/* The label column ends where the second column of a two column form starts */
 	.words {
-		flex: 0 0 min(16rem, calc(50% - var(--nebu-space-3) / 2));
+		flex: 1 1 auto;
 		min-width: 0;
 	}
 	.compact {
 		display: inline-flex;
 		gap: var(--nebu-space-2);
+		justify-content: flex-start;
+		width: auto;
 		min-height: var(--nebu-control);
 	}
 	.compact .words {
@@ -51,6 +56,7 @@
 		flex-direction: column;
 		gap: 4px;
 		align-items: flex-start;
+		justify-content: flex-start;
 	}
 	.stacked .words {
 		flex: 0 0 auto;

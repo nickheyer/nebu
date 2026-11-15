@@ -94,7 +94,7 @@
 				<BytesField bind:value={() => Number(media.maxUploadBytes), (n) => (media.maxUploadBytes = BigInt(Math.round(n)))} label="Largest attachment" />
 			</FieldRow>
 			<FieldRow>
-				<Select bind:value={() => media.imageSize || undefined, (v) => (media.imageSize = v ?? '')} options={imageSizes.map((s) => ({ value: s, label: s }))} label="Image size" placeholder="1024x1024" clearable />
+				<Select bind:value={() => media.imageSize || undefined, (v) => (media.imageSize = v ?? '')} options={imageSizes.map((s) => ({ value: s, label: s }))} label="Image size" unset="1024x1024" clearable />
 				<NumberField bind:value={media.imageSteps} min={0} max={100} label="Image steps" emptyZero />
 			</FieldRow>
 			<FieldRow>
@@ -109,7 +109,7 @@
 		<FormSection title="Presence">
 			<FieldRow>
 				<Segmented bind:value={presence.status} options={presenceStatuses} label="Status" />
-				<Select bind:value={() => presence.activityType || undefined, (v) => (presence.activityType = v ?? '')} options={activityTypes} label="Activity" placeholder="Playing" clearable />
+				<Select bind:value={() => presence.activityType || undefined, (v) => (presence.activityType = v ?? '')} options={activityTypes} label="Activity" unset="Playing" clearable />
 			</FieldRow>
 			<FieldRow wide>
 				<Chips bind:value={presence.activities} label="Activity lines" />

@@ -12,7 +12,6 @@
 	import { chrome, type HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { pageOf } from '#lib/shell/nav.js';
 	import OriginLink from '#lib/ui/OriginLink.svelte';
-	import Select from '#lib/ui/fields/Select.svelte';
 	import CaretLeftIcon from 'phosphor-svelte/lib/CaretLeftIcon';
 	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
 
@@ -25,6 +24,31 @@
 	$effect(() => {
 		document.documentElement.style.setProperty('--nebu-top', `${height}px`);
 	});
+
+	// Which ends of the tab row hold tabs the window does not show
+	let before = $state(false);
+	let after = $state(false);
+
+	// Follows the row's scroll for its faded edges and keeps the open tab in view
+	function strip(node: HTMLElement) {
+		const measure = () => {
+			before = node.scrollLeft > 1;
+			after = node.scrollLeft + node.clientWidth < node.scrollWidth - 1;
+		};
+		const ro = new ResizeObserver(measure);
+		ro.observe(node);
+		node.addEventListener('scroll', measure, { passive: true });
+		$effect(() => {
+			void head?.active;
+			void tabs.length;
+			node.querySelector<HTMLElement>('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+			measure();
+		});
+		return () => {
+			ro.disconnect();
+			node.removeEventListener('scroll', measure);
+		};
+	}
 
 	function pick(t: HeaderTab) {
 		if (t.id === head?.active) return;
@@ -42,16 +66,19 @@
 <header class="top" class:mobile={viewport.mobile} bind:clientHeight={height}>
 	<div class="frame">
 		<div class="titlerow">
-			{#if viewport.mobile}<Brand />{/if}
-			{#if head?.back}
+			{#if head?.back && viewport.mobile}
+				<a class="back" href={head.back.href} aria-label="Back to {head.back.label}"><CaretLeftIcon size={20} /></a>
+			{:else if head?.back}
 				<a class="back" href={head.back.href}><CaretLeftIcon size={16} /><span>{head.back.label}</span></a>
 				<span class="slash" aria-hidden="true">/</span>
+			{:else if viewport.mobile}
+				<Brand />
 			{/if}
 			{#key title}
 				{#if head?.origin}
-					<OriginLink href={head.origin.href} from={head.origin.label} external><h1 class="title">{title}</h1></OriginLink>
+					<OriginLink href={head.origin.href} from={head.origin.label} external stacked={viewport.mobile}><h1 class="title">{title}</h1></OriginLink>
 				{:else}
-					<h1 class="title ellipsis">{title}</h1>
+					<h1 class="title">{title}</h1>
 				{/if}
 			{/key}
 			<span class="fill"></span>
@@ -70,32 +97,27 @@
 			</div>
 		</div>
 		{#if tabs.length}
-			{#if viewport.mobile && tabs.length > 3}
-				<div class="tabselect">
-					<Select value={head?.active} options={tabs.map((t) => ({ value: t.id, label: t.label }))} onchange={(v) => { const t = tabs.find((x) => x.id === v); if (t) pick(t); }} />
-				</div>
-			{:else}
-				<nav class="tabs" aria-label="Tabs">
-					{#each tabs as t, i (t.id)}
-						{@const on = t.id === head?.active}
-						<a
-							class="tab"
-							class:on
-							style:--i={i}
-							href={t.href}
-							aria-current={on ? 'page' : undefined}
-							onclick={(e) => {
-								if (head?.ontab || !t.href) {
-									e.preventDefault();
-									pick(t);
-								}
-							}}
-						>
-							{t.label}
-						</a>
-					{/each}
-				</nav>
-			{/if}
+			<!-- Every section keeps its tabs on every width, a row too long for the window scrolling sideways with its cut edge faded -->
+			<nav class="tabs" class:before class:after aria-label="Tabs" {@attach strip}>
+				{#each tabs as t, i (t.id)}
+					{@const on = t.id === head?.active}
+					<a
+						class="tab"
+						class:on
+						style:--i={i}
+						href={t.href}
+						aria-current={on ? 'page' : undefined}
+						onclick={(e) => {
+							if (head?.ontab || !t.href) {
+								e.preventDefault();
+								pick(t);
+							}
+						}}
+					>
+						{t.label}
+					</a>
+				{/each}
+			</nav>
 		{/if}
 	</div>
 </header>
@@ -122,12 +144,19 @@
 		min-width: 0;
 		height: 60px;
 	}
+	/* The title holds one line beside the page's controls, clipped where the bar runs out */
 	.title {
 		flex: 0 1 auto;
 		min-width: 0;
+		overflow: hidden;
 		font-size: var(--nebu-text-title);
 		font-weight: 500;
+		white-space: nowrap;
+		text-overflow: ellipsis;
 		animation: nebu-reveal 240ms var(--nebu-settle) backwards;
+	}
+	.titlerow > :global(.brand) {
+		flex: 0 0 auto;
 	}
 	.back {
 		display: inline-flex;
@@ -163,9 +192,25 @@
 		min-width: 0;
 		height: 40px;
 		margin-top: -6px;
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: none;
+	}
+	.tabs::-webkit-scrollbar {
+		display: none;
+	}
+	.tabs.before {
+		mask-image: linear-gradient(to right, transparent, #000 var(--nebu-space-6));
+	}
+	.tabs.after {
+		mask-image: linear-gradient(to left, transparent, #000 var(--nebu-space-6));
+	}
+	.tabs.before.after {
+		mask-image: linear-gradient(to right, transparent, #000 var(--nebu-space-6), #000 calc(100% - var(--nebu-space-6)), transparent);
 	}
 	.tab {
 		display: inline-flex;
+		flex: 0 0 auto;
 		align-items: center;
 		color: var(--nebu-text-muted);
 		white-space: nowrap;
@@ -185,10 +230,29 @@
 		color: var(--neo-color-primary);
 		border-bottom-color: var(--neo-color-primary);
 	}
-	.tabselect {
-		padding-bottom: var(--nebu-space-3);
-	}
+	/* A narrow bar grows with a long title, which takes two lines before it clips */
 	.mobile .titlerow {
-		height: 52px;
+		gap: var(--nebu-space-2);
+		height: auto;
+		min-height: 52px;
+		padding: var(--nebu-space-1) 0;
+	}
+	.mobile .title {
+		display: -webkit-box;
+		font-size: 17px;
+		line-height: 22px;
+		white-space: normal;
+		overflow-wrap: anywhere;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+	}
+	.mobile .back {
+		justify-content: center;
+		width: 40px;
+		height: 40px;
+		margin-left: -10px;
+		color: var(--neo-text-color);
+		border-radius: var(--neo-border-radius);
 	}
 </style>

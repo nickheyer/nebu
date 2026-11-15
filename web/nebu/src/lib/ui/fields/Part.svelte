@@ -11,7 +11,6 @@
 		fetch,
 		label,
 		info,
-		placeholder,
 		message,
 		current,
 		filter = 'any',
@@ -22,7 +21,6 @@
 		fetch: PickerFetch<string>;
 		label?: string;
 		info?: string;
-		placeholder?: string;
 		message?: string;
 		current?: string;
 		filter?: BrowseFilter;
@@ -47,7 +45,7 @@
 {/snippet}
 
 <div class="part">
-	<Picker value={value || undefined} {fetch} {label} {info} {placeholder} {message} {disabled} {current} clearable trailing={browse} onchange={set} />
+	<Picker value={value || undefined} {fetch} {label} {info} {message} {disabled} {current} clearable trailing={browse} onchange={set} />
 </div>
 <DirectoryBrowser bind:open {start} {filter} onpick={set} />
 

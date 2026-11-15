@@ -16,7 +16,7 @@
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
-	import KeyRows from '#lib/ui/KeyRows.svelte';
+	import KeyRows, { type KeyRow } from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LoadMore from '#lib/ui/LoadMore.svelte';
@@ -161,6 +161,17 @@
 		skipPatches = on ? skipPatches.filter((x) => x !== id) : [...skipPatches.filter((x) => x !== id), id];
 	}
 
+	// An existing binary nebu did not find on PATH has to be pointed at
+	const needsPath = $derived(option?.method?.kind === InstallKind.ADOPTED && option.unmet.length > 0);
+	// What the form still needs before it can run
+	const blocked = $derived.by(() => {
+		const kind = option?.method?.kind;
+		if (kind === InstallKind.ADOPTED && needsPath && adoptPath.trim() === '') return 'Give the path of the binary';
+		if (kind === InstallKind.BUILT && !variant) return 'Pick a variant';
+		if (kind === InstallKind.BUILT && missing.length > 0) return missingText(missing);
+		return '';
+	});
+
 	function commit() {
 		const kind = option?.method?.kind;
 		if (kind === InstallKind.ADOPTED) return adopt();
@@ -245,18 +256,78 @@
 		return i.kind === InstallKind.ADOPTED ? 'existing' : i.kind === InstallKind.BUILT ? 'built' : 'downloaded';
 	}
 
-	function installRows(i: Install) {
-		return [
-			{ label: 'origin', value: i.origin, mono: true },
-			{ label: 'path', value: i.path, mono: true, copy: true },
-			{ label: 'directory', value: i.dir, mono: true },
-			{ label: 'created', value: when(i.createdAt) },
-			...Object.entries(i.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true }))
-		];
+	type Group = { title: string; rows: KeyRow[] };
+
+	// Facts an install carries about where it came from, shown with the build it was made by
+	const madeBy = ['recipe', 'variant', 'commit', 'build'];
+
+	// Names with the count of each said once, in first seen order
+	function counted(names: string[]): string[] {
+		const by = new Map<string, number>();
+		for (const n of names) by.set(n, (by.get(n) ?? 0) + 1);
+		return [...by].map(([n, c]) => (c > 1 ? `${n} \u00d7${c}` : n));
 	}
 
-	function buildTip(b: Build): string {
-		return [b.commit ? `commit ${b.commit}` : '', `sandbox ${enumLabel(SandboxKindSchema, b.sandbox)}`, b.image ? `image ${b.image}` : '', b.dir ? `directory ${b.dir}` : '', b.binary ? `binary ${b.binary}` : ''].filter(Boolean).join('\n');
+	// What an install is, what made it, what it sits beside and what it was probed for, each under its own title
+	function installGroups(i: Install): Group[] {
+		const facts = Object.entries(i.facts);
+		const flag = ([, v]: [string, string]) => v.startsWith('--');
+		const file = ([k, v]: [string, string]) => v.startsWith('/') && !madeBy.includes(k);
+		const rest = facts.filter((f) => !flag(f) && !file(f) && !madeBy.includes(f[0]) && f[0] !== 'version' && f[0] !== 'devices');
+		const build = live.builds.get(i.buildId);
+		return [
+			{
+				title: 'Install',
+				rows: [
+					{ label: 'version', value: i.version || i.facts.version || '', mono: true },
+					{ label: 'added', value: when(i.createdAt) },
+					{ label: 'origin', value: i.origin },
+					{ label: 'binary', value: i.path, mono: true, copy: true },
+					{ label: 'directory', value: i.dir, mono: true, copy: true },
+					{ label: 'devices', value: (i.facts.devices ?? '').split(',').join(', '), mono: true }
+				]
+			},
+			{
+				title: 'Build',
+				rows: [
+					{ label: 'recipe', value: [i.facts.recipe, i.facts.variant].filter(Boolean).join(', ') },
+					{ label: 'ref', value: build?.ref ?? '', mono: true },
+					{ label: 'commit', value: i.facts.commit ?? '', mono: true, copy: true },
+					{ label: 'build', value: i.facts.build ?? '', mono: true, href: i.facts.build ? `/runtimes/${encodeURIComponent(id)}/builds` : undefined }
+				]
+			},
+			{ title: 'Beside the binary', rows: facts.filter(file).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, copy: true })) },
+			{ title: 'Detected', rows: rest.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })) }
+		].filter((g) => g.rows.some((r) => r.value !== ''));
+	}
+
+	// The command line flags a probe found the binary to take, in order
+	function installFlags(i: Install): string[] {
+		return Object.values(i.facts)
+			.filter((v) => v.startsWith('--'))
+			.sort();
+	}
+
+	// What a build was made from, where it ran, the options it was given and the host it was built for
+	function buildGroups(b: Build): Group[] {
+		return [
+			{
+				title: 'Build',
+				rows: [
+					{ label: 'ref', value: b.ref, mono: true },
+					{ label: 'commit', value: b.commit, mono: true, copy: true },
+					{ label: 'built in', value: [enumLabel(SandboxKindSchema, b.sandbox), b.image].filter(Boolean).join(', ') },
+					{ label: 'started', value: when(b.createdAt) },
+					{ label: 'took', value: duration(b.createdAt, b.finishedAt, clockTick.now) },
+					{ label: 'task', value: shortId(b.taskId), href: b.taskId ? `/tasks/${b.taskId}` : undefined, mono: true },
+					{ label: 'binary', value: b.binary, mono: true, copy: true },
+					{ label: 'directory', value: b.dir, mono: true, copy: true }
+				]
+			},
+			{ title: 'Options', rows: Object.entries(b.vars).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })) },
+			{ title: 'Built for', rows: Object.entries(b.facts).map(([k, v]) => ({ label: factLabel(k), value: v.split(',').join(', '), mono: true })) },
+			{ title: 'Patches', rows: b.patches.map((p, n) => ({ label: String(n + 1), value: p, mono: true })) }
+		].filter((g) => g.rows.some((r) => r.value !== ''));
 	}
 
 	// The stored defaults for this runtime, merged under every slot and launch
@@ -311,9 +382,18 @@
 		{#if v.choices.length}
 			<Select value={vars[v.name] || v.default} options={v.choices.map((c) => ({ value: c, label: c }))} label={v.label || v.name} info={v.description || undefined} onchange={(x) => (vars[v.name] = x ?? '')} />
 		{:else}
-			<Text value={vars[v.name] ?? ''} label={v.label || v.name} info={v.description || undefined} placeholder={v.default || undefined} onchange={(x) => (vars[v.name] = x)} />
+			<Text value={vars[v.name] ?? ''} label={v.label || v.name} info={v.description || undefined} unset={v.default || undefined} onchange={(x) => (vars[v.name] = x)} />
 		{/if}
 	{/if}
+{/snippet}
+
+{#snippet groups(list: Group[])}
+	{#each list as g (g.title)}
+		<section class="group" aria-label={g.title}>
+			<h3 class="label">{g.title}</h3>
+			<KeyRows dense rows={g.rows} />
+		</section>
+	{/each}
 {/snippet}
 
 {#snippet installForm()}
@@ -327,7 +407,7 @@
 			</FormSection>
 			{#if option?.method?.kind === InstallKind.ADOPTED}
 				<FormSection>
-					<Path bind:value={adoptPath} label="Binary" filter="executables" />
+					<Path bind:value={adoptPath} label="Binary" filter="executables" required={needsPath} unset={needsPath ? undefined : 'the one found on PATH'} />
 				</FormSection>
 			{:else if option?.method?.kind === InstallKind.PREBUILT}
 				{#if option.fields.length}
@@ -342,9 +422,6 @@
 							{#each pair as f (f.kind === 'var' ? `var:${f.v.name}` : f.kind)}{@render buildField(f)}{/each}
 						</FieldRow>
 					{/each}
-					{#if missing.length}
-						<Str value={missingText(missing)} kind="message" color="error" width="100%" />
-					{/if}
 				</FormSection>
 				{#if patches.length}
 					<FormSection title="Patches">
@@ -362,7 +439,7 @@
 				{/if}
 			{/if}
 		</Stack>
-		<SaveBar always dirty saving={busy} label={verb} disabled={option?.method?.kind === InstallKind.BUILT && (missing.length > 0 || !variant)} onsave={commit} ondiscard={() => ontab('installs')} />
+		<SaveBar always dirty saving={busy} label={verb} needs={blocked} onsave={commit} ondiscard={() => ontab('installs')} />
 	</div>
 {/snippet}
 
@@ -383,8 +460,9 @@
 </div>
 <div class="body">
 	{#if shown === 'installs'}
-		{#if installing}{@render installForm()}{/if}
-		{#if !installList.settled}
+		{#if installing}
+			{@render installForm()}
+		{:else if !installList.settled}
 			<Skeleton rows={2} primary="12ch" secondary="24ch" facts={0} menu={false} />
 		{:else if installList.error}
 			<Empty text="Installs failed to list" hint={installList.error} action="Retry" onclick={() => installList.refresh()} />
@@ -397,7 +475,7 @@
 				{/if}
 			{/if}
 		{:else}
-			<List>
+			<List head={{ primary: 'Version', secondary: 'Method' }}>
 				{#each installs as i (i.id)}
 					{@const using = users(i.id)}
 					{@const used = using.slots.length + using.instances.length > 0}
@@ -406,16 +484,22 @@
 							<Confirm label="Remove" question="Remove {installLabel(i)}?" danger onconfirm={() => removeInstall(i)} />
 						{/snippet}
 						{#snippet expand()}
-							<KeyRows dense rows={installRows(i)} />
-							{#if i.status?.conditions.length}<Conditions conditions={i.status.conditions} />{/if}
+							{@const flags = installFlags(i)}
+							{@render groups(installGroups(i))}
+							{#if flags.length}
+								<section class="group" aria-label="Flags it takes">
+									<h3 class="label">Flags it takes</h3>
+									<div class="flags">{#each flags as f (f)}<span class="flag">{f}</span>{/each}</div>
+								</section>
+							{/if}
+							{#if i.status?.conditions.length}
+								<section class="group" aria-label="Checks">
+									<h3 class="label">Checks</h3>
+									<Conditions conditions={i.status.conditions} />
+								</section>
+							{/if}
 							{#if used}
-								<KeyRows
-									dense
-									rows={[
-										{ label: 'slots', value: using.slots.join(', '), tip: using.slots.join('\n') },
-										{ label: 'instances', value: using.instances.join(', '), tip: using.instances.join('\n') }
-									]}
-								/>
+								{@render groups([{ title: 'Used by', rows: [{ label: 'slots', value: counted(using.slots).join(', ') }, { label: 'instances', value: counted(using.instances).join(', ') }] }])}
 							{/if}
 						{/snippet}
 					</ListRow>
@@ -430,28 +514,20 @@
 			<Empty text="Builds failed to list" hint={buildList.error} action="Retry" onclick={() => buildList.refresh()} />
 		{:else if builds.length === 0}
 			{#if buildMethod}
-				<Empty icon={HammerIcon} text="No builds" action="Build" onclick={startBuild} />
+				<Empty icon={HammerIcon} text="No builds" hint="A build compiles the runtime from source for this host" />
 			{:else}
 				<Empty icon={HammerIcon} text="No builds" />
 			{/if}
 		{:else}
 			<List head={{ primary: 'Variant', secondary: 'Ref', facts: ['Duration'] }}>
 				{#each builds as b (b.id)}
-					<ListRow lamp={buildLamp(b.state)} primary={b.variant || b.recipeId} primaryTip={buildTip(b)} secondary={b.ref} secondaryKind="version" secondaryWidth="12ch" facts={[{ value: duration(b.createdAt, b.finishedAt, clockTick.now) }]}>
+					<ListRow lamp={buildLamp(b.state)} primary={b.variant || b.recipeId} secondary={b.ref} secondaryKind="version" secondaryWidth="12ch" facts={[{ value: duration(b.createdAt, b.finishedAt, clockTick.now) }]}>
 						{#snippet action()}
 							<Confirm label="Remove" question="Remove build {b.variant || b.recipeId}?" danger onconfirm={() => removeBuild(b)} />
 						{/snippet}
 						{#snippet expand()}
 							{#if b.error}<p class="error-text failure">{b.error}</p>{/if}
-							<KeyRows
-								dense
-								rows={[
-									...Object.entries(b.vars).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })),
-									...Object.entries(b.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })),
-									{ label: 'patches', value: b.patches.join(', '), tip: b.patches.join('\n') },
-									{ label: 'task', value: shortId(b.taskId), href: b.taskId ? `/tasks/${b.taskId}` : undefined, mono: true }
-								]}
-							/>
+							{@render groups(buildGroups(b))}
 						{/snippet}
 					</ListRow>
 				{/each}
@@ -463,7 +539,7 @@
 			<Empty icon={SlidersHorizontalIcon} text="No parameters" />
 		{:else}
 			<Stack gap={24}>
-				<ParamsForm params={rt.params} bind:values={draft} />
+				<ParamsForm params={rt.params} bind:values={draft} restingWord="Built in" />
 			</Stack>
 			<SaveBar dirty={draftDirty} saving={savingDefaults} error={defaultsError} onsave={saveDefaults} ondiscard={() => (draft = { ...stored })} />
 		{/if}
@@ -471,6 +547,29 @@
 </div>
 
 <style>
+	/* Each kind of fact sits under its own title */
+	.group {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-1);
+		min-width: 0;
+	}
+	.group + .group {
+		margin-top: var(--nebu-space-2);
+	}
+	.flags {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 6px;
+	}
+	.flag {
+		padding: 1px 6px;
+		font-family: var(--nebu-font-mono);
+		font-size: var(--nebu-text-caption);
+		background: var(--nebu-surface-sunken);
+		border-radius: 4px;
+		box-shadow: var(--neo-box-shadow-inset-1);
+	}
 	.tabrow {
 		display: flex;
 		gap: var(--nebu-space-3);

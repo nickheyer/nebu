@@ -108,8 +108,8 @@
 	</FormSection>
 	<FormSection title="Sampling" advanced={samplingAdvanced}>
 		<FieldRow>
-			<Slider bind:value={sampling.temperature} min={0} max={2} step={0.05} label="Temperature" optional />
-			<Slider bind:value={sampling.topP} min={0} max={1} step={0.01} label="Top p" optional />
+			<Slider bind:value={sampling.temperature} min={0} max={2} step={0.05} label="Temperature" resting="set by the server" optional />
+			<Slider bind:value={sampling.topP} min={0} max={1} step={0.01} label="Top p" resting="set by the server" optional />
 		</FieldRow>
 	</FormSection>
 	<FormSection title="Behaviour" advanced={humanize.enabled ? humanizeAdvanced : undefined}>

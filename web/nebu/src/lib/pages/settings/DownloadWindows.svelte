@@ -38,7 +38,7 @@
 		<Cell min="9rem"><MultiSelect bind:value={() => daysOf(w.days), (v) => (w.days = v.join(','))} options={days} label={i === 0 ? 'Days' : undefined} /></Cell>
 		<Cell min="6.5rem" grow={false}><Text bind:value={w.from} type="time" label={i === 0 ? 'From' : undefined} /></Cell>
 		<Cell min="6.5rem" grow={false}><Text bind:value={w.to} type="time" label={i === 0 ? 'To' : undefined} /></Cell>
-		<Cell min="13rem"><Bytes bind:value={() => Number(w.maxBytesPerSecond), (n) => (w.maxBytesPerSecond = BigInt(n))} label={i === 0 ? 'Speed limit per second' : undefined} disabled={w.pause} emptyZero /></Cell>
+		<Cell min="13rem"><Bytes bind:value={() => Number(w.maxBytesPerSecond), (n) => (w.maxBytesPerSecond = BigInt(n))} label={i === 0 ? 'Speed limit per second' : undefined} disabled={w.pause} units={['KB', 'MB', 'GB']} emptyZero unset={w.pause ? undefined : 'the limit above'} /></Cell>
 		<Cell grow={false}><Switch bind:checked={w.pause} label="Pause" compact /></Cell>
 		<Cell grow={false}>
 			<NeoButton text aria-label="Remove window" onclick={() => (value = value.filter((_, j) => j !== i))}>

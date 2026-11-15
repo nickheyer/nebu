@@ -365,7 +365,7 @@ func checkRefs(params []*v1.Param) error {
 	return nil
 }
 
-// Validates numeric bounds, positive steps, and placeholders only on non bool params without a default
+// Validates numeric bounds, positive steps, names, and placeholders only on non bool params without a default
 func checkForm(p *v1.Param) error {
 	if p.GetPlaceholder() != "" && (p.GetDefault() != "" || p.GetType() == v1.ParamType_PARAM_TYPE_BOOL) {
 		return fmt.Errorf("param %s: a placeholder belongs to a param with no default that is not a bool", p.GetName())
@@ -385,6 +385,37 @@ func checkForm(p *v1.Param) error {
 			if v != float64(int64(v)) {
 				return fmt.Errorf("param %s: int bounds and step must be whole numbers", p.GetName())
 			}
+		}
+	}
+	return checkNames(p, numeric)
+}
+
+// Validates that names sit on numeric params, each a distinct number with a label, and that a number
+// a param rests on below its scale is one of them
+func checkNames(p *v1.Param, numeric bool) error {
+	if !numeric {
+		if len(p.GetNames()) > 0 {
+			return fmt.Errorf("param %s: names apply to int and float params only", p.GetName())
+		}
+		return nil
+	}
+	seen := map[float64]bool{}
+	for _, n := range p.GetNames() {
+		v, err := strconv.ParseFloat(n.GetValue(), 64)
+		if err != nil || p.GetType() == v1.ParamType_PARAM_TYPE_INT && v != float64(int64(v)) {
+			return fmt.Errorf("param %s: name %q stands for %q, which is not a number of the param's type", p.GetName(), n.GetLabel(), n.GetValue())
+		}
+		if strings.TrimSpace(n.GetLabel()) == "" {
+			return fmt.Errorf("param %s: the name of %s is empty", p.GetName(), n.GetValue())
+		}
+		if seen[v] {
+			return fmt.Errorf("param %s: %s is named twice", p.GetName(), n.GetValue())
+		}
+		seen[v] = true
+	}
+	for _, rest := range []string{p.GetDefault(), p.GetPlaceholder()} {
+		if v, err := strconv.ParseFloat(rest, 64); err == nil && v < p.GetMin() && !seen[v] {
+			return fmt.Errorf("param %s: it rests on %s, below its scale, which needs a name", p.GetName(), rest)
 		}
 	}
 	return nil
@@ -642,6 +673,12 @@ func scaledIn(scaled string, p *v1.Param) *v1.Param {
 // Sets the text an empty control shows for what the runtime keeps unset
 func placeholder(text string, p *v1.Param) *v1.Param {
 	p.Placeholder = text
+	return p
+}
+
+// Names a numeric value that stands for a state, which a form shows by the name and keeps off its scale
+func named(value, label string, p *v1.Param) *v1.Param {
+	p.Names = append(p.Names, &v1.ParamName{Value: value, Label: label})
 	return p
 }
 

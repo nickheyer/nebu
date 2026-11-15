@@ -1,15 +1,17 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
+	import { bytes } from '#lib/format.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import Stepper from '#lib/ui/fields/Stepper.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
-	type Unit = 'MB' | 'GB' | 'TB';
-	const units: Unit[] = ['MB', 'GB', 'TB'];
+	type Unit = 'KB' | 'MB' | 'GB' | 'TB';
 	// Binary steps under the labels every byte count in the app reads in
-	const factors: Record<Unit, number> = { MB: 2 ** 20, GB: 2 ** 30, TB: 2 ** 40 };
+	const factors: Record<Unit, number> = { KB: 2 ** 10, MB: 2 ** 20, GB: 2 ** 30, TB: 2 ** 40 };
 
-	// A byte count as a number and a unit, zero empty under emptyZero, the empty box showing the count it resolves to
+	// A byte count as a number and a unit, zero empty under emptyZero with the count it comes to written under it
 	let {
 		value = $bindable(0),
 		label,
@@ -17,11 +19,15 @@
 		disabled = false,
 		message,
 		fallback,
+		// What an empty box comes to in words, when no count says it
+		unset,
+		// The units offered, those a count of this kind is stated in
+		units = ['MB', 'GB', 'TB'],
 		emptyZero = false
-	}: { value?: number; label?: string; info?: string; disabled?: boolean; message?: string; fallback?: number; emptyZero?: boolean } = $props();
+	}: { value?: number; label?: string; info?: string; disabled?: boolean; message?: string; fallback?: number; unset?: string; units?: Unit[]; emptyZero?: boolean } = $props();
 
 	const id = fieldId();
-	let unit = $state<Unit>('GB');
+	let unit = $state<Unit>(untrack(() => (units.includes('GB') ? 'GB' : units[units.length - 1]!)));
 	let raw = $state<number | string | null>(0);
 	let focused = $state(false);
 	let emitted: number | undefined;
@@ -34,9 +40,8 @@
 	// A value set from outside takes the largest unit it reaches
 	$effect(() => {
 		if (focused || value === emitted) return;
-		let best: Unit = 'MB';
-		if (value >= factors.TB) best = 'TB';
-		else if (value >= factors.GB) best = 'GB';
+		let best: Unit = units[0]!;
+		for (const u of units) if (value >= factors[u]) best = u;
 		if (value === 0 && emptyZero) {
 			raw = '';
 			return;
@@ -68,7 +73,8 @@
 
 <div class="field">
 	<FieldLabel {label} {info} forId={id} />
-	<Stepper {id} bind:raw bind:focused min={0} step={unit === 'MB' ? 1 : 0.5} {disabled} {message} fallback={fallback === undefined ? undefined : inUnit(fallback, unit)} ariaLabel={label} tail={unitButtons} onchange={changed} />
+	<Stepper {id} bind:raw bind:focused min={0} step={unit === units[0] ? 1 : 0.5} {disabled} {message} fallback={fallback === undefined ? undefined : inUnit(fallback, unit)} ariaLabel={label} tail={unitButtons} onchange={changed} />
+	{#if emptyZero && (raw === '' || raw === null) && (fallback !== undefined || unset !== undefined)}<Resting text={fallback === undefined ? unset : bytes(fallback)} />{/if}
 </div>
 
 <style>

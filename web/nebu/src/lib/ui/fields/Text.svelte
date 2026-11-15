@@ -3,6 +3,7 @@
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { NeoInput } from '#lib/neo/inputs/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
 	let {
@@ -10,6 +11,8 @@
 		label,
 		info,
 		placeholder,
+		// What an empty box comes to, written under it
+		unset,
 		max,
 		min,
 		mono = false,
@@ -22,7 +25,7 @@
 		autocomplete = 'off',
 		before,
 		after,
-		// A toolbar field, its label standing as the placeholder
+		// A toolbar field, its label inside the box before the text unless an icon stands there
 		compact = false,
 		onchange
 	}: {
@@ -30,6 +33,7 @@
 		label?: string;
 		info?: string;
 		placeholder?: string;
+		unset?: string;
 		max?: number;
 		min?: number;
 		mono?: boolean;
@@ -49,12 +53,16 @@
 	const id = fieldId();
 </script>
 
+{#snippet lead()}
+	<span class="inlabel">{label}</span>
+{/snippet}
+
 <div class="field" class:monofield={mono} class:compact>
 	{#if !compact}<FieldLabel {label} {info} forId={id} {required} />{/if}
 	<NeoInput
 		bind:value
 		{id}
-		placeholder={placeholder ?? (compact ? label : undefined)}
+		placeholder={placeholder ?? (compact && before ? label : undefined)}
 		maxlength={max}
 		minlength={min}
 		{disabled}
@@ -68,14 +76,21 @@
 		{message}
 		{error}
 		{autocomplete}
-		{before}
+		before={compact && label && !before ? lead : before}
 		{after}
 		aria-label={label}
 		onchange={() => onchange?.(value)}
 	/>
+	{#if unset && value === ''}<Resting text={unset} />{/if}
 </div>
 
 <style>
+	/* A toolbar field keeps its name in the box before what it holds */
+	.inlabel {
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+		white-space: nowrap;
+	}
 	.field {
 		display: flex;
 		flex-direction: column;

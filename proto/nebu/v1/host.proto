@@ -80,6 +80,8 @@ message ProbeResult {
   string probe_id = 1;
   ProbeStatus status = 2;
   string detail = 3;
+  // What the probe looks for, in words
+  string description = 4;
 }
 
 // Probed host profile.

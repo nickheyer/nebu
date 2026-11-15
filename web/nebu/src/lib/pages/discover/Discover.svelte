@@ -11,6 +11,7 @@
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
+	import Dialog from '#lib/ui/Dialog.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -26,7 +27,7 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
-	import { paramLabel } from '#lib/pages/models/models.js';
+	import { paramCount } from '#lib/pages/models/models.js';
 	import { modelsTabs } from '#lib/pages/models/tabs.js';
 	import { compact, lastSearch, repoPath } from '#lib/pages/discover/discover.js';
 	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
@@ -156,6 +157,7 @@
 			h.downloads ? `${num(h.downloads)} downloads` : '',
 			h.likes ? `${num(h.likes)} likes` : '',
 			h.updatedAt ? `updated ${when(h.updatedAt)}` : '',
+			h.license ? `license ${h.license}` : '',
 			h.gated ? 'gated' : '',
 			h.private ? 'private' : ''
 		]
@@ -163,13 +165,19 @@
 			.join('\n');
 	}
 
-	function phrase(h: SearchHit): string {
+	// The formats a repository holds, each once
+	function formatsOf(h: SearchHit): string {
 		const seen = new Set<string>();
-		return [...h.formats.slice(0, 3), h.license].filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase())).join(' · ');
+		return h.formats.filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase())).join(', ');
 	}
 
-	function sizeOf(h: SearchHit): string {
-		return h.sizeBytes ? bytes(h.sizeBytes) : paramLabel(h.parameters);
+	// What a row says of a repository beside its name, a dash where the source states nothing
+	function hitFacts(h: SearchHit) {
+		return [
+			{ value: h.sizeBytes ? bytes(h.sizeBytes) : '\u2014', tip: h.sizeBytes ? 'Every file of the repository together' : 'The source states no size' },
+			{ value: paramCount(h.parameters) || '\u2014', tip: h.parameters ? `${num(h.parameters)} parameters` : 'The source states no parameter count' },
+			{ value: h.downloads ? compact(h.downloads) : '\u2014', tip: h.downloads ? `${num(h.downloads)} downloads` : 'The source states no download count' }
+		];
 	}
 </script>
 
@@ -190,15 +198,15 @@
 	<Toolbar>
 		<span class="source" class:grow={viewport.mobile}><Select value={sourceId} options={sourceOptions} loading={!sourcesLoaded} onchange={sourceChanged} fit={!viewport.mobile} /></span>
 		<span class="grow"><SearchBox bind:value={query} width="100%" /></span>
-		<span class="sort"><Select bind:value={sort} options={sorts} disabled={!sorts.length} icon={sortIcon} fit /></span>
+		<span class="sort" class:wide={viewport.mobile}><Select bind:value={sort} options={sorts} disabled={!sorts.length} icon={sortIcon} fit={!viewport.mobile} /></span>
 		{#if reversible}
 			<NeoButton text aria-label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)}>
 				{#snippet icon()}{#if ascending}<ArrowUpIcon size={20} />{:else}<ArrowDownIcon size={20} />{/if}{/snippet}
 			</NeoButton>
 		{/if}
-		<NeoButton elevation={2} aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>
-			{#snippet icon()}<FunnelIcon size={20} />{/snippet}
-			Filters
+		<NeoButton elevation={2} toggle checked={filtersOpen} color={filtersOpen || activeFilters ? 'primary' : undefined} aria-expanded={filtersOpen} aria-label={activeFilters ? `Filters, ${activeFilters} set` : 'Filters'} onclick={() => (filtersOpen = !filtersOpen)}>
+			{#snippet icon()}<FunnelIcon size={20} weight={activeFilters ? 'fill' : 'regular'} />{/snippet}
+			Filters{#if activeFilters}<span class="count">{activeFilters}</span>{/if}
 		</NeoButton>
 	</Toolbar>
 {/snippet}
@@ -208,10 +216,10 @@
 <PageHeader tabs={modelsTabs} active="discover" />
 
 <Card flush tools={toolbar}>
-	{#if filtersOpen || activeFilters}
+	{#if !viewport.mobile && (filtersOpen || activeFilters)}
 		<div class="filterbar dense">
 			{#if filtersOpen}<div class="filters">{@render facetFields()}</div>{/if}
-			{#if activeFilters}<span class="clear"><NeoButton text onclick={clearFacets}>Clear active</NeoButton></span>{/if}
+			{#if activeFilters}<span class="clear"><NeoButton text onclick={clearFacets}>Clear filters</NeoButton></span>{/if}
 		</div>
 	{/if}
 	{#if warning.length}
@@ -220,7 +228,7 @@
 	{#if sourcesError}
 		<Empty icon={PlugsIcon} text="Sources failed to list" hint={sourcesError} action="Retry" onclick={loadSources} />
 	{:else if sourcesLoaded && sources.length === 0}
-		<Empty icon={PlugsIcon} text="No sources" action="Sources" href="/settings/sources" primary />
+		<Empty icon={PlugsIcon} text="No sources" action="Add a source" href="/settings/sources" primary />
 	{:else if !sourcesLoaded || !list.settled}
 		<Skeleton rows={10} dot={false} primary="40ch" secondary="28ch" facts={2} action={false} menu={false} />
 	{:else if list.error}
@@ -228,18 +236,18 @@
 	{:else if list.items.length === 0 && (query || activeFilters)}
 		<Empty icon={MagnifyingGlassIcon} text="No results" action="Clear filters" onclick={clearFilters} />
 	{:else if list.items.length === 0}
-		<Empty icon={MagnifyingGlassIcon} text="No results" action="Sources" href="/settings/sources" />
+		<Empty icon={MagnifyingGlassIcon} text="No results" action="Manage sources" href="/settings/sources" />
 	{:else}
-		<List head={{ primary: 'Repository', secondary: 'Details', facts: ['Downloads', 'Size'] }}>
+		<List head={{ primary: 'Repository', secondary: 'Formats', facts: ['Size', 'Parameters', 'Downloads'] }}>
 			{#each list.items as h (`${h.sourceId}\n${h.repo}`)}
 				{@const inStore = stored.has(`${h.sourceId}\n${h.repo}`)}
 				<ListRow
 					primary={h.repo}
 					primaryWidth="40ch"
 					primaryTip={hitTip(h) ? `${h.repo}\n${hitTip(h)}` : h.repo}
-					secondary={phrase(h)}
-					secondaryWidth="28ch"
-					facts={[{ value: h.downloads ? compact(h.downloads) : '', tip: h.downloads ? `${num(h.downloads)} downloads` : undefined }, { value: sizeOf(h) }]}
+					secondary={formatsOf(h) || '\u2014'}
+					secondaryWidth="16ch"
+					facts={hitFacts(h)}
 					onclick={() => goto(repoPath(h.sourceId, h.repo))}
 				>
 					{#snippet badges()}
@@ -252,13 +260,50 @@
 	{/if}
 </Card>
 
+<!-- A narrow screen picks its filters in a dialog over the results instead of pushing them down the page -->
+{#if viewport.mobile}
+	<Dialog bind:open={filtersOpen} title="Filters" confirm="Show results" onconfirm={() => (filtersOpen = false)}>
+		<div class="stack dense">{@render facetFields()}</div>
+		{#snippet footer()}
+			{#if activeFilters}<NeoButton text onclick={clearFacets}>Clear filters</NeoButton>{/if}
+		{/snippet}
+	</Dialog>
+{/if}
+
 <style>
 	.source,
 	.sort {
 		display: inline-flex;
 	}
+	.sort.wide {
+		flex: 1 1 8rem;
+		min-width: 0;
+	}
+	.sort.wide > :global(*) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.stack {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+	}
 	.stored {
 		display: inline-flex;
+	}
+	/* How many filters are set rides on the button that opens them */
+	.count {
+		display: inline-grid;
+		place-items: center;
+		min-width: 18px;
+		height: 18px;
+		margin-left: 6px;
+		padding: 0 5px;
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		color: var(--neo-background-color);
+		background: var(--neo-color-primary);
+		border-radius: 9px;
 	}
 	/* The filters fill the row and the clear button ends it, under the button that opens them */
 	.filterbar {

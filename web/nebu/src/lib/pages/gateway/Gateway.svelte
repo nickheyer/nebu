@@ -11,14 +11,12 @@
 	import type { PoolImport } from '#lib/proto/nebu/v1/poolimport_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Conditions from '#lib/ui/Conditions.svelte';
-	import Dot from '#lib/ui/Dot.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import type { MenuItem } from '#lib/ui/Menu.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StateWord from '#lib/ui/StateWord.svelte';
-	import Tip from '#lib/ui/Tip.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
@@ -32,7 +30,7 @@
 	import PoolPanel from '#lib/pages/gateway/PoolPanel.svelte';
 	import RouteEditor from '#lib/pages/gateway/RouteEditor.svelte';
 	import SchedulerEditor from '#lib/pages/gateway/SchedulerEditor.svelte';
-	import { conditionsLamp, isUserOwned, ownerLink, poolLamp, poolShape, poolTip, routeTarget, routeTip } from '#lib/pages/gateway/gateway.js';
+	import { conditionsLamp, endpointState, isUserOwned, ownerLink, poolLamp, poolShape, poolTip, routeTarget, routeTip, schedulerSummary, schedulerWord } from '#lib/pages/gateway/gateway.js';
 	import { GatewayGroup } from '#lib/pages/gateway/group.svelte.js';
 	import { gatewayHeaderTabs, isGatewayTab, type GatewayTab } from '#lib/pages/gateway/tabs.js';
 	import CloudArrowDownIcon from 'phosphor-svelte/lib/CloudArrowDownIcon';
@@ -102,11 +100,6 @@
 		];
 	}
 
-	function schedulerWord(c: SchedulerConfig): string {
-		const lamp = conditionsLamp(c.status?.conditions);
-		return lamp === 'error' ? 'failed' : lamp === 'success' ? 'loaded' : lamp === 'warning' ? 'partly loaded' : 'unchecked';
-	}
-
 	function targetMs(v: number): string {
 		return v ? ms(v) : '—';
 	}
@@ -153,9 +146,9 @@
 	<ListRow
 		primary={o.name}
 		facts={[
-			{ value: String(o.priority) },
-			{ value: targetMs(o.ttftMs), tip: 'Time to first token' },
-			{ value: targetMs(o.tpotMs), tip: 'Time per output token' }
+			{ value: String(o.priority), tip: 'Higher is turned away last under load' },
+			{ value: targetMs(o.ttftMs), tip: o.ttftMs ? 'The target' : 'No target' },
+			{ value: targetMs(o.tpotMs), tip: o.tpotMs ? 'The target' : 'No target' }
 		]}
 		selected={o.name === id}
 		onclick={() => goto(hrefOf('objectives', o.name))}
@@ -168,12 +161,12 @@
 	<ListRow
 		lamp={conditionsLamp(c.status?.conditions)}
 		primary={c.name}
-		secondary={slim ? undefined : schedulerWord(c)}
-		secondaryWidth="14ch"
-		facts={[{ value: plural(refs, 'pool') }]}
+		secondary={slim ? undefined : schedulerSummary(c.spec?.yaml ?? '') || '\u2014'}
+		secondaryWidth="32ch"
+		facts={[{ value: schedulerWord(c.status?.conditions) }, { value: refs ? plural(refs, 'pool') : 'no pool' }]}
 		selected={c.name === id}
 		onclick={() => goto(hrefOf('schedulers', c.name))}
-		menu={refs === 0 ? [{ label: 'Delete', danger: true, confirm: `Delete ${c.name}?`, onclick: () => remove('scheduler', c.name) }] : []}
+		menu={[{ label: 'Delete', danger: true, disabled: refs > 0, description: refs > 0 ? `used by ${plural(refs, 'pool')}` : undefined, confirm: `Delete ${c.name}?`, onclick: () => remove('scheduler', c.name) }]}
 	/>
 {/snippet}
 
@@ -200,12 +193,8 @@
 				</Section>
 				<Section title="Endpoints" level={3}>
 					{#each eps as e (e.id)}
-						<ListRow primary={e.address} primaryKind="address" secondary={live.nodes.get(e.nodeId)?.name ?? e.nodeId} secondaryWidth="24ch">
-							{#snippet leading()}
-								<Tip text={e.ready ? 'Ready' : 'Not ready'} tag="span"><Dot lamp={e.ready ? 'success' : 'muted'} shape={e.ready ? 'filled' : 'hollow'} label={e.ready ? 'ready' : 'not ready'} /></Tip>
-								<Tip text={e.healthy ? 'Healthy' : 'Unhealthy'} tag="span"><Dot lamp={e.healthy ? 'success' : 'error'} label={e.healthy ? 'healthy' : 'unhealthy'} /></Tip>
-							{/snippet}
-						</ListRow>
+						{@const state = endpointState(e)}
+						<ListRow lamp={state.lamp} shape={state.shape} primary={e.address} primaryKind="address" secondary={live.nodes.get(e.nodeId)?.name ?? e.nodeId} secondaryWidth="24ch" facts={[{ value: state.word }]} />
 					{:else}
 						<Empty text="No endpoints" row />
 					{/each}
@@ -221,7 +210,7 @@
 			{#if !live.ready}
 				<Skeleton rows={4} secondary="24ch" />
 			{:else if routes.length === 0}
-				<Empty icon={SignpostIcon} text="No routes" action="Route" href="/gateway/routes/new" />
+				<Empty icon={SignpostIcon} text="No routes" hint="A route is a model name clients ask for, sent to one pool or split over several" />
 			{:else}
 				<List head={{ primary: 'Route', secondary: 'Target' }}>
 					{#each routes as r (r.name)}{@render routeRow(r)}{/each}
@@ -233,7 +222,7 @@
 			{#if !live.ready}
 				<Skeleton rows={4} secondary="40ch" />
 			{:else if pools.length === 0}
-				<Empty icon={StackIcon} text="No pools" action="Pool" href="/gateway/pools/new" />
+				<Empty icon={StackIcon} text="No pools" hint="A pool is the set of endpoints serving one model, and a launch makes its own" />
 			{:else}
 				<List head={{ primary: 'Pool', secondary: 'Model', facts: ['Ready'] }}>
 					{#each pools as p (p.id)}{@render poolRow(p)}{/each}
@@ -245,9 +234,9 @@
 			{#if !live.ready}
 				<Skeleton rows={3} dot={false} secondary="16ch" facts={2} action={false} />
 			{:else if objectives.length === 0}
-				<Empty icon={TargetIcon} text="No objectives" action="Objective" href="/gateway/objectives/new" />
+				<Empty icon={TargetIcon} text="No objectives" hint="An objective gives the requests of a route a priority and latency targets" />
 			{:else}
-				<List head={{ primary: 'Objective', facts: ['Priority', 'TTFT', 'TPOT'] }}>
+				<List head={{ primary: 'Objective', facts: ['Priority', 'Time to first token', 'Time per output token'] }}>
 					{#each objectives as o (o.name)}{@render objectiveRow(o)}{/each}
 				</List>
 			{/if}
@@ -257,9 +246,9 @@
 			{#if !live.ready}
 				<Skeleton rows={3} secondary="14ch" action={false} />
 			{:else if configs.length === 0}
-				<Empty icon={FlowArrowIcon} text="No schedulers" action="Scheduler" href="/gateway/schedulers/new" />
+				<Empty icon={FlowArrowIcon} text="No schedulers" hint="A scheduler picks the endpoint of a pool each request goes to" />
 			{:else}
-				<List head={{ primary: 'Scheduler', secondary: 'State', facts: ['Used by'] }}>
+				<List head={{ primary: 'Scheduler', secondary: 'Holds', facts: ['State', 'Used by'] }}>
 					{#each configs as c (c.name)}{@render schedulerRow(c)}{/each}
 				</List>
 			{/if}
@@ -288,7 +277,7 @@
 		{#if !group.importsLoaded}
 			<Skeleton rows={3} dot={false} secondary={false} action={false} menu={false} />
 		{:else if group.imports.length === 0}
-			<Empty icon={CloudArrowDownIcon} text="No imported pools" action="Mesh" href="/mesh" />
+			<Empty icon={CloudArrowDownIcon} text="No imported pools" hint="Pools the other nodes of a mesh export are listed here" action={live.inMesh ? undefined : 'Set up a mesh'} href="/mesh" />
 		{:else}
 			<List head={{ primary: 'Pool', facts: ['Ready'] }}>
 				{#each group.imports as imp (imp.id)}{@render importRow(imp)}{/each}

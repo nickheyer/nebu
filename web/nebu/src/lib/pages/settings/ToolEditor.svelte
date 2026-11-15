@@ -17,6 +17,7 @@
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
+	import { toolKinds } from '#lib/pages/settings/webhooks.js';
 
 	let { server, onclose }: { server?: ToolServer; onclose: () => void } = $props();
 
@@ -29,12 +30,7 @@
 	let error = $state<string | undefined>(undefined);
 	let generation = $state(0);
 
-	const kinds = [
-		{ value: ToolServerKind.SEARCH, label: 'search', description: 'SearXNG or Brave' },
-		{ value: ToolServerKind.FETCH, label: 'fetch', description: 'Pages as text' },
-		{ value: ToolServerKind.STDIO, label: 'stdio', description: 'MCP over stdio' },
-		{ value: ToolServerKind.HTTP, label: 'http', description: 'MCP over HTTP' }
-	];
+	const kinds = toolKinds;
 
 	function pickKind(k: ToolServerKind | undefined) {
 		if (k === ToolServerKind.SEARCH && !s.provider) s.provider = 'searxng';
@@ -72,21 +68,28 @@
 			saving = false;
 		}
 	}
+
+	// What the server still needs, the first thing missing for its kind
+	const missing = $derived.by(() => {
+		if (!s.name.trim()) return 'Name the server';
+		if (s.kind === ToolServerKind.SEARCH && s.provider === 'brave' && !s.braveKey.trim() && !draft?.braveKey) return 'Give the Brave key';
+		if (s.kind === ToolServerKind.SEARCH && s.provider !== 'brave' && !s.searxngUrl.trim()) return 'Give the SearXNG URL';
+		if (s.kind === ToolServerKind.STDIO && !s.command.trim()) return 'Give the command';
+		if (s.kind === ToolServerKind.HTTP && !s.url.trim()) return 'Give the URL';
+		return '';
+	});
 </script>
 
-{#snippet enabled()}
-	{#key generation}<Switch bind:checked={s.enabled} label="Enabled" compact />{/key}
-{/snippet}
-
-<PanelHeader title={draft ? draft.name : 'New tool server'} tools={enabled} {onclose} />
+<PanelHeader title={draft ? draft.name : 'New tool server'} {onclose} />
 <Stack gap={24}>
-	<FormSection title="Server">
+	<FormSection>
 		<FieldRow>
 			<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
 			<Text bind:value={s.name} label="Name" required />
 		</FieldRow>
+		{#key generation}<Switch bind:checked={s.enabled} label="Enabled" info="A server turned off offers its tools to no chat and no bot" />{/key}
 		{#if s.kind === ToolServerKind.FETCH}
-			{#key generation}<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host and its network" compact />{/key}
+			{#key generation}<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host and its network" />{/key}
 		{/if}
 	</FormSection>
 	{#key generation}
@@ -95,9 +98,9 @@
 				<FieldRow>
 					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" />
 					{#if s.provider === 'brave'}
-						<Secret bind:value={s.braveKey} label="Brave key" />
+						<Secret bind:value={s.braveKey} label="Brave key" required />
 					{:else}
-						<Text bind:value={s.searxngUrl} label="SearXNG URL" info="Needs its JSON format turned on" type="url" />
+						<Text bind:value={s.searxngUrl} label="SearXNG URL" info="Needs its JSON format turned on" type="url" required />
 					{/if}
 				</FieldRow>
 			</FormSection>
@@ -119,9 +122,9 @@
 		{/if}
 		<FormSection title="Tools">
 			<FieldRow>
-				<Chips bind:value={s.allowedTools} label="Allowed tools" info="Every tool when empty" />
+				<Chips bind:value={s.allowedTools} label="Allowed tools" info="The tools of the server a chat or bot may call, by name" unset="every tool the server offers" />
 			</FieldRow>
 		</FormSection>
 	{/key}
 </Stack>
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!s.name.trim() || (s.kind === ToolServerKind.STDIO && !s.command.trim()) || (s.kind === ToolServerKind.HTTP && !s.url.trim())} onsave={save} ondiscard={discard} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} needs={missing} onsave={save} ondiscard={discard} />

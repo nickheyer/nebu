@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ListQuery } from '#lib/api/list.svelte.js';
-	import { reason, rpc } from '#lib/api/transport.js';
+	import { Code } from '@connectrpc/connect';
+	import { isCode, reason, rpc } from '#lib/api/transport.js';
 	import { bytes } from '#lib/format.js';
 	import { live, modelKey } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
@@ -31,9 +32,11 @@
 	import { exportModel, launchHref, modelKeyOf, modelPath, removeModel, sameModel, verifyModel } from '#lib/pages/models/models.js';
 	import { modelsTabs } from '#lib/pages/models/tabs.js';
 	import { terminal } from '#lib/pages/serve/serve.js';
+	import CloudArrowDownIcon from 'phosphor-svelte/lib/CloudArrowDownIcon';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import SortAscendingIcon from 'phosphor-svelte/lib/SortAscendingIcon';
+	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
 
 	let { sourceId = '', repo = '', group = '' }: { sourceId?: string; repo?: string; group?: string } = $props();
 
@@ -49,6 +52,9 @@
 	let exportBusy = $state(false);
 	let fetched = $state<StoredModel | undefined>(undefined);
 	let fetchError = $state('');
+	// Whether the daemon answered that the model is not in the store, as against failing to answer
+	let absent = $state(false);
+	let fetchTry = $state(0);
 	const contexts = new Contexts();
 
 	const list = new ListQuery<StoredModel, { query: string; sort: ModelSort }>(
@@ -80,15 +86,19 @@
 	// The open model as GetModel answered it until the stream holds it
 	$effect(() => {
 		const ref = { sourceId, repo, group };
+		void fetchTry;
 		fetched = undefined;
 		fetchError = '';
+		absent = false;
 		if (!ref.repo) return;
 		const ac = new AbortController();
 		rpc.store
 			.getModel(ref, { signal: ac.signal })
 			.then((res) => (fetched = res.model))
 			.catch((err) => {
-				if (!ac.signal.aborted) fetchError = reason(err);
+				if (ac.signal.aborted) return;
+				absent = isCode(err, Code.NotFound);
+				fetchError = reason(err);
 			});
 		return () => ac.abort();
 	});
@@ -198,17 +208,17 @@
 		{/key}
 	{:else}
 		<PanelHeader title={repo} kind="repo" subtitle={group || undefined} href={repoPath(sourceId, repo)} onclose={() => goto('/models')} />
-		{#if fetchError}
-			<Empty icon={CubeIcon} text="Model failed to load" hint={fetchError} action="Back" href="/models" />
-		{:else if !live.ready}
-			<Skeleton rows={6} kind="facts" />
+		{#if absent || (!fetchError && live.ready)}
+			<Empty icon={CloudArrowDownIcon} text="Not in the store" hint="{[repo, group].filter(Boolean).join(' ')} has not been pulled to this host" action="Find it to pull" href={repoPath(sourceId, repo)} primary />
+		{:else if fetchError}
+			<Empty icon={WarningIcon} text="The store did not answer" hint={fetchError} action="Retry" onclick={() => fetchTry++} />
 		{:else}
-			<Empty icon={CubeIcon} text="No such model" action="Back" href="/models" />
+			<Skeleton rows={6} kind="facts" />
 		{/if}
 	{/if}
 </Sheet>
 
-<Dialog bind:open={exportOpen} title="Export" confirm="Export" busy={exportBusy} disabled={!exportDir} onconfirm={submitExport}>
+<Dialog bind:open={exportOpen} title="Export" confirm="Export" busy={exportBusy} needs={exportDir ? '' : 'Pick a directory'} onconfirm={submitExport}>
 	{#if exporting}<Str value={exporting.repo} kind="repo" color="muted" width="100%" />{/if}
 	<Path bind:value={exportDir} label="Directory" filter="directories" />
 </Dialog>

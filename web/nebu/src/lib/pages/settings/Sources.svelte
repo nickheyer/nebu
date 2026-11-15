@@ -16,9 +16,10 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
-	import type { Lamp } from '#lib/ui/status.js';
+	import type { DotShape, Lamp } from '#lib/ui/status.js';
 	import SourceEditor from '#lib/pages/settings/SourceEditor.svelte';
 	import DatabaseIcon from 'phosphor-svelte/lib/DatabaseIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
 	let { tabs, sources }: { tabs: HeaderTab[]; sources: ListQuery<SourceStatus, Record<string, never>> } = $props();
 
@@ -48,12 +49,22 @@
 		return 'success';
 	}
 
+	// Whether the source can be searched and pulled from, in the same three words on every width
 	function statusOf(s: SourceStatus): string {
 		const c = s.capabilities;
-		if (s.error) return 'failed';
-		if (c?.authRequired && !c.tokenPresent) return 'token missing';
-		if (c?.tokenPresent) return 'token set';
+		if (s.error) return 'failing';
+		if (c?.authRequired && !c.tokenPresent) return 'needs a token';
 		return 'ready';
+	}
+
+	function shapeOf(s: SourceStatus): DotShape {
+		return s.error ? 'filled' : s.capabilities?.authRequired && !s.capabilities.tokenPresent ? 'hollow' : 'filled';
+	}
+
+	// The reason behind a state, and whether a token is held when the source takes one
+	function statusTip(s: SourceStatus): string | undefined {
+		const c = s.capabilities;
+		return s.error || (c?.authRequired && !c.tokenPresent ? 'This source answers only with a token, set in its settings' : c?.tokenPresent ? 'A token is set' : undefined);
 	}
 
 	function providerName(s: SourceStatus): string {
@@ -76,16 +87,16 @@
 {#snippet list()}
 	<Card title="Sources" flush>
 		{#snippet tools()}
-			<NeoButton class="primary" elevation={2} onclick={() => (open = '')}>Add source</NeoButton>
+			<NeoButton class="primary" elevation={2} onclick={() => (open = '')}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Source</NeoButton>
 		{/snippet}
 		{#if !sources.settled}
 			<Skeleton rows={6} secondary="16ch" facts={2} action={false} />
 		{:else if sources.error}
 			<Empty text={sources.error} action="Retry" onclick={() => sources.refresh()} />
 		{:else if sources.items.length === 0}
-			<Empty icon={DatabaseIcon} text="No sources" action={open === undefined ? 'Add source' : undefined} onclick={() => (open = '')} />
+			<Empty icon={DatabaseIcon} text="No sources" hint="A source is a model hub that Discover searches and pulls from" />
 		{:else}
-			<List head={{ primary: 'Source', secondary: 'Provider', facts: ['Endpoint', 'Status'] }}>
+			<List head={{ primary: 'Source', secondary: 'Provider', facts: ['Status', 'Endpoint'] }}>
 				{#each sources.items as s (s.source?.id)}
 					{@const id = s.source?.id ?? ''}
 					{@const endpoint = s.capabilities?.endpoint ?? ''}
@@ -95,14 +106,14 @@
 						secondaryTip={capabilities(s) || undefined}
 						secondaryWidth="20ch"
 						facts={[
-							{ value: bare(endpoint), tip: endpoint || undefined, mono: true },
-							{ value: statusOf(s), tip: s.error || undefined }
+							{ value: statusOf(s), tip: statusTip(s) },
+							{ value: bare(endpoint), tip: endpoint || undefined, mono: true }
 						]}
 						selected={open === id}
 						onclick={() => (open = id)}
 						menu={s.source?.seeded ? undefined : [{ label: 'Delete', danger: true, confirm: `Delete ${id}?`, onclick: () => remove(id) }]}
 					>
-						{#snippet leading()}<Dot lamp={lampOf(s)} label={statusOf(s)} />{/snippet}
+						{#snippet leading()}<Dot lamp={lampOf(s)} shape={shapeOf(s)} label={statusOf(s)} />{/snippet}
 					</ListRow>
 				{/each}
 			</List>

@@ -91,3 +91,12 @@ func (d *DB) tasks(ctx context.Context, where string, limit int, args ...any) ([
 	}
 	return out, nil
 }
+
+// Rewrites the titles of tasks from before a count of one model read as one model
+func singularTaskTitles(ctx context.Context, d *DB) error {
+	if _, err := d.sql.ExecContext(ctx, `UPDATE tasks SET title = 'verify 1 model' WHERE title = 'verify 1 models'`); err != nil {
+		return err
+	}
+	_, err := d.sql.ExecContext(ctx, `UPDATE tasks SET title = 'export 1 model to ' || substr(title, length('export 1 models to ') + 1) WHERE title LIKE 'export 1 models to %'`)
+	return err
+}

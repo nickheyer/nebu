@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { InstanceState, type Instance } from '#lib/proto/nebu/v1/instance_pb.js';
+	import { enumLabel } from '#lib/format.js';
+	import { InstanceState, InstanceStateSchema, type Instance } from '#lib/proto/nebu/v1/instance_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -36,6 +37,7 @@
 	secondary={slim ? undefined : phrase}
 	secondaryKind={instance.state === InstanceState.FAILED ? 'message' : 'repo'}
 	secondaryColor={instance.state === InstanceState.FAILED ? 'error' : 'muted'}
+	facts={[{ value: enumLabel(InstanceStateSchema, instance.state) }]}
 	{menu}
 	{selected}
 	onclick={() => goto(`/serve/${encodeURIComponent(instance.id)}`)}

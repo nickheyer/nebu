@@ -64,7 +64,7 @@
 	}
 </script>
 
-<Dialog bind:open title="Try {server.server?.name ?? ''}" confirm="Run" cancel="Close" {busy} disabled={!tool || !valid} onconfirm={run} width="full">
+<Dialog bind:open title="Try {server.server?.name ?? ''}" confirm="Run" cancel="Close" {busy} needs={!tool ? 'Pick a tool' : !valid ? 'The arguments are not valid JSON' : ''} onconfirm={run} width="full">
 	<Select bind:value={tool} options={server.tools.map((t) => ({ value: t.name, label: t.name, description: t.description }))} label="Tool" />
 	<Code bind:value={args} bind:valid language="json" rows={6} label="Arguments" />
 	{#if result}

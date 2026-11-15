@@ -243,3 +243,39 @@ func TestCopyAsideWritesAReadableBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTaskTitlesCountOneModelAsOne(t *testing.T) {
+	d, dir := open(t)
+	ctx := context.Background()
+	titles := map[string]string{
+		"a": "verify 1 models",
+		"b": "export 1 models to /srv/out 1 models to keep",
+		"c": "verify 12 models",
+		"d": "export 3 models to /srv/out",
+		"e": "verify 1 model",
+	}
+	for id, title := range titles {
+		if err := d.PutTask(ctx, &v1.Task{Id: id, Kind: "verify", Title: title, CreatedAt: timestamppb.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.Close()
+	again, err := Open(filepath.Join(dir, "nebu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	want := map[string]string{
+		"a": "verify 1 model",
+		"b": "export 1 model to /srv/out 1 models to keep",
+		"c": "verify 12 models",
+		"d": "export 3 models to /srv/out",
+		"e": "verify 1 model",
+	}
+	for id, title := range want {
+		got, _, err := again.GetTask(ctx, id)
+		if err != nil || got.GetTitle() != title {
+			t.Errorf("task %s reads %q, want %q: %v", id, got.GetTitle(), title, err)
+		}
+	}
+}

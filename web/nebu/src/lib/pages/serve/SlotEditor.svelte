@@ -188,7 +188,7 @@
 	{/if}
 {/snippet}
 
-<PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} lamp={slot ? slotLamp(slot.state) : undefined} shape={slot ? slotShape(slot.state) : undefined} state={slot ? enumLabel(SlotStateSchema, slot.state) : undefined} subtitle={slot?.description || undefined} {onclose} />
+<PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} lamp={slot ? slotLamp(slot.state) : undefined} shape={slot ? slotShape(slot.state) : undefined} state={slot ? enumLabel(SlotStateSchema, slot.state) : undefined} {onclose} />
 <Stack gap={24}>
 	<FormSection>
 		<FieldRow>
@@ -201,10 +201,13 @@
 		<Text bind:value={args} label="Extra arguments" max={512} mono />
 	</FormSection>
 	{#if runtimeParams.length}
-		<ParamsForm params={runtimeParams} bind:values={params} />
+		<FormSection title="Parameters">
+			<ParamsForm params={runtimeParams} bind:values={params} />
+		</FormSection>
 	{/if}
 	{#if limits}
-		<FormSection title="Memory">
+		<FormSection title="Memory limit">
+			<p class="secondary">The most a model in this slot may take on each device</p>
 			<PoolMemory bind:value={limits} profile={live.host} />
 			{#if closed}<p class="error-text secondary">A slot needs memory on at least one device</p>{/if}
 		</FormSection>
@@ -216,7 +219,7 @@
 				<Cell min="10rem"><Text bind:value={alias.name} label={i === 0 ? 'Alias' : undefined} max={64} /></Cell>
 				{#if others.length}
 					<Cell min="10rem">
-						<Select bind:value={() => alias.inheritSlotId || undefined, (v) => (alias.inheritSlotId = v ?? '')} options={others} label={i === 0 ? 'Inherits from' : undefined} placeholder={name} clearable />
+						<Select bind:value={() => alias.inheritSlotId || undefined, (v) => (alias.inheritSlotId = v ?? '')} options={others} label={i === 0 ? 'Inherits from' : undefined} unset={name.trim() ? `${name.trim()}, this slot` : 'this slot'} clearable />
 					</Cell>
 				{/if}
 				<Cell grow={false}>
@@ -236,7 +239,7 @@
 		</Row>
 	</FormSection>
 </Stack>
-<SaveBar always={!editing} {dirty} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name.trim() || closed} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
+<SaveBar always={!editing} {dirty} {saving} {error} label={editing ? 'Save' : 'Create'} needs={!name.trim() ? 'Name the slot' : closed ? 'Give the slot memory on at least one device' : ''} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
 {#if slot && occupied}
 	<NameConfirm bind:open={deleteOpen} title="Delete slot" name={slot.name} message="Stops the model running in it" onconfirm={remove} />
 {/if}

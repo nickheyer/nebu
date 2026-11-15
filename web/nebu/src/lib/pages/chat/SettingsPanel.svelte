@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { shortId } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { ChatSettings } from '#lib/proto/nebu/v1/chat_pb.js';
 	import { ToolServerState, type ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Chips from '#lib/ui/fields/Chips.svelte';
-	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
@@ -42,23 +41,6 @@
 		settings[key] = n === undefined ? '' : String(n);
 	}
 
-	let userName = $state(untrack(() => settings.userName || userFallback));
-	let assistantName = $state(untrack(() => settings.assistantName || assistantFallback));
-
-	// Each name box holds the name in use, its own or the one it resolves to
-	$effect(() => {
-		userName = settings.userName || userFallback;
-		assistantName = settings.assistantName || assistantFallback;
-	});
-
-	// Keeps a name typed over the resolved one, an emptied box returning to the resolved name
-	function rename() {
-		settings.userName = userName.trim() === userFallback ? '' : userName.trim();
-		settings.assistantName = assistantName.trim() === assistantFallback ? '' : assistantName.trim();
-		userName = settings.userName || userFallback;
-		assistantName = settings.assistantName || assistantFallback;
-	}
-
 	// Every tool server on offer, one the conversation names and nobody runs kept so it can be unchecked
 	const serverOptions = $derived.by((): Option<string>[] => {
 		const options = servers.map((s): Option<string> => {
@@ -72,21 +54,25 @@
 	});
 </script>
 
-<div class="sections dense">
-	<div class="fields">
-		<Textarea bind:value={settings.system} label="System prompt" rows={3} maxRows={12} />
-		<div class="names">
-			<Text bind:value={userName} label="User" max={32} onchange={rename} />
-			<Text bind:value={assistantName} label="Assistant" max={32} onchange={rename} />
-		</div>
-	</div>
-	<FormSection title="Sampling">
-		<Slider bind:value={() => read('temperature'), (n) => write('temperature', n)} min={0} max={2} step={0.05} label="Temperature" optional inline />
-		<Slider bind:value={() => read('topP'), (n) => write('topP', n)} min={0} max={1} step={0.01} label="Top p" optional inline />
-		<NumberField bind:value={() => read('topK'), (n) => write('topK', n)} min={1} label="Top k" optional inline />
-		<NumberField bind:value={() => read('maxTokens'), (n) => write('maxTokens', n)} min={1} max={contextLength || undefined} label="Max tokens" optional inline />
-		<NumberField bind:value={() => read('seed'), (n) => write('seed', n)} min={0} label="Seed" optional inline />
-		<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop sequences" />
+<div class="sections">
+	<FormSection title="Prompt">
+		<Textarea bind:value={settings.system} label="System prompt" info="Sent before the first message of every request" rows={3} maxRows={12} />
+	</FormSection>
+	<FormSection title="Names" info="The names over the messages of this conversation, which the model never sees">
+		<FieldRow>
+			<Text bind:value={settings.userName} label="Yours" max={32} unset={userFallback} />
+			<Text bind:value={settings.assistantName} label="The model's" max={32} unset={assistantFallback} />
+		</FieldRow>
+	</FormSection>
+	<FormSection title="Sampling" info="A setting left empty is not sent, and the server answers with its own">
+		<Slider bind:value={() => read('temperature'), (n) => write('temperature', n)} min={0} max={2} step={0.05} label="Temperature" resting="the server's" optional />
+		<Slider bind:value={() => read('topP'), (n) => write('topP', n)} min={0} max={1} step={0.01} label="Top p" resting="the server's" optional />
+		<FieldRow>
+			<NumberField bind:value={() => read('topK'), (n) => write('topK', n)} min={1} label="Top k" unset="the server's" optional plain />
+			<NumberField bind:value={() => read('seed'), (n) => write('seed', n)} min={0} label="Seed" unset="a new one each time" optional plain />
+		</FieldRow>
+		<NumberField bind:value={() => read('maxTokens'), (n) => write('maxTokens', n)} min={1} max={contextLength || undefined} unit="tokens" label="Longest answer" unset="the server's" optional plain />
+		<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop sequences" info="Text that ends an answer as soon as the model writes it" />
 	</FormSection>
 	{#if serverOptions.length}
 		<FormSection title="Tools">
@@ -98,42 +84,16 @@
 		</FormSection>
 	{/if}
 	<FormSection title="Request">
-		<div class="pair">
-			<FieldLabel label="API" />
-			<Select bind:value={settings.dialect} options={apis} compact />
-		</div>
-		<Switch bind:checked={settings.stream} label="Stream" />
+		<Select bind:value={settings.dialect} options={apis} label="API" info="The wire format the request is sent in" />
+		<Switch bind:checked={settings.stream} label="Stream the answer as it is written" />
 	</FormSection>
 </div>
 
 <style>
-	/* Every boxed control starts on the second of two equal columns, where the assistant's name does */
 	.sections {
-		--nebu-inline-box: calc(50% - var(--nebu-space-3) / 2);
-
 		display: flex;
 		flex-direction: column;
 		gap: var(--nebu-space-5);
 		min-width: 0;
-	}
-	.fields {
-		display: flex;
-		flex-direction: column;
-		gap: var(--nebu-space-3);
-		min-width: 0;
-	}
-	.names,
-	.pair {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: var(--nebu-space-3);
-		min-width: 0;
-	}
-	.pair {
-		align-items: center;
-	}
-	/* The API names need the room the box keeps for a clear button it never shows */
-	.pair :global(.neo-affix-container) {
-		display: none;
 	}
 </style>

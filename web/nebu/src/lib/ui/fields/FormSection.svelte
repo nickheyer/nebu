@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import Collapse from '#lib/ui/Collapse.svelte';
-	import Tip from '#lib/ui/Tip.svelte';
+	import InfoTip from '#lib/ui/InfoTip.svelte';
 
 	let { title, info, children, advanced }: { title?: string; info?: string; children: Snippet; advanced?: Snippet } = $props();
 	let open = $state(false);
@@ -11,8 +11,9 @@
 
 <section class="form-section">
 	{#if title}
-		<div class="head" class:informed={info !== undefined}>
-			<Tip text={info} tag="span"><h2>{title}</h2></Tip>
+		<div class="head">
+			<h2>{title}</h2>
+			{#if info}<InfoTip text={info} about={title} />{/if}
 		</div>
 	{/if}
 	<div class="fields">
@@ -41,12 +42,6 @@
 	}
 	.head h2 {
 		font-size: var(--nebu-text-body);
-	}
-	.informed h2 {
-		text-decoration: underline dotted var(--nebu-text-faint);
-		text-decoration-thickness: 1px;
-		text-underline-offset: 4px;
-		cursor: help;
 	}
 	.fields {
 		display: flex;

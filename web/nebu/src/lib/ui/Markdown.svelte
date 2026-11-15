@@ -13,7 +13,7 @@
 	/* A reading measure that never widens its column */
 	.markdown {
 		width: 100%;
-		max-width: 76ch;
+		max-width: 60ch;
 		min-width: 0;
 		margin: 0 auto;
 		font-weight: 300;

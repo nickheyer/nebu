@@ -1,21 +1,19 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import { enumLabel, num, pct } from '#lib/format.js';
+	import { num, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { AppProtocolSchema, FailureModeSchema, type Pool } from '#lib/proto/nebu/v1/pool_pb.js';
+	import type { Pool } from '#lib/proto/nebu/v1/pool_pb.js';
 	import Bar from '#lib/ui/Bar.svelte';
 	import Conditions from '#lib/ui/Conditions.svelte';
-	import Dot from '#lib/ui/Dot.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
-	import Tip from '#lib/ui/Tip.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
-	import { endpointTip, exported, isUserOwned, ownerLabel } from '#lib/pages/gateway/gateway.js';
+	import { endpointState, endpointTip, exported, failureLabel, isUserOwned, ownerLabel, protocolLabel } from '#lib/pages/gateway/gateway.js';
 
 	let { pool, onclose }: { pool: Pool; onclose: () => void } = $props();
 
@@ -31,16 +29,18 @@
 <Stack gap={24}>
 	<Section title="Endpoints" level={3}>
 		{#if endpoints.length}
-			<List head={{ primary: 'Address', instrument: 'KV cache', facts: ['Queued', 'Running'] }}>
+			<List head={{ primary: 'Address', instrument: 'Cache in use', facts: ['State', 'Queued', 'Running'] }}>
 				{#each endpoints as e (e.id)}
 					{@const kv = e.metrics?.kvCacheUtilization ?? 0}
-					<ListRow primary={e.address} primaryKind="address" primaryTip={endpointTip(live, e, clockTick.now)} facts={[{ value: num(e.metrics?.queuedRequests) }, { value: num(e.metrics?.runningRequests) }]}>
-						{#snippet leading()}
-							<Tip text={e.ready ? 'Ready' : 'Not ready'} tag="span"><Dot lamp={e.ready ? 'success' : 'muted'} shape={e.ready ? 'filled' : 'hollow'} label={e.ready ? 'ready' : 'not ready'} /></Tip>
-							<Tip text={e.healthy ? 'Healthy' : 'Unhealthy'} tag="span"><Dot lamp={e.healthy ? 'success' : 'error'} label={e.healthy ? 'healthy' : 'unhealthy'} /></Tip>
-						{/snippet}
+					{@const state = endpointState(e)}
+					<ListRow lamp={state.lamp} shape={state.shape} primary={e.address} primaryKind="address" primaryTip={endpointTip(live, e, clockTick.now)} facts={[{ value: state.word }, { value: e.metrics ? num(e.metrics.queuedRequests) : '\u2014' }, { value: e.metrics ? num(e.metrics.runningRequests) : '\u2014' }]}>
 						{#snippet instrument()}
-							{#if e.metrics}<span class="kv"><Bar segments={[{ kind: kv >= 0.9 ? 'warning' : 'used', label: 'KV cache', bytes: kv * 100 }]} total={100} format={(n) => pct(n)} height={6} /></span>{/if}
+							{#if e.metrics}
+								<span class="kv"><Bar segments={[{ kind: kv >= 0.9 ? 'warning' : 'used', label: 'Cache in use', bytes: kv * 100 }]} total={100} format={(n) => pct(n)} height={6} /></span>
+								<span class="secondary num">{pct(kv * 100)}</span>
+							{:else}
+								<span class="secondary">no metrics read</span>
+							{/if}
 						{/snippet}
 					</ListRow>
 				{/each}
@@ -50,7 +50,7 @@
 		{/if}
 	</Section>
 	{#if pool.status?.conditions.length}
-		<Section title="Status" level={3}>
+		<Section title="Checks" level={3}>
 			<Conditions conditions={pool.status.conditions} />
 		</Section>
 	{/if}
@@ -63,8 +63,8 @@
 				{ label: 'accelerator', value: spec?.accelerator ?? '', tip: spec?.accelerator || undefined },
 				{ label: 'selector', value: Object.entries(spec?.selector ?? {}).map(([k, v]) => `${k}=${v}`).join(' '), mono: true },
 				{ label: 'ports', value: spec?.targetPorts.join(', ') ?? '', mono: true },
-				{ label: 'protocol', value: enumLabel(AppProtocolSchema, spec?.appProtocol ?? 0) },
-				{ label: 'if the scheduler fails', value: enumLabel(FailureModeSchema, spec?.failureMode ?? 0) },
+				{ label: 'protocol', value: protocolLabel(spec?.appProtocol) },
+				{ label: 'if the scheduler fails', value: failureLabel(spec?.failureMode) },
 				{ label: 'scheduler', value: spec?.schedulerConfig ?? '', href: spec?.schedulerConfig ? `/gateway/schedulers/${encodeURIComponent(spec.schedulerConfig)}` : undefined },
 				{ label: 'concurrency', value: spec?.concurrency ? num(spec.concurrency) : '' },
 				{ label: 'send token ids', value: spec?.tokensInOut ? 'on' : 'off' },
@@ -82,6 +82,7 @@
 	.kv {
 		display: flex;
 		flex: 1 1 auto;
-		min-width: 0;
+		min-width: 4rem;
+		margin-right: var(--nebu-space-2);
 	}
 </style>

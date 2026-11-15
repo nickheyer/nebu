@@ -1,7 +1,7 @@
 import type { Live } from '#lib/live/events.svelte.js';
 import { ago, enumLabel, ms, num, pct } from '#lib/format.js';
 import { RouteState, RouteStateSchema, type GatewayStatus, type RewriteRule, type Route } from '#lib/proto/nebu/v1/gateway_pb.js';
-import { AppProtocolSchema, FailureModeSchema, type Endpoint, type Pool } from '#lib/proto/nebu/v1/pool_pb.js';
+import { AppProtocol, FailureMode, type Endpoint, type Pool } from '#lib/proto/nebu/v1/pool_pb.js';
 import { ConditionStatus, type Condition } from '#lib/proto/nebu/v1/meta_pb.js';
 import type { DotShape, Lamp } from '#lib/ui/status.js';
 
@@ -90,12 +90,52 @@ export function poolTip(p: Pool): string {
 		p.spec?.accelerator ? `accelerator ${p.spec.accelerator}` : '',
 		`owner ${ownerLabel(p.ownerKind, p.ownerId)}`,
 		exported(p) ? 'exported' : '',
-		`protocol ${enumLabel(AppProtocolSchema, p.spec?.appProtocol ?? 0)}`,
-		`failure mode ${enumLabel(FailureModeSchema, p.spec?.failureMode ?? 0)}`,
+		`protocol ${protocolLabel(p.spec?.appProtocol)}`,
+		`if the scheduler fails ${failureLabel(p.spec?.failureMode).toLowerCase()}`,
 		p.spec?.schedulerConfig ? `scheduler ${p.spec.schedulerConfig}` : ''
 	]
 		.filter(Boolean)
 		.join('\n');
+}
+
+// The protocols a pool's endpoints speak and what a pool does when its scheduler fails, in the words the editor and the read view share
+export const protocolOptions = [
+	{ value: AppProtocol.HTTP, label: 'HTTP' },
+	{ value: AppProtocol.H2C, label: 'h2c' },
+	{ value: AppProtocol.GRPC, label: 'gRPC' }
+];
+export const failureOptions = [
+	{ value: FailureMode.FAIL_CLOSE, label: 'Reject', tip: 'The request is refused' },
+	{ value: FailureMode.FAIL_OPEN, label: 'Let through', tip: 'The request goes to any ready endpoint' }
+];
+
+export function protocolLabel(v: AppProtocol | undefined): string {
+	return protocolOptions.find((o) => o.value === v)?.label ?? 'HTTP';
+}
+
+export function failureLabel(v: FailureMode | undefined): string {
+	return failureOptions.find((o) => o.value === v)?.label ?? 'Reject';
+}
+
+// An endpoint's state as one lamp and the words for it, unhealthy before not ready
+export function endpointState(e: { ready: boolean; healthy: boolean }): { lamp: Lamp; shape: DotShape; word: string } {
+	if (!e.healthy) return { lamp: 'error', shape: 'filled', word: 'unhealthy' };
+	if (!e.ready) return { lamp: 'warning', shape: 'half', word: 'not ready' };
+	return { lamp: 'success', shape: 'filled', word: 'ready' };
+}
+
+// What a scheduler configuration holds in a few words, its plugins and profiles counted from its text
+export function schedulerSummary(yaml: string): string {
+	const plugins = (yaml.match(/^\s*-\s*type\s*:/gm) ?? []).length;
+	const section = /^(?:schedulingProfiles|profiles)\s*:[^\n]*\n((?:(?:[-#\s]).*(?:\n|$)|\n)*)/m.exec(yaml)?.[1] ?? '';
+	const profiles = [...section.matchAll(/^\s*-\s*name\s*:\s*(\S+)/gm)].map((m) => m[1]!);
+	return [plugins ? `${plugins} ${plugins === 1 ? 'plugin' : 'plugins'}` : '', profiles.length === 1 ? `profile ${profiles[0]}` : profiles.length ? `profiles ${profiles.join(', ')}` : ''].filter(Boolean).join(', ');
+}
+
+// A scheduler's state in a word, the same in the list and on its panel
+export function schedulerWord(conditions: Condition[] | undefined): string {
+	const lamp = conditionsLamp(conditions);
+	return lamp === 'error' ? 'failed to load' : lamp === 'success' ? 'loaded' : lamp === 'warning' ? 'partly loaded' : 'not checked yet';
 }
 
 export function exported(p: Pool): boolean {
@@ -109,7 +149,7 @@ export function endpointTip(live: Live, e: Endpoint, now: number): string {
 		`${e.role ? `role ${e.role}, ` : ''}rank ${e.rank}`,
 		`assumed ${num(e.assumedRequests)}`,
 		e.metrics?.runningAdapters.length ? `adapters ${e.metrics.runningAdapters.join(', ')}` : '',
-		`predicted TTFT ${ms(e.predictedTtftMs)}, TPOT ${ms(e.predictedTpotMs)}`,
+		`predicted time to first token ${ms(e.predictedTtftMs)}, per output token ${ms(e.predictedTpotMs)}`,
 		e.metrics?.updatedAt ? `metrics ${ago(e.metrics.updatedAt, now)}` : ''
 	]
 		.filter(Boolean)

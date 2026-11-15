@@ -25,6 +25,12 @@ export function sliderSpan(p: Param, state?: ParamState): Span | undefined {
 	return { min, max, step, curve: curveOf(min, max, step) };
 }
 
+// Where a way into launching leads, the launch form once a model is stored and Discover while none is, with a short and a full label
+export function launchEntry(live: Live, query = ''): { label: string; long: string; href: string } {
+	if (live.ready && live.models.size === 0) return { label: 'Find a model', long: 'Find a model', href: '/discover' };
+	return { label: 'Launch', long: 'Launch a model', href: `/serve/launch${query}` };
+}
+
 // An install by its version, the name of its binary when it reports none
 export function installLabel(i: Install): string {
 	return i.version || (i.path.split('/').pop() ?? i.id);

@@ -39,10 +39,14 @@
 </NeoDialog>
 
 <style>
+	/* The bar holds the foot of the window however far the page scrolls */
 	.bottom {
+		position: sticky;
+		bottom: 0;
+		z-index: 5;
 		display: flex;
 		align-items: stretch;
-		height: 56px;
+		height: var(--nebu-bottom);
 		background: var(--neo-background-color);
 		border-top: 1px solid var(--nebu-border);
 	}

@@ -99,7 +99,7 @@ func (d *DB) migrate(ctx context.Context, upgrades []Upgrade) error {
 		return err
 	}
 	// The writer is free again here, so upgrades may write through the store's own methods
-	for _, up := range append([]Upgrade{hashLegacyTokens, adminLegacyUsers}, upgrades...) {
+	for _, up := range append([]Upgrade{hashLegacyTokens, adminLegacyUsers, singularTaskTitles}, upgrades...) {
 		if err := up(ctx, d); err != nil {
 			return fmt.Errorf("upgrade: %w", err)
 		}

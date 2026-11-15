@@ -10,19 +10,21 @@ export function active(t: Task): boolean {
 	return t.state === TaskState.PENDING || t.state === TaskState.RUNNING;
 }
 
-// Where the resource a task made lives, from the label naming it
+// The page of what a task made or changed, from the label naming it, as the words of the button that opens it
 export function madeLink(t: Task): { label: string; href: string } | undefined {
 	const l = t.labels;
-	if (l['instance']) return { label: 'Instance', href: `/serve/${l['instance']}` };
-	if (l['formation']) return { label: 'Formation', href: `/mesh/formations/${encodeURIComponent(l['formation'])}` };
-	if (l['slot']) return { label: 'Slot', href: '/serve' };
-	if (l['build'] && l['runtime']) return { label: 'Build', href: `/runtimes/${encodeURIComponent(l['runtime'])}/builds` };
-	if (l['runtime']) return { label: 'Runtime', href: `/runtimes/${encodeURIComponent(l['runtime'])}` };
-	if (l['repo']) return { label: 'Model', href: `/models?query=${encodeURIComponent(l['repo'])}` };
-	if (l['dir']) return { label: 'Directory', href: '/' };
-	if (t.kind === 'probe') return { label: 'Host', href: '/' };
+	if (l['instance']) return { label: 'Open the instance', href: `/serve/${l['instance']}` };
+	if (l['formation']) return { label: 'Open the formation', href: `/mesh/formations/${encodeURIComponent(l['formation'])}` };
+	if (l['slot']) return { label: 'Open the slot', href: `/serve?slot=${encodeURIComponent(l['slot'])}` };
+	if (l['build'] && l['runtime']) return { label: 'Open the build', href: `/runtimes/${encodeURIComponent(l['runtime'])}/builds` };
+	if (l['runtime']) return { label: 'Open the runtime', href: `/runtimes/${encodeURIComponent(l['runtime'])}` };
+	if (l['repo']) return { label: 'Open the model', href: `/models?query=${encodeURIComponent(l['repo'])}` };
+	if (t.kind === 'probe') return { label: 'Open what it found', href: '/' };
 	return undefined;
 }
+
+// Where a run of a task stands among the runs folded into one row with it, newest first, with the runs either side
+export type RunPlace = { at: number; of: number; newer?: string; older?: string };
 
 // The percent a progress reached as a label, a dash while its total is unknown
 export function progressLabel(p: TaskProgress | undefined): string {

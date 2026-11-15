@@ -19,6 +19,7 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import KeyIcon from 'phosphor-svelte/lib/KeyIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
 	// The signed in account's own API tokens
 	const tokens = new ListQuery<ApiToken, Record<string, never>>(async (_p, cursor, limit, signal) => {
@@ -75,6 +76,14 @@
 		}
 	}
 
+	// What a token holding each scope may do
+	const scopeGrants: Partial<Record<Scope, string>> = {
+		[Scope.INFERENCE]: 'Send requests to the models being served',
+		[Scope.READ]: 'See models, instances, routes and traffic',
+		[Scope.OPERATE]: 'Launch, stop and edit models, routes and bots',
+		[Scope.ADMIN]: 'Change settings, accounts and the mesh'
+	};
+
 	function scopeLabel(s: Scope): string {
 		return enumLabel(ScopeSchema, s);
 	}
@@ -82,7 +91,7 @@
 
 <Card title="API tokens" flush>
 	{#snippet tools()}
-		{#if auth}<NeoButton class="primary" elevation={2} onclick={openNew}>New token</NeoButton>{/if}
+		{#if auth}<NeoButton class="primary" elevation={2} onclick={openNew}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Token</NeoButton>{/if}
 	{/snippet}
 	{#if !auth}
 		<Empty icon={KeyIcon} text="Authentication off" />
@@ -91,7 +100,7 @@
 	{:else if tokens.error}
 		<Empty text={tokens.error} action="Retry" onclick={() => tokens.refresh()} />
 	{:else if tokens.items.length === 0}
-		<Empty icon={KeyIcon} text="No tokens" action="New token" onclick={openNew} />
+		<Empty icon={KeyIcon} text="No tokens" hint="A token signs the API in as you, with the scopes you give it" />
 	{:else}
 		<List head={{ primary: 'Name', secondary: 'Prefix', instrument: 'Scopes', facts: ['Last used'] }}>
 			{#each tokens.items as t (t.id)}
@@ -111,9 +120,9 @@
 	{/if}
 </Card>
 
-<Dialog bind:open={newOpen} title="New token" confirm="Create" {busy} disabled={!name.trim() || scopes.length === 0} onconfirm={create}>
+<Dialog bind:open={newOpen} title="New token" confirm="Create" {busy} needs={!name.trim() ? 'Name the token' : scopes.length === 0 ? 'Give it at least one scope' : ''} onconfirm={create}>
 	<Text bind:value={name} label="Name" min={1} max={64} required />
-	<Checklist bind:value={scopes} options={roleScopes.map((s) => ({ value: s, label: capitalize(scopeLabel(s)) }))} label="Scopes" info="Never more than your own role" />
+	<Checklist bind:value={scopes} options={roleScopes.map((s) => ({ value: s, label: capitalize(scopeLabel(s)), description: scopeGrants[s] }))} label="What the token may do" info="Never more than your own role" />
 	{#snippet footer()}
 		{#if error}<span class="error-text">{error}</span>{/if}
 	{/snippet}

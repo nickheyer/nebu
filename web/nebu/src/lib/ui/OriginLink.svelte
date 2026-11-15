@@ -1,11 +1,11 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
-	// A name that links to where it comes from, the source named in small text on its baseline when given
-	let { href, from, external = false, children }: { href: string; from?: string; external?: boolean; children: Snippet } = $props();
+	// A name that links to where it comes from, the source named in small text on its baseline or under it when stacked
+	let { href, from, external = false, stacked = false, children }: { href: string; from?: string; external?: boolean; stacked?: boolean; children: Snippet } = $props();
 </script>
 
-<a class="origin" {href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined}>
+<a class="origin" class:stacked {href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined}>
 	<span class="name">{@render children()}</span>
 	{#if from}<span class="from">{from}</span>{/if}
 </a>
@@ -20,6 +20,11 @@
 		color: inherit;
 		text-decoration: none;
 		transition: color var(--nebu-fast) var(--nebu-ease);
+	}
+	.stacked {
+		flex-direction: column;
+		gap: 0;
+		align-items: stretch;
 	}
 	.name {
 		display: inline-flex;

@@ -22,8 +22,7 @@
 	import FileTree, { type TreeItem } from '#lib/ui/FileTree.svelte';
 	import PullButton from '#lib/pages/discover/PullButton.svelte';
 	import WeightsTable from '#lib/pages/discover/WeightsTable.svelte';
-	import { lastSearch, weightGroups } from '#lib/pages/discover/discover.js';
-	import ContextLegend from '#lib/pages/models/ContextLegend.svelte';
+	import { lastSearch } from '#lib/pages/discover/discover.js';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import FileTextIcon from 'phosphor-svelte/lib/FileTextIcon';
 	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
@@ -55,7 +54,6 @@
 	const beside = $derived(showCard && width >= 1180);
 	const tabs = $derived([{ id: 'weights', label: 'Weights' }, { id: 'files', label: 'Files' }, ...(showCard && !beside ? [{ id: 'card', label: 'Card' }] : [])]);
 	const activeTab = $derived(tabs.some((t) => t.id === tab) ? tab : 'weights');
-	const hasWeights = $derived(weightGroups(model).length > 0);
 	// This node is the picker's resting value, so pulls name no node until another is chosen
 	const selfId = $derived([...live.nodes.values()].find((n) => n.self)?.id);
 	const pickedNode = $derived(nodeId ?? selfId);
@@ -156,7 +154,6 @@
 	<PullButton {sourceId} {repo} {revision} paths={item.files.map((f) => f.path)} name={item.name} nodeId={nodeId ?? ''} />
 {/snippet}
 
-{#snippet legend()}<ContextLegend />{/snippet}
 
 {#snippet warnings()}
 	{#if model?.warnings.length}
@@ -179,21 +176,21 @@
 		<Card><Empty icon={PlugsIcon} text="No such source" action="Discover" href={back} /></Card>
 	{:else}
 		<div class="layout" class:beside>
+			<!-- The tabs, then the node the pulls land on and the revision both the tables and the card read from -->
+			<div class="opbar dense">
+				<div class="tabs"><PageTabs {tabs} active={activeTab} onchange={openTab} /></div>
+				{#if live.inMesh}
+					<span class="node"><Picker bind:value={() => pickedNode, (v) => (nodeId = v === selfId ? undefined : v)} fetch={fetchNodes} label="Node" compact current={pickedNode ? live.nodes.get(pickedNode)?.name : undefined} /></span>
+				{/if}
+				{#if revisions.length}
+					<Select bind:value={revision} options={revisionOptions} label="Revision" compact fit />
+				{/if}
+			</div>
 			<aside class="operator" aria-label="Repository">
-				<!-- The tabs, then the node the pulls land on and the revision the tables read from -->
-				<div class="opbar dense">
-					<div class="tabs"><PageTabs {tabs} active={activeTab} onchange={openTab} /></div>
-					{#if live.inMesh}
-						<span class="node"><Picker bind:value={() => pickedNode, (v) => (nodeId = v === selfId ? undefined : v)} fetch={fetchNodes} label="Node" compact current={pickedNode ? live.nodes.get(pickedNode)?.name : undefined} /></span>
-					{/if}
-					{#if revisions.length}
-						<Select bind:value={revision} options={revisionOptions} label="Revision" compact fit />
-					{/if}
-				</div>
 				{#if activeTab === 'card'}
 					{@render modelCard()}
 				{:else}
-				<Card flush scroll={beside} footer={activeTab === 'weights' && hasWeights ? legend : undefined}>
+				<Card flush scroll={beside} >
 					{#if resolveError}
 						<Empty icon={CubeIcon} text="Repository failed to resolve" hint={resolveError} action="Retry" onclick={() => attempt++} />
 					{:else if !model}
@@ -228,10 +225,14 @@
 		gap: var(--nebu-space-5);
 		min-width: 0;
 	}
+	/* The card column is as wide as its reading measure and the tables take the rest, both starting under the bar on one line */
 	.layout.beside {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		grid-template-columns: minmax(0, 1fr) minmax(0, 46rem);
 		align-items: start;
+	}
+	.beside .opbar {
+		grid-column: 1 / -1;
 	}
 	.operator {
 		display: flex;
@@ -250,6 +251,7 @@
 	}
 	.opbar {
 		display: flex;
+		flex-wrap: wrap;
 		gap: var(--nebu-space-2);
 		align-items: center;
 		min-width: 0;

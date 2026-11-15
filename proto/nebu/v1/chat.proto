@@ -46,6 +46,8 @@ message ChatTurn {
   string dialect = 14;
   // The call a tool turn answers
   string tool_call_id = 15;
+  // Names the turn within its conversation, made by the client or by the first save that finds it without one
+  string id = 16;
 }
 
 // Request settings a conversation was made with
@@ -138,6 +140,40 @@ message DeleteConversationRequest {
 // Confirms the removal
 message DeleteConversationResponse {}
 
+// Removes one turn of a conversation, with the tool turns answering its calls, leaving every other turn as it is
+message DeleteTurnRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string turn_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the conversation without the turn, none when its last turn went and the conversation with it
+message DeleteTurnResponse {
+  Conversation conversation = 1;
+}
+
+// Rewrites one turn's text in place and drops every turn after it, so the conversation goes on from the new text
+message EditTurnRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string turn_id = 2 [(buf.validate.field).string.min_len = 1];
+  string text = 3;
+}
+
+// Returns the conversation ending on the rewritten turn
+message EditTurnResponse {
+  Conversation conversation = 1;
+}
+
+// Rewinds a conversation for the model to answer again, a user turn staying as its last and an assistant turn going, with every turn after either
+message RetryTurnRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string turn_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the rewound conversation, ending on the turn the model answers next
+message RetryTurnResponse {
+  Conversation conversation = 1;
+}
+
 // Stores an image for the caller's conversations
 message PutChatFileRequest {
   ChatFile file = 1 [(buf.validate.field).required = true];
@@ -185,6 +221,12 @@ service ChatService {
   rpc RenameConversation(RenameConversationRequest) returns (RenameConversationResponse);
   // Removes a conversation and its images
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
+  // Removes one turn of a conversation
+  rpc DeleteTurn(DeleteTurnRequest) returns (DeleteTurnResponse);
+  // Rewrites one turn in place and drops the turns after it
+  rpc EditTurn(EditTurnRequest) returns (EditTurnResponse);
+  // Rewinds a conversation to a turn for the model to answer again
+  rpc RetryTurn(RetryTurnRequest) returns (RetryTurnResponse);
   // Stores an image
   rpc PutChatFile(PutChatFileRequest) returns (PutChatFileResponse);
   // Fetches a stored image

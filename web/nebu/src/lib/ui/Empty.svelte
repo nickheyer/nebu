@@ -4,7 +4,7 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import RowAction from '#lib/ui/RowAction.svelte';
 
-	// An empty block with a line, a hint and at most one button, or a dash in a row
+	// An empty block with a line, a hint and at most one button, or the line alone in a row
 	let {
 		text,
 		hint,
@@ -32,7 +32,7 @@
 
 {#if row}
 	<div class="emptyrow">
-		<span class="text muted" role="img" aria-label={text}>—</span>
+		<span class="text secondary">{text}</span>
 		{#if hasAction}
 			<RowAction label={action ?? ''} {href} {onclick} {loading} />
 		{/if}

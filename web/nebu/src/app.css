@@ -318,6 +318,11 @@ input[type='number']::-webkit-outer-spin-button {
 	box-shadow: var(--neo-dialog-box-shadow, var(--neo-glass-box-shadow-raised-1));
 }
 
+/* A sheet that takes the keys as it opens shows no ring of its own, the first tab moving into it */
+.neo-dialog[data-focus='self']:focus-visible {
+	outline: none;
+}
+
 /* A dialog lays its content out as a flex row, the content filling the width the dialog is given */
 .neo-dialog > :not(.neo-handle-group, .neo-handle) {
 	flex: 1 1 auto;
@@ -327,5 +332,7 @@ input[type='number']::-webkit-outer-spin-button {
 /* Tabs sit on a baseline rule so they read as one strip */
 .neo-tabs.nebu-tabs {
 	width: 100%;
+	overflow-x: auto;
+	scrollbar-width: none;
 	border-bottom: 1px solid var(--nebu-border);
 }

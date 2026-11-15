@@ -69,14 +69,14 @@
 {:else}
 	<Columns ratio="1/1">
 		{#snippet left()}
-			<BrandPlate />
 			<Card title="Host">
 				<FieldRow>
-					<Text bind:value={hostLabel} label="Host label" placeholder={live.host?.hostname} max={64} />
+					<Text bind:value={hostLabel} label="Host label" info="The name this host goes by under the logo and in a mesh" unset={live.host?.hostname ? `${live.host.hostname}, the hostname` : undefined} max={64} />
 					<Select bind:value={logLevel} options={levels} label="Log level" />
 				</FieldRow>
 				<SaveBar dirty={hostDirty} saving={hostSaving} error={hostError} onsave={saveHost} ondiscard={discardHost} />
 			</Card>
+			<BrandPlate />
 		{/snippet}
 		{#snippet right()}
 			<Card title="Downloads">
@@ -84,14 +84,14 @@
 					<NumberField bind:value={downloads.draft.connections} min={1} max={64} label="Connections per file" />
 					<NumberField bind:value={downloads.draft.retries} min={1} max={100} label="Tries per chunk" />
 				</FieldRow>
-				<Bytes bind:value={() => Number(downloads.draft.maxBytesPerSecond), (n) => (downloads.draft.maxBytesPerSecond = BigInt(n))} label="Speed limit per second" emptyZero />
+				<Bytes bind:value={() => Number(downloads.draft.maxBytesPerSecond), (n) => (downloads.draft.maxBytesPerSecond = BigInt(n))} label="Speed limit per second" units={['KB', 'MB', 'GB']} emptyZero unset="no limit" />
 				<DownloadWindows bind:value={downloads.draft.windows} />
 				<SaveBar dirty={downloads.dirty} saving={downloads.saving} error={downloads.error} onsave={() => downloads.save()} ondiscard={() => downloads.discard()} />
 			</Card>
 			<Card title="Storage">
 				<FieldRow wide>
-					<Bytes bind:value={() => Number(storage.draft.maxBytes), (n) => (storage.draft.maxBytes = BigInt(n))} label="Store limit" info="Unused models leave first once the store is over it" emptyZero />
-					<Bytes bind:value={() => Number(storage.draft.minFreeBytes), (n) => (storage.draft.minFreeBytes = BigInt(n))} label="Keep free" info="Disk a download leaves free" emptyZero />
+					<Bytes bind:value={() => Number(storage.draft.maxBytes), (n) => (storage.draft.maxBytes = BigInt(n))} label="Store limit" info="Unused models leave first once the store is over it" emptyZero unset="no limit" />
+					<Bytes bind:value={() => Number(storage.draft.minFreeBytes), (n) => (storage.draft.minFreeBytes = BigInt(n))} label="Keep free" info="Disk a download leaves free" emptyZero unset="nothing" />
 				</FieldRow>
 				<SaveBar dirty={storage.dirty} saving={storage.saving} error={storage.error} onsave={() => storage.save()} ondiscard={() => storage.discard()} />
 			</Card>

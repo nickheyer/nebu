@@ -2,9 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { bytes, pct } from '#lib/format.js';
+	import { bytes, enumLabel, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { SlotState, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
+	import { SlotState, SlotStateSchema, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -13,7 +13,7 @@
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { deviceLabel } from '#lib/ui/memory.js';
 	import { slotLamp, slotShape } from '#lib/ui/status.js';
-	import { canaryShare, canaryTimeLeft, installLabel, modelPhrase, policyRows, slotHref } from '#lib/pages/serve/serve.js';
+	import { canaryShare, canaryTimeLeft, installLabel, launchEntry, modelPhrase, policyRows, slotHref } from '#lib/pages/serve/serve.js';
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
 
 	let {
@@ -35,7 +35,8 @@
 	const inst = $derived(live.instances.get(slot.instanceId));
 	const failed = $derived(slot.state === SlotState.FAILED);
 	const occupied = $derived(slot.instanceId !== '');
-	const occupant = $derived(failed && slot.error ? slot.error : slot.state === SlotState.EMPTY ? '' : modelPhrase(inst ?? slot.request));
+	// The model in the slot, the error of a failed one, a dash while it holds none
+	const occupant = $derived(failed && slot.error ? slot.error : slot.state === SlotState.EMPTY ? '\u2014' : modelPhrase(inst ?? slot.request));
 	const devices = $derived(
 		slot.deviceIds.map((id) => {
 			const d = live.host?.devices.find((x) => x.id === id);
@@ -89,7 +90,7 @@
 	// The move the slot's state allows comes first, launch while empty, swap while serving, relaunch after a failure or idle unload
 	const menu = $derived.by((): MenuItem[] => {
 		const items: MenuItem[] = [];
-		if (slot.state === SlotState.EMPTY) items.push({ label: 'Launch', href: `/serve/launch?slot=${slot.id}` });
+		if (slot.state === SlotState.EMPTY) items.push({ label: launchEntry(live).label, href: launchEntry(live, `?slot=${slot.id}`).href });
 		else if (slot.state === SlotState.READY) items.push({ label: 'Swap', href: `/serve/launch?swap=${slot.id}` });
 		else if (failed || slot.state === SlotState.IDLE) items.push({ label: 'Relaunch', onclick: relaunch });
 		items.push(
@@ -117,6 +118,7 @@
 	secondary={slim ? undefined : occupant}
 	secondaryKind={failed ? 'message' : 'repo'}
 	secondaryColor={failed ? 'error' : 'muted'}
+	facts={[{ value: enumLabel(SlotStateSchema, slot.state) }]}
 	{menu}
 	{selected}
 	onclick={open}

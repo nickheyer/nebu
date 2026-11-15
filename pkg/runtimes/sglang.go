@@ -74,7 +74,7 @@ func (SGLang) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Max: contextSpan, Step: 256, Group: groupContext, Flag: "--context-length",
 			Rule: contextRule},
-		placeholder("by device memory", intParam("chunked_prefill_size", "Chunked prefill", groupContext, "--chunked-prefill-size", "", "tokens", "tokens in one prefill chunk, -1 off", -1, 0, 512, true)),
+		named("-1", "off", placeholder("by device memory", intParam("chunked_prefill_size", "Chunked prefill", groupContext, "--chunked-prefill-size", "", "tokens", "tokens in one prefill chunk, -1 off", 0, 0, 512, true))),
 		placeholder("by cache size", intParam("max_running_requests", "Max running requests", groupContext, "--max-running-requests", "", "requests", "read back from its log as the route's capacity", 1, 0, 1, false)),
 		placeholder("no limit", intParam("max_queued_requests", "Max queued requests", groupContext, "--max-queued-requests", "", "requests", "", 1, 0, 1, true)),
 		placeholder("by memory fraction", intParam("max_total_tokens", "Cache pool tokens", groupContext, "--max-total-tokens", "", "tokens", "tokens the cache pool holds", 256, 0, 256, true)),
@@ -249,7 +249,7 @@ func (SGLang) Policy() *estimate.Policy {
 			gpus := float64(len(host.Kind(s.Host, v1.DeviceKind_DEVICE_KIND_GPU)))
 			return []*v1.ParamState{
 				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
-				bounds("chunked_prefill_size", -1, float64(s.Params.Int("n_ctx")), 512),
+				bounds("chunked_prefill_size", 0, float64(s.Params.Int("n_ctx")), 512),
 				bounds("mem_fraction_static", 0.05, 1, 0.01),
 				bounds("tp_size", 1, gpus, 1),
 				bounds("pp_size", 1, max(gpus, 1), 1),

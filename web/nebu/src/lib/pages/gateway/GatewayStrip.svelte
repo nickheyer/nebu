@@ -8,21 +8,22 @@
 
 	let { status }: { status: GatewayStatus | undefined } = $props();
 
-	const infinity = '\u221e';
-
-	// Listener, transport, auth, requests served and the fallback policy
+	// Where the gateway listens and how, what it has served, then the limits it holds every route to, each named as a limit
 	const items = $derived.by((): FactItem[] => {
 		const s = status;
 		if (!s) return [];
 		const p = s.policy;
+		const addr = s.listeners[0] ? shortAddr(s.listeners[0].addr) : '';
+		const port = /:\d+$/.exec(addr)?.[0] ?? '';
+		const more = s.listeners.length - 1;
 		return [
-			{ id: 'listener', label: 'Listener', value: s.listeners[0] ? shortAddr(s.listeners[0].addr) : '', mono: true, tip: listenersTip(s) || undefined, lamp: s.listeners.length ? undefined : 'error' },
-			{ id: 'tls', label: 'Transport', value: s.tls ? 'TLS' : 'plain', lamp: s.tls ? 'success' : 'warning' },
-			{ id: 'auth', label: 'Auth', value: s.auth ? 'on' : 'off', lamp: s.auth ? 'success' : 'warning' },
-			{ id: 'requests', label: 'Requests', value: compact(s.requests), tip: num(s.requests) },
-			{ id: 'inflight', label: 'Concurrent requests', value: p?.maxInFlight ? num(p.maxInFlight) : infinity },
-			{ id: 'rate', label: 'Rate', value: p?.requestsPerSecond ? `${p.requestsPerSecond}/s` : infinity, tip: p?.burst ? `burst ${num(p.burst)}` : undefined },
-			{ id: 'timeout', label: 'Timeout', value: p?.requestTimeoutMs ? ms(p.requestTimeoutMs) : infinity, tip: p?.upstreamTimeoutMs ? `upstream ${ms(p.upstreamTimeoutMs)}` : undefined }
+			{ id: 'listener', label: 'Listener', value: addr, mono: true, wide: true, keep: port.length, note: more > 0 ? `and ${more} more` : undefined, tip: listenersTip(s) || undefined, lamp: s.listeners.length ? undefined : 'error' },
+			{ id: 'tls', label: 'Transport', value: s.tls ? 'TLS' : 'HTTP', note: s.tls ? 'encrypted' : 'not encrypted', lamp: s.tls ? 'success' : 'warning' },
+			{ id: 'auth', label: 'Sign in', value: s.auth ? 'required' : 'off', note: s.auth ? 'every request needs a token' : 'anyone who reaches it may send', lamp: s.auth ? 'success' : 'warning' },
+			{ id: 'requests', label: 'Requests served', value: compact(s.requests), note: 'since the gateway started', tip: num(s.requests) },
+			{ id: 'inflight', label: 'Concurrency limit', value: p?.maxInFlight ? num(p.maxInFlight) : 'none', quiet: !p?.maxInFlight, note: p?.maxInFlight ? 'requests at once' : undefined },
+			{ id: 'rate', label: 'Rate limit', value: p?.requestsPerSecond ? `${p.requestsPerSecond} /s` : 'none', quiet: !p?.requestsPerSecond, note: p?.burst ? `bursts of ${num(p.burst)}` : undefined },
+			{ id: 'timeout', label: 'Request timeout', value: p?.requestTimeoutMs ? ms(p.requestTimeoutMs) : 'none', quiet: !p?.requestTimeoutMs, note: p?.upstreamTimeoutMs ? `the runtime gets ${ms(p.upstreamTimeoutMs)}` : undefined }
 		];
 	});
 </script>

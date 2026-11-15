@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { capitalize } from '#lib/format.js';
 	import { useNeoThemeContext } from '#lib/neo/providers/neo-theme-provider-context.svelte.js';
 	import { NeoTheme } from '#lib/neo/providers/neo-theme-provider.model.js';
 	import { reason, rpc } from '#lib/api/transport.js';
@@ -63,8 +64,8 @@
 					rows={[
 						{ label: 'name', value: session.displayName },
 						{ label: 'email', value: session.user.email },
-						{ label: 'role', value: session.role },
-						{ label: 'sign in', value: session.user.provider }
+						{ label: 'role', value: capitalize(session.role) },
+						{ label: 'signs in with', value: session.user.provider === 'local' ? 'a password kept on this host' : session.user.provider }
 					]}
 				/>
 			</Card>
@@ -76,7 +77,7 @@
 			<Card title="Password">
 				<Secret bind:value={current} label="Current password" autocomplete="current-password" />
 				<Secret bind:value={fresh} label="New password" autocomplete="new-password" />
-				<SaveBar dirty={current !== '' || fresh !== ''} {saving} {error} label="Change" disabled={!current || !fresh} onsave={changePassword} ondiscard={discard} />
+				<SaveBar dirty={current !== '' || fresh !== ''} {saving} {error} label="Change password" needs={!current && !fresh ? '' : !current ? 'Enter the current password' : !fresh ? 'Enter a new password' : ''} onsave={changePassword} ondiscard={discard} />
 			</Card>
 		{/if}
 	{/snippet}

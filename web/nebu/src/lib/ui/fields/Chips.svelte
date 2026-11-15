@@ -2,6 +2,7 @@
 	import { NeoInput } from '#lib/neo/inputs/index.js';
 	import { NeoPill } from '#lib/neo/pill/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Resting from '#lib/ui/fields/Resting.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
@@ -10,13 +11,15 @@
 		label,
 		info,
 		placeholder,
+		// What an empty list comes to, written under it
+		unset,
 		disabled = false,
 		numeric = false,
 		max,
-		// A toolbar field, its label standing as the placeholder and the chips kept inside the box
+		// A toolbar field, its label and its chips kept inside the box
 		compact = false,
 		onchange
-	}: { value?: string[]; label?: string; info?: string; placeholder?: string; disabled?: boolean; numeric?: boolean; max?: number; compact?: boolean; onchange?: (v: string[]) => void } = $props();
+	}: { value?: string[]; label?: string; info?: string; placeholder?: string; unset?: string; disabled?: boolean; numeric?: boolean; max?: number; compact?: boolean; onchange?: (v: string[]) => void } = $props();
 
 	const id = fieldId();
 	let typed = $state('');
@@ -60,11 +63,13 @@
 		<FieldLabel {label} {info} forId={id} />
 		<div class="chips">{@render pills()}</div>
 	{/if}
-	<NeoInput bind:value={typed} {id} {disabled} placeholder={placeholder ?? (compact ? label : undefined)} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label}>
+	<NeoInput bind:value={typed} {id} {disabled} {placeholder} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label}>
 		{#snippet before()}
+			{#if compact && label}<span class="inlabel">{label}</span>{/if}
 			{#if compact && value.length}<span class="chips inline">{@render pills()}</span>{:else}<span class="plus"><PlusIcon size={16} /></span>{/if}
 		{/snippet}
 	</NeoInput>
+	{#if unset && value.length === 0}<Resting text={unset} />{/if}
 </div>
 
 <style>
@@ -90,6 +95,12 @@
 	}
 	.compact :global(.neo-input-group) {
 		margin-top: 0;
+	}
+	.inlabel {
+		margin-right: 6px;
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+		white-space: nowrap;
 	}
 	.plus {
 		display: inline-flex;

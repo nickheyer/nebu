@@ -131,8 +131,59 @@ export class ChatSession {
 			this.conversation.title = res.conversation.title;
 			this.conversation.updatedAt = res.conversation.updatedAt;
 			this.conversation.createdAt = res.conversation.createdAt;
+			// A turn saved before turns had ids takes the one the daemon gave it
+			for (const [i, t] of this.turns.entries()) if (!t.id) t.id = res.conversation.turns[i]?.id ?? '';
 		}
 		this.#saved = this.conversation.id;
+	}
+
+	// Takes the turns the daemon answers after changing them, an emptied conversation giving way to a new one
+	#adopt(c: Conversation | undefined): boolean {
+		this.pending = [];
+		if (!c) {
+			this.newConversation();
+			return false;
+		}
+		this.conversation.turns = c.turns;
+		this.conversation.title = c.title;
+		this.conversation.updatedAt = c.updatedAt;
+		for (const t of c.turns) for (const f of [...t.images, ...t.media]) void this.loadFile(f);
+		return true;
+	}
+
+	// Saves a conversation the daemon has not seen, so a turn of it can be named in a request
+	async #known(): Promise<void> {
+		if (this.isNew || this.turns.some((t) => !t.id)) await this.save();
+	}
+
+	// Removes one turn from the conversation and nothing else, answering whether the conversation is still there
+	async deleteTurn(turn: ChatTurn): Promise<boolean> {
+		await this.#known();
+		const res = await rpc.chat.deleteTurn({ id: this.conversation.id, turnId: turn.id });
+		return this.#adopt(res.conversation);
+	}
+
+	// Rewrites a turn in place, drops what followed it, and asks the model again when the turn is the person's
+	async editTurn(turn: ChatTurn, text: string, servers: ToolServerStatus[], mode: Mode): Promise<void> {
+		await this.#known();
+		const res = await rpc.chat.editTurn({ id: this.conversation.id, turnId: turn.id, text });
+		if (this.#adopt(res.conversation) && turn.role === 'user') await this.#again(servers, mode);
+	}
+
+	// Asks the model again from a turn, its own answer rewritten or the answer to the person's turn
+	async retryTurn(turn: ChatTurn, servers: ToolServerStatus[], mode: Mode): Promise<void> {
+		await this.#known();
+		const res = await rpc.chat.retryTurn({ id: this.conversation.id, turnId: turn.id });
+		if (this.#adopt(res.conversation)) await this.#again(servers, mode);
+	}
+
+	// Has the model answer the turns the conversation now ends on, in the way the route answers
+	async #again(servers: ToolServerStatus[], mode: Mode): Promise<void> {
+		if (mode !== 'image' && mode !== 'video') return this.answer(servers);
+		const prompt = this.turns.findLast((t) => t.role === 'user');
+		if (!prompt) throw new Error(`no prompt comes before it to make ${mode === 'image' ? 'an image' : 'a video'} from`);
+		if (mode === 'image') await this.makeImages(prompt.text, false);
+		else await this.makeVideo(prompt.text, false);
 	}
 
 	// Saves the conversation, a failure raising a toast
@@ -188,7 +239,7 @@ export class ChatSession {
 
 	// Appends a user turn with its images and asks the model for the answer
 	async send(text: string, attachments: File[], servers: ToolServerStatus[]): Promise<void> {
-		const turn = create(ChatTurnSchema, { role: 'user', text, startedAt: timestampNow(), dialect: this.settings.dialect });
+		const turn = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'user', text, startedAt: timestampNow(), dialect: this.settings.dialect });
 		for (const file of attachments) {
 			const url = await dataUrl(file);
 			const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { id: crypto.randomUUID(), mediaType: file.type || 'image/png', sizeBytes: BigInt(file.size), name: file.name }), data: bytesOf(url) });
@@ -211,7 +262,7 @@ export class ChatSession {
 		this.pending = [];
 		const abort = new AbortController();
 		this.#abort = abort;
-		const assistant = create(ChatTurnSchema, { role: 'assistant', startedAt: timestampNow(), dialect: params.dialect });
+		const assistant = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'assistant', startedAt: timestampNow(), dialect: params.dialect });
 		const conv = this.conversation;
 		try {
 			const calls: PendingCall[] = [];
@@ -323,7 +374,7 @@ export class ChatSession {
 			record.failed = failed;
 			record.tookMs = took;
 		}
-		this.conversation.turns = [...this.turns, create(ChatTurnSchema, { role: 'tool', text, toolCallId: call.id, startedAt: timestampNow(), finishedAt: timestampNow() })];
+		this.conversation.turns = [...this.turns, create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'tool', text, toolCallId: call.id, startedAt: timestampNow(), finishedAt: timestampNow() })];
 		this.pending = this.pending.filter((c) => c.id !== call.id);
 		if (this.pending.length === 0) await this.answer(servers);
 	}
@@ -332,30 +383,13 @@ export class ChatSession {
 		await this.settle(call, 'skipped', true, servers);
 	}
 
-	// Drops the failed turn, asks again in the route's mode, then removes the files the dropped turn stored
-	async retry(servers: ToolServerStatus[], mode: Mode): Promise<void> {
-		const last = this.turns[this.turns.length - 1];
-		if (last?.role !== 'assistant' || !(last.error || last.stop === 'cancelled')) return;
-		this.conversation.turns = this.turns.slice(0, -1);
-		const dropped = [...last.images, ...last.media].map((f) => f.id).filter(Boolean);
-		const prompt = this.turns[this.turns.length - 1];
-		if ((mode === 'image' || mode === 'video') && prompt?.role === 'user') {
-			this.conversation.turns = this.turns.slice(0, -1);
-			if (mode === 'image') await this.makeImages(prompt.text);
-			else await this.makeVideo(prompt.text);
-		} else {
-			await this.answer(servers);
-		}
-		if (dropped.length) await rpc.chat.deleteChatFiles({ ids: dropped });
-	}
-
-	async makeImages(prompt: string): Promise<void> {
+	// Makes images for a prompt, the prompt added as a new user turn unless the conversation already ends on it
+	async makeImages(prompt: string, fresh = true): Promise<void> {
 		this.busy = true;
 		const abort = new AbortController();
 		this.#abort = abort;
-		const user = create(ChatTurnSchema, { role: 'user', text: prompt, startedAt: timestampNow() });
-		const assistant = create(ChatTurnSchema, { role: 'assistant', startedAt: timestampNow() });
-		this.conversation.turns = [...this.turns, user];
+		const assistant = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'assistant', startedAt: timestampNow() });
+		if (fresh) this.conversation.turns = [...this.turns, create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'user', text: prompt, startedAt: timestampNow() })];
 		const conv = this.conversation;
 		try {
 			const res = await images({ model: this.model, prompt, size: this.media.imageSize, steps: this.media.imageSteps, count: this.media.imageCount }, abort.signal);
@@ -384,14 +418,14 @@ export class ChatSession {
 		}
 	}
 
-	async makeVideo(prompt: string): Promise<void> {
+	// Makes a video for a prompt, the prompt added as a new user turn unless the conversation already ends on it
+	async makeVideo(prompt: string, fresh = true): Promise<void> {
 		this.busy = true;
 		this.videoProgress = 0;
 		const abort = new AbortController();
 		this.#abort = abort;
-		const user = create(ChatTurnSchema, { role: 'user', text: prompt, startedAt: timestampNow() });
-		const assistant = create(ChatTurnSchema, { role: 'assistant', startedAt: timestampNow() });
-		this.conversation.turns = [...this.turns, user];
+		const assistant = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'assistant', startedAt: timestampNow() });
+		if (fresh) this.conversation.turns = [...this.turns, create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'user', text: prompt, startedAt: timestampNow() })];
 		const conv = this.conversation;
 		try {
 			let job = await startVideo({ model: this.model, prompt, size: this.media.imageSize, seconds: this.media.videoSeconds, fps: this.media.videoFps, steps: this.media.imageSteps }, abort.signal);

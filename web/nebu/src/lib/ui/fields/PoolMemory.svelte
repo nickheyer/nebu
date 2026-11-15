@@ -5,14 +5,15 @@
 
 	const gib = 2 ** 30;
 
-	// One slider per memory pool for the bytes a slot may take, none at zero, all at its end
+	// One slider per memory pool for the most a slot may take from it, none at zero and all of it at the rail's end
 	let { value = $bindable({}), profile }: { value?: Record<string, number>; profile: HostProfile | undefined } = $props();
 
-	const pools = $derived(poolBars(profile, [], []).map((b) => ({ id: b.id, label: [b.label, b.name].filter(Boolean).join(' '), total: b.total, top: Math.floor((b.total / gib) * 10) / 10 })));
+	// The rail ends on the pool's size as the memory bars write it, to a tenth of a gigabyte
+	const pools = $derived(poolBars(profile, [], []).map((b) => ({ id: b.id, label: [b.label, b.name].filter(Boolean).join(' '), total: b.total, top: Math.round((b.total / gib) * 10) / 10 })));
 
 	function read(id: string, total: number, top: number): number {
 		const n = value[id] ?? total;
-		return n >= total ? top : Math.min(top, Math.round((n / gib) * 10) / 10);
+		return n >= total ? top : Math.min(Number((top - 0.1).toFixed(1)), Math.round((n / gib) * 10) / 10);
 	}
 
 	function write(id: string, total: number, top: number, n: number | undefined) {
@@ -22,7 +23,7 @@
 
 <div class="pools">
 	{#each pools as p (p.id)}
-		<Slider bind:value={() => read(p.id, p.total, p.top), (n) => write(p.id, p.total, p.top, n)} min={0} max={p.top} step={0.1} unit="GB" label={p.label} />
+		<Slider bind:value={() => read(p.id, p.total, p.top), (n) => write(p.id, p.total, p.top, n)} min={0} max={p.top} step={0.1} unit="GB" label={p.label} names={[{ value: 0, label: 'none' }, { value: p.top, label: `all ${p.top} GB` }]} />
 	{/each}
 </div>
 

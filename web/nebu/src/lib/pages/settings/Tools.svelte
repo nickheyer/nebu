@@ -3,9 +3,9 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import type { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { enumLabel, plural } from '#lib/format.js';
+	import { plural } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { SettingsSchema, ToolServerKind, ToolServerKindSchema, type ToolServer } from '#lib/proto/nebu/v1/settings_pb.js';
+	import { SettingsSchema, ToolServerKind, type ToolServer } from '#lib/proto/nebu/v1/settings_pb.js';
 	import type { ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
 	import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
@@ -23,9 +23,11 @@
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
 	import { toolLamp } from '#lib/ui/status.js';
+	import { toolKinds } from '#lib/pages/settings/webhooks.js';
 	import ToolEditor from '#lib/pages/settings/ToolEditor.svelte';
 	import TryTool from '#lib/pages/settings/TryTool.svelte';
 	import LockIcon from 'phosphor-svelte/lib/LockIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import WrenchIcon from 'phosphor-svelte/lib/WrenchIcon';
 
 	let { tabs, servers }: { tabs: HeaderTab[]; servers: ListQuery<ToolServerStatus, Record<string, never>> } = $props();
@@ -106,7 +108,7 @@
 			case ToolServerKind.HTTP:
 				return t.url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0] ?? t.url;
 			default:
-				return t.local ? 'local' : 'web';
+				return t.local ? 'the web and this network' : 'the web';
 		}
 	}
 
@@ -118,14 +120,14 @@
 {#snippet list()}
 	<Card title="Tool servers" flush>
 		{#snippet tools()}
-			<NeoButton class="primary" elevation={2} onclick={() => edit(undefined)}>Add tool server</NeoButton>
+			<NeoButton class="primary" elevation={2} onclick={() => edit(undefined)}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Tool server</NeoButton>
 		{/snippet}
 		{#if !servers.settled}
 			<Skeleton rows={3} secondary="8ch" facts={2} />
 		{:else if servers.error}
 			<Empty text={servers.error} action="Retry" onclick={() => servers.refresh()} />
 		{:else if rows.length === 0}
-			<Empty icon={WrenchIcon} text="No tool servers" action={open ? undefined : 'Add tool server'} onclick={() => edit(undefined)} />
+			<Empty icon={WrenchIcon} text="No tool servers" hint="A tool server gives chats and bots tools to call, such as web search" />
 		{:else}
 			<List head={{ primary: 'Server', secondary: 'Kind', facts: ['Target', 'Tools'], action: 'Enabled' }}>
 				{#each rows as st (st.ref || st.server?.name)}
@@ -135,7 +137,7 @@
 						<ListRow
 							primary={t.name}
 							primaryTip={st.ref && st.ref !== t.name ? st.ref : undefined}
-							secondary={enumLabel(ToolServerKindSchema, t.kind)}
+							secondary={toolKinds.find((k) => k.value === t.kind)?.label ?? ''}
 							secondaryWidth="10ch"
 							facts={[{ value: clip(target, 20), tip: target.length > 20 ? target : undefined }, { value: plural(st.tools.length, 'tool') }]}
 							selected={open && editing?.id === t.id && !st.nodeId}

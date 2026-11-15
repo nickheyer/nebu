@@ -24,6 +24,14 @@ export function passingCondition(type: string): boolean {
 	return passing.has(type);
 }
 
+// Reasons a check that should hold gives for failing, apart from the ones that only say it does not apply
+const failing = /Fail|Crash|Invalid|Unknown|Missing|Down$|NoReady|TooMany|NotPublished|NotExecutable|RelativePath|RolledBack|RollingBack|Abandoned/;
+
+// Whether a reason names a failure, as against a state nothing is wrong with
+export function failingReason(reason: string): boolean {
+	return failing.test(reason);
+}
+
 // The lamp a state lights
 export type Lamp = 'success' | 'warning' | 'error' | 'primary' | 'muted';
 

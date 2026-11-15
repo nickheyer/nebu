@@ -3,11 +3,11 @@
 	import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { bytes, bytesIn, byteUnit, enumLabel, factLabel, perMinute, thin, when } from '#lib/format.js';
+	import { bytes, bytesIn, byteUnit, factLabel, perMinute, thin, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import type { GatewayStatus, Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
-	import { DeviceKind, PoolKind, ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type ProcessUse, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
+	import { DeviceKind, PoolKind, ProbeStatus, type Device, type ProbeResult, type ProcessUse, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
 	import type { Instance } from '#lib/proto/nebu/v1/instance_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
@@ -32,7 +32,7 @@
 	import { poolBars, poolTitle, type PoolBar } from '#lib/ui/memory.js';
 	import { instanceLamp, instanceShape } from '#lib/ui/status.js';
 	import { hostTabs } from '#lib/pages/host/tabs.js';
-	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
+	import { launchEntry, modelPhrase, terminal } from '#lib/pages/serve/serve.js';
 	import { buckets, sparkBuckets, started, windowFacts } from '#lib/pages/traffic/traffic.js';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 
@@ -196,6 +196,11 @@
 	function probeState(p: ProbeResult): 'ok' | 'failed' | 'skipped' {
 		return p.status === ProbeStatus.OK ? 'ok' : p.status === ProbeStatus.FAILED ? 'failed' : 'skipped';
 	}
+
+	// What came of a probe in a word, a skipped one being a thing this host does not have
+	function probeWord(p: ProbeResult): string {
+		return p.status === ProbeStatus.OK ? 'found' : p.status === ProbeStatus.FAILED ? 'failed' : 'not here';
+	}
 </script>
 
 {#snippet deviceRow(bar: PoolBar)}
@@ -250,21 +255,22 @@
 		{:else if profile.storage.length === 0}
 			<Empty text="No storage probed" />
 		{:else}
-			<List head={{ primary: 'Mount', secondary: 'Filesystem', instrument: 'Used', action: 'Holds' }}>
+			<List head={{ primary: 'Mount', secondary: 'Filesystem', instrument: 'Used' }}>
 				{#each profile.storage as s (s.path)}
-					<ListRow primary={s.path} primaryKind="path" primaryWidth="24ch" secondary={s.filesystem} secondaryWidth="10ch">
+					{@const held = storageHolds(s)}
+					{#snippet holds()}
+						<span class="holds">
+							{#each held as h (h.label)}
+								<span class="hold"><Swatch kind={h.kind} />{h.label}<span class="held">{bytes(h.bytes)}</span></span>
+							{/each}
+						</span>
+					{/snippet}
+					<ListRow primary={s.path} primaryKind="path" primaryWidth="24ch" secondary={s.filesystem} secondaryWidth="10ch" below={held.length ? holds : undefined}>
 						{#snippet instrument()}
 							<div class="gauge">
 								<span class="track"><Bar segments={storageSegments(s)} total={Number(s.totalBytes)} format={(n) => bytes(n)} /></span>
 								<Tip text="{bytes(s.freeBytes)} free" tag="span"><span class="reading">{usedOverTotal(storageUsed(s), s.totalBytes)}</span></Tip>
 							</div>
-						{/snippet}
-						{#snippet action()}
-							<span class="holds">
-								{#each storageHolds(s) as h (h.label)}
-									<span class="hold"><Swatch kind={h.kind} />{h.label}<span class="held">{bytes(h.bytes)}</span></span>
-								{/each}
-							</span>
 						{/snippet}
 					</ListRow>
 				{/each}
@@ -273,23 +279,24 @@
 	</Card>
 {/snippet}
 
+<!-- A probe reads by what it looks for and what came of it, its own name kept for whoever searches the logs by it -->
 {#snippet probeRow(p: ProbeResult)}
-	<ListRow primary={p.probeId} primaryWidth="18ch" secondary={p.detail} secondaryKind="message" secondaryWidth="40ch" secondaryColor={p.status === ProbeStatus.FAILED ? 'error' : 'muted'}>
-		{#snippet leading()}<Mark state={probeState(p)} label={enumLabel(ProbeStatusSchema, p.status)} />{/snippet}
+	<ListRow primary={p.description || p.probeId} primaryKind="text" primaryTip={`probe ${p.probeId}`} primaryWidth="32ch" secondary={p.detail} secondaryKind="message" secondaryWidth="32ch" secondaryColor={p.status === ProbeStatus.FAILED ? 'error' : 'muted'} facts={[{ value: probeWord(p) }]}>
+		{#snippet leading()}<Mark state={probeState(p)} label={probeWord(p)} />{/snippet}
 	</ListRow>
 {/snippet}
 
 {#snippet systemCard()}
-	<Card title="System" flush>
+	<Card title="Probes" info="What nebu looked for on this host to learn its devices and memory, and what came of each" flush>
 		{#snippet tools()}
-			<NeoButton text aria-label="Refresh" loading={refreshing} onclick={refresh}>{#snippet icon()}<ArrowsClockwiseIcon size={20} />{/snippet}</NeoButton>
+			<NeoButton text loading={refreshing} onclick={refresh}>{#snippet icon()}<ArrowsClockwiseIcon size={16} />{/snippet}Probe again</NeoButton>
 		{/snippet}
 		{#if !profile}
 			<Skeleton rows={3} dot={false} leading="20px" primary="16ch" secondary="40ch" facts={0} action={false} menu={false} />
 		{:else if probes.length === 0}
 			<Empty text="Nothing probed" />
 		{:else}
-			<List>
+			<List head={{ primary: 'Looks for', secondary: 'Found', facts: ['Result'] }}>
 				{#each probes as p (p.probeId)}{@render probeRow(p)}{/each}
 			</List>
 		{/if}
@@ -310,7 +317,7 @@
 		{#if !live.ready}
 			<Skeleton rows={2} primary="24ch" secondary={false} facts={1} menu={false} />
 		{:else if serving.length === 0}
-			<Empty text="Nothing serving" action="Launch" href="/serve/launch" row />
+			<Empty text="Nothing serving" action={launchEntry(live).label} href={launchEntry(live).href} row />
 		{:else}
 			<List>
 				{#each serving as inst (inst.id)}{@render servingRow(inst)}{/each}
@@ -343,8 +350,8 @@
 					{ label: 'probed', value: profile?.probedAt ? when(profile.probedAt) : '' },
 					{ label: 'version', value: gateway ? `${gateway.implementation} ${gateway.version}`.trim() : '', mono: true },
 					{ label: 'listener', value: gateway?.listeners.map((l) => l.addr).join(', ') ?? '', mono: true, copy: true },
-					{ label: 'transport', value: gateway ? (gateway.tls ? 'TLS' : 'plain') : '' },
-					{ label: 'auth', value: gateway ? (gateway.auth ? 'on' : 'off') : '' },
+					{ label: 'transport', value: gateway ? (gateway.tls ? 'TLS, encrypted' : 'HTTP, not encrypted') : '' },
+					{ label: 'sign in', value: gateway ? (gateway.auth ? 'required' : 'off') : '' },
 					{ label: 'metrics', value: gateway?.metricsAddr ?? '', mono: true },
 					{ label: 'home', value: profile?.home ?? '', mono: true, copy: true },
 					...facts.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true }))
@@ -403,11 +410,11 @@
 		text-align: right;
 		white-space: nowrap;
 	}
+	/* What nebu keeps on a mount reads as the key to its bar, on a line under the row */
 	.holds {
-		display: inline-flex;
+		display: flex;
 		flex-wrap: wrap;
 		gap: var(--nebu-space-1) var(--nebu-space-4);
-		justify-content: flex-end;
 		font-size: var(--nebu-text-secondary);
 		color: var(--nebu-text-muted);
 	}

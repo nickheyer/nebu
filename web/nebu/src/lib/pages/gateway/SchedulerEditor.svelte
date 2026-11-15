@@ -14,7 +14,7 @@
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
-	import { schedulerSkeleton } from '#lib/pages/gateway/gateway.js';
+	import { conditionsLamp, schedulerSkeleton, schedulerWord } from '#lib/pages/gateway/gateway.js';
 
 	let { config, references, onclose }: { config?: SchedulerConfig; references: number; onclose: () => void } = $props();
 
@@ -29,7 +29,6 @@
 
 	const current = $derived(editing ? live.schedulerConfigs.get(name) : undefined);
 	const dirty = $derived(!editing || yaml !== start?.spec?.yaml);
-	const complete = $derived(name.trim() !== '' && valid);
 
 	function draft() {
 		return create(SchedulerConfigSchema, { name: name.trim(), spec: create(SchedulerConfigSpecSchema, { yaml }) });
@@ -61,9 +60,15 @@
 </script>
 
 <div class="top">
-	<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? plural(references, 'pool') : undefined} {onclose} />
+	<PanelHeader title={editing ? name : 'New scheduler'} lamp={editing ? conditionsLamp(current?.status?.conditions) : undefined} state={editing ? schedulerWord(current?.status?.conditions) : undefined} subtitle={editing ? (references ? `used by ${plural(references, 'pool')}` : 'used by no pool') : undefined} {onclose} />
 </div>
+<!-- What the scheduler's checks say comes before its text, which is long -->
 <div class="body">
+	{#if current?.status?.conditions.length}
+		<Section title="Checks" level={3}>
+			<Conditions conditions={current.status?.conditions} />
+		</Section>
+	{/if}
 	<div class="form">
 		{#if !editing}
 			<FieldRow>
@@ -73,17 +78,12 @@
 		{/if}
 		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} fill rows={12} label="Configuration" />
 	</div>
-	{#if current?.status?.conditions.length}
-		<Section title="Status" level={3}>
-			<Conditions conditions={current.status?.conditions} />
-		</Section>
-	{/if}
 </div>
 {#snippet deleteButton()}
 	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
 {/snippet}
 
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!complete} leading={editing && references === 0 ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} needs={!name.trim() ? 'Name the scheduler' : !valid ? (codeError ?? 'The configuration is not valid YAML') : ''} leading={editing && references === 0 ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
 
 <style>
 	.top {

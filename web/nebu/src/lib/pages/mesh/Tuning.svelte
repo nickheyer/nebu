@@ -68,7 +68,8 @@
 	let saving = $state(false);
 	let saveError = $state<string | undefined>(undefined);
 	const dirty = $derived(editing === undefined || pattern !== start.pattern || streamGb !== start.streamGb || tflops !== start.tflops || fixedSeconds !== start.fixedSeconds);
-	const complete = $derived(pattern.trim() !== '' && streamGb > 0 && tflops > 0);
+	// What the profile still needs, the first thing missing
+	const missing = $derived(pattern.trim() === '' ? 'Give the pattern of the devices it matches' : streamGb <= 0 ? 'Give its memory bandwidth' : tflops <= 0 ? 'Give its compute' : '');
 
 	function edit(p?: DeviceProfile) {
 		editing = p?.pattern;
@@ -115,7 +116,7 @@
 		{#if !loaded}
 			<Skeleton rows={4} dot={false} secondary="12ch" facts={2} action={false} />
 		{:else if profiles.length === 0}
-			<Empty icon={GaugeIcon} text="No device profiles" action="Profile" onclick={() => edit()} />
+			<Empty icon={GaugeIcon} text="No device profiles" hint="A profile states the speeds to assume for a device when a model is split over several" />
 		{:else}
 			<List head={{ primary: 'Pattern', secondary: 'Stream', facts: ['Compute', 'Fixed'] }}>
 				{#each profiles as p (p.pattern)}
@@ -137,14 +138,14 @@
 	</Card>
 	{#if loaded && ratios.length}
 		<Card title="Ratios" info="Learned from formations that ran" flush>
-			<List head={{ primary: 'Shape', secondary: 'Runtime', facts: ['TTFT and TPT', 'Samples'] }}>
+			<List head={{ primary: 'Shape', secondary: 'Runtime', facts: ['First token ratio', 'Per token ratio', 'Samples'] }}>
 				{#each ratios as r, i (i)}
 					<ListRow
 						primary={enumLabel(ShapeSchema, r.shape)}
 						primaryTip={r.updatedAt ? `updated ${when(r.updatedAt)}` : undefined}
 						secondary={r.runtimeId}
 						secondaryWidth="16ch"
-						facts={[{ value: `${r.ttftRatio.toFixed(2)} · ${r.tptRatio.toFixed(2)}`, tip: 'TTFT ratio · TPT ratio' }, { value: num(r.samples) }]}
+						facts={[{ value: r.ttftRatio.toFixed(2), tip: 'Measured time to first token over the planned one' }, { value: r.tptRatio.toFixed(2), tip: 'Measured time per output token over the planned one' }, { value: num(r.samples) }]}
 					>
 						{#snippet badges()}{#if r.linkClass}<StateWord label={linkLabel(r.linkClass)} lamp={linkLamp(r.linkClass)} />{/if}{/snippet}
 					</ListRow>
@@ -166,5 +167,5 @@
 			<NumberField bind:value={tflops} min={0} step={10} label="Compute" unit="TFLOPS" emptyZero />
 		</FieldRow>
 	</FormSection>
-	<SaveBar always={editing === undefined} {dirty} {saving} error={saveError} disabled={!complete} label={editing === undefined ? 'Create' : 'Save'} onsave={save} ondiscard={() => (editorOpen = false)} />
+	<SaveBar always={editing === undefined} {dirty} {saving} error={saveError} needs={missing} label={editing === undefined ? 'Create' : 'Save'} onsave={save} ondiscard={() => (editorOpen = false)} />
 </Sheet>

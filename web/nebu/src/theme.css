@@ -76,9 +76,10 @@ html[neo-theme-root],
 	--nebu-screen-text: #9fd39a;
 	--nebu-screen-text-muted: #6f8f6c;
 	--nebu-text-muted: #5b606c;
-	--nebu-text-faint: #8a8f9a;
+	--nebu-text-faint: #646974;
 	--nebu-border: #d7dae0;
 	--nebu-border-strong: #b9bec8;
+	--nebu-scrim: rgb(16 20 28 / 52%);
 	--nebu-surface-sunken: #f3f4f7;
 	--nebu-steel: #4f6378;
 	--nebu-disabled-fill: #e0e2e7;
@@ -92,6 +93,7 @@ html[neo-theme-root],
 	--neo-skeleton-step: -0.4;
 	--neo-switch-checked-background: var(--neo-color-primary);
 	--neo-border-color-focused: transparent;
+	--neo-dialog-backdrop-color: var(--nebu-scrim);
 
 	color-scheme: light;
 }
@@ -102,6 +104,7 @@ html[neo-theme-root],
 	--nebu-text-faint: #7b808b;
 	--nebu-border: #2a2e36;
 	--nebu-border-strong: #3a3f49;
+	--nebu-scrim: rgb(0 0 0 / 62%);
 	--nebu-surface-sunken: #191c22;
 	--nebu-steel: #9fb0c4;
 	--nebu-disabled-fill: #212327;
@@ -116,6 +119,7 @@ html[neo-theme-root],
 		--nebu-text-faint: #7b808b;
 		--nebu-border: #2a2e36;
 		--nebu-border-strong: #3a3f49;
+		--nebu-scrim: rgb(0 0 0 / 62%);
 		--nebu-surface-sunken: #191c22;
 		--nebu-steel: #9fb0c4;
 		--nebu-disabled-fill: #212327;
