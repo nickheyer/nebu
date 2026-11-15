@@ -107,6 +107,8 @@ export type NeoIconDoubleChevronProps = NeoIconProps & { space?: number };
 
 export type NeoIconUnplugProps = NeoIconProps & { plug?: boolean };
 
+export type NeoIconWatchProps = Omit<NeoIconProps, 'stroke'> & { stroke?: number };
+
 export type NeoIconAudioProps = NeoIconProps & {
   /**
    * The speed of the animation in seconds.

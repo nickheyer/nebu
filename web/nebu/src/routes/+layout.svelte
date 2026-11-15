@@ -5,6 +5,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
+	import { watchCursor } from '#lib/neo/icons/neo-icon-watch.utils.js';
 	import { NeoLoadingMatrix } from '#lib/neo/loading/index.js';
 	import { NeoNotificationProvider } from '#lib/neo/floating/notification/index.js';
 	import { NeoPortalContainer } from '#lib/neo/floating/portal/index.js';
@@ -19,6 +20,7 @@
 
 	const atLogin = $derived(page.url.pathname === '/login');
 
+	onMount(watchCursor);
 	onMount(() => void session.load());
 
 	$effect(() => {

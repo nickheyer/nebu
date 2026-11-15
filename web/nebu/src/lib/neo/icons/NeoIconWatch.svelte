@@ -1,10 +1,9 @@
 <script lang="ts">
-  import type { NeoIconProps } from '#lib/neo/icons/neo-icon.model.js';
+  import type { NeoIconWatchProps } from '#lib/neo/icons/neo-icon.model.js';
 
-  const { size = '1em', scale = 1, stroke = 1.5, enter = true, ...rest }: NeoIconProps = $props();
+  import { closed, gaze, open, radius } from '#lib/neo/icons/neo-icon-watch.utils.js';
 
-  const closed = 'M4 12c1.38 -0.77 4.42 -1.3 8 -1.3c3.58 0 6.62 0.53 8 1.3c-1.38 0.77 -4.42 1.3 -8 1.3c-3.58 0 -6.62 -0.53 -8 -1.3Z';
-  const open = 'M2 12c1.72 -3.83 5.53 -6.5 10 -6.5c4.47 0 8.28 2.67 10 6.5c-1.72 3.83 -5.53 6.5 -10 6.5c-4.47 0 -8.28 -2.67 -10 -6.5Z';
+  const { size = '1em', scale = 1, stroke = 1.5, enter = true, ...rest }: NeoIconWatchProps = $props();
 </script>
 
 <svg
@@ -15,11 +14,14 @@
   style:scale
   {...rest}
 >
-  <circle cx="12" cy="12" r={enter ? 0 : 3} fill="currentColor">
-    {#if enter}
-      <animate attributeName="r" dur="6s" keyTimes="0;0.03;0.97;1" repeatCount="indefinite" values="0;3;3;0" />
-    {/if}
-  </circle>
+  <g transform="translate(12 12)">
+    <g transform={enter ? 'scale(0)' : undefined}>
+      {#if enter}
+        <animateTransform attributeName="transform" type="scale" dur="6s" keyTimes="0;0.03;0.97;1" repeatCount="indefinite" values="0;1;1;0" />
+      {/if}
+      <circle {@attach gaze(stroke)} r={radius} fill="currentColor" />
+    </g>
+  </g>
   <path
     fill="none"
     stroke="currentColor"
