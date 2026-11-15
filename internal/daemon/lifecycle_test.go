@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/config"
 	"github.com/nickheyer/nebu/pkg/datalayer"
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/runtimes"
@@ -150,19 +152,18 @@ func TestSharedGatewayPathsWaitForReadiness(t *testing.T) {
 
 // A dedicated gateway listener binds nothing until readiness passes
 func TestGatewayListenerBindsAfterReadiness(t *testing.T) {
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	probe.Close()
 	var open atomic.Bool
-	s := serveDaemon(t, "gateway:\n  listen: "+addr+"\n", heldCheck(&open))
+	s := serveDaemon(t, "gateway:\n  listen: 127.0.0.1:0\n", heldCheck(&open))
 	eventually(t, "the API open after recovery", func() bool { return call(t, s.base+"/nebu.v1.TaskService/ListTasks") == http.StatusOK })
+	var held []int
 	for range 5 {
-		if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
-			conn.Close()
-			t.Fatal("the gateway listener accepted a connection before readiness")
+		ports, err := proc.ListeningPorts(os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, ports...)
+		if got := s.d.Gateway.Status().GetListeners(); len(got) != 0 {
+			t.Fatalf("listeners reported before readiness %v", got)
 		}
 		if code, _ := get(t, s.base+"/v1/models"); code != http.StatusNotFound {
 			t.Fatalf("the API listener answered a gateway path with %d while the gateway listens on its own address", code)
@@ -170,7 +171,13 @@ func TestGatewayListenerBindsAfterReadiness(t *testing.T) {
 		time.Sleep(60 * time.Millisecond)
 	}
 	open.Store(true)
+	var addr string
 	eventually(t, "the gateway listener serving once ready", func() bool {
+		listeners := s.d.Gateway.Status().GetListeners()
+		if len(listeners) != 1 || listeners[0].GetShared() {
+			return false
+		}
+		addr = listeners[0].GetAddr()
 		resp, err := http.Get("http://" + addr + "/v1/models")
 		if err != nil {
 			return false
@@ -178,6 +185,24 @@ func TestGatewayListenerBindsAfterReadiness(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	})
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(held, bound) {
+		t.Fatalf("the gateway listener held port %d before readiness", bound)
+	}
+	now, err := proc.ListeningPorts(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(now, bound) {
+		t.Fatalf("the gateway listener reports port %d while the daemon listens on %v", bound, now)
+	}
 }
 
 // The daemon samples an instance's runtime for when it last showed work, a runtime that stops answering reading as unanswered

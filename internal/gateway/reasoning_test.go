@@ -137,23 +137,23 @@ func TestAnthropicEffortFitsTemplate(t *testing.T) {
 	text := xhighTemplateText(t)
 	front := newLlamaFront(t, text, stubSrv.Config.Handler)
 	h.publishTemplate("freddie", text, front)
-	for settings, want := range map[string]string{
-		`"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}`:   `"reasoning_effort":"xhigh"`,
-		`"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}`: `"reasoning_effort":"medium"`,
-		`"thinking":{"type":"adaptive"}`:                                     ``,
+	for _, c := range []struct{ settings, upstream, prompt string }{
+		{`"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}`, `"reasoning_effort":"xhigh"`, "Reasoning effort: xhigh"},
+		{`"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}`, `"reasoning_effort":"medium"`, "Reasoning effort: medium"},
+		{`"thinking":{"type":"adaptive"}`, ``, "Reasoning effort: xhigh"},
 	} {
-		body := `{"model":"freddie","max_tokens":8,"stream":true,"system":[{"type":"text","text":"You are an agent."}],"messages":[{"role":"user","content":"hello there"}],` + settings + `}`
+		body := `{"model":"freddie","max_tokens":8,"stream":true,"system":[{"type":"text","text":"You are an agent."}],"messages":[{"role":"user","content":"hello there"}],` + c.settings + `}`
 		r := h.do(http.MethodPost, "/v1/messages", body, "anthropic-version", "2023-06-01")
 		if r.status != http.StatusOK {
-			t.Fatalf("%s: status %d: %s", settings, r.status, r.body)
+			t.Fatalf("%s: status %d: %s", c.settings, r.status, r.body)
 		}
 		upstream := h.trace(r).GetUpstreamRequest()
-		if want == "" && strings.Contains(upstream, "reasoning_effort") || want != "" && !strings.Contains(upstream, want) {
-			t.Fatalf("%s: upstream request %s, want %q", settings, upstream, want)
+		if c.upstream == "" && strings.Contains(upstream, "reasoning_effort") || c.upstream != "" && !strings.Contains(upstream, c.upstream) {
+			t.Fatalf("%s: upstream request %s, want %q", c.settings, upstream, c.upstream)
 		}
-	}
-	if !strings.Contains(front.lastPrompt(), "Reasoning effort: xhigh") {
-		t.Fatalf("adaptive alone did not leave the template its default: %q", front.lastPrompt())
+		if !strings.Contains(front.lastPrompt(), c.prompt) {
+			t.Fatalf("%s: prompt %q, want %q", c.settings, front.lastPrompt(), c.prompt)
+		}
 	}
 }
 

@@ -58,7 +58,7 @@ func TestFreeCapacityDrawSamplesItsPools(t *testing.T) {
 	}
 	t.Cleanup(func() { d.Close() })
 	pace := scrape.Pace{Deciding: 10 * time.Millisecond, Working: 60 * time.Millisecond, Idle: time.Hour}
-	m, err := New(ctx, Options{DB: d, Events: events.New(), NodeID: node, Scrape: pace, ProbeInterval: 20 * time.Millisecond, CatalogInterval: time.Hour})
+	m, err := New(ctx, Options{DB: d, Events: events.New(), NodeID: node, Scrape: pace, ProbeInterval: time.Hour, CatalogInterval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,22 @@ func TestFreeCapacityDrawSamplesItsPools(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "the first sample of both runtimes", func() bool { return busy.scrapes.Load() == 1 && free.scrapes.Load() == 1 })
+	running := func(runtime string, rt *countedRuntime) (int, bool) {
+		ep, ok := m.Store().Endpoint(endpointID(&Published{InstanceID: runtime, Address: rt.addr}))
+		if !ok {
+			return 0, false
+		}
+		sm, ok := datalayer.Attribute[*datalayer.ServerMetrics](ep, datalayer.CollectorMetrics)
+		if !ok {
+			return 0, false
+		}
+		return sm.RunningRequests, true
+	}
+	waitUntil(t, "the first sample of both runtimes", func() bool {
+		_, a := running("vllm", busy)
+		_, b := running("sglang", free)
+		return a && b
+	})
 	busy.running.Store(4)
 	if counts := drawCounts(t, m, "chat", 200); counts[a] < 60 || counts[a] > 140 {
 		t.Fatalf("static weights drew %v", counts)
@@ -92,8 +107,18 @@ func TestFreeCapacityDrawSamplesItsPools(t *testing.T) {
 	}
 	balanced(v1.RouteBalance_ROUTE_BALANCE_FREE_CAPACITY)
 	time.Sleep(2 * pace.Working)
-	if counts := drawCounts(t, m, "chat", 200); counts[b] < 140 {
-		t.Fatalf("free capacity over a full pool it had last sampled idle drew %v", counts)
+	waitUntil(t, "a draw to sample the full pool", func() bool {
+		start := time.Now()
+		drawCounts(t, m, "chat", 1)
+		waited := time.Since(start)
+		n, _ := running("vllm", busy)
+		if n != 4 && waited < pace.Deciding {
+			t.Fatalf("a draw decided on the idle sample of a full pool %v after asking for a newer one", waited)
+		}
+		return n == 4
+	})
+	if counts := drawCounts(t, m, "chat", 2000); counts[b] < 1400 {
+		t.Fatalf("free capacity over a full pool drew %v", counts)
 	}
 	if busy.scrapes.Load() < 2 || free.scrapes.Load() < 2 {
 		t.Fatalf("the draws read samples taken before them, %d and %d scrapes", busy.scrapes.Load(), free.scrapes.Load())

@@ -105,8 +105,15 @@ func TestSourcesSampleThroughPorts(t *testing.T) {
 		c, catalog := datalayer.Attribute[*datalayer.Catalog](e, datalayer.CollectorCatalog)
 		return metrics && catalog && len(c.Models) > 0
 	})
-	if pool, adapter, err := m.Lookup(ctx, "served-llama"); err != nil || pool.ID != id || adapter != "" {
-		t.Fatalf("lookup of a catalog name %v %q %v", pool.ID, adapter, err)
+	var pool datalayer.Pool
+	var adapter string
+	waitUntil(t, "the served names to follow the catalog", func() bool {
+		var err error
+		pool, adapter, err = m.Lookup(ctx, "served-llama")
+		return err == nil
+	})
+	if pool.ID != id || adapter != "" {
+		t.Fatalf("lookup of a catalog name %v %q", pool.ID, adapter)
 	}
 	p, _ := m.Pool(string(id))
 	if got := p.GetStatus().GetEndpoints()[0]; got.GetMetrics() == nil || got.GetMetrics().GetNumBlocks() == 0 {

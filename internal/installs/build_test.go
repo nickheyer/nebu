@@ -349,6 +349,9 @@ func TestInstallByMethod(t *testing.T) {
 	if err != nil || patched.GetId() == builds[0].GetId() || strings.Join(patched.GetPatches(), ",") != "motd" {
 		t.Fatalf("a build with every patch is a build of its own: %v %v", patched, err)
 	}
+	if final, err := m.Tasks.Wait(ctx, patched.GetTaskId()); err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		t.Fatalf("patched build task %v %v", final, err)
+	}
 }
 
 func TestRemoveInstallDropsBuild(t *testing.T) {

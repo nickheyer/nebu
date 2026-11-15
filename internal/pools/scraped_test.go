@@ -42,11 +42,12 @@ func TestScrapeFailureCondition(t *testing.T) {
 		p, _ := m.Pool(id)
 		return condition(p.GetStatus().GetConditions(), ConditionScraped)
 	}
-	waitUntil(t, "the Scraped condition to report the failing endpoint", func() bool {
-		return scraped().GetStatus() == v1.ConditionStatus_CONDITION_STATUS_FALSE
+	var c *v1.Condition
+	waitUntil(t, "the Scraped condition to report the missing pool size", func() bool {
+		c = scraped()
+		return c.GetStatus() == v1.ConditionStatus_CONDITION_STATUS_FALSE && strings.Contains(c.GetMessage(), "kv-capacity label")
 	})
-	c := scraped()
-	if c.GetReason() != ReasonScrapeFailing || !strings.Contains(c.GetMessage(), "endpoint l1/"+itoa(addr.Port)) || !strings.Contains(c.GetMessage(), "kv-capacity label") {
+	if c.GetReason() != ReasonScrapeFailing || !strings.Contains(c.GetMessage(), "endpoint l1/"+itoa(addr.Port)) {
 		t.Fatalf("scraped condition %v", c)
 	}
 	sized := unsized
@@ -55,9 +56,10 @@ func TestScrapeFailureCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, "the Scraped condition to clear", func() bool {
-		return scraped().GetStatus() == v1.ConditionStatus_CONDITION_STATUS_TRUE
+		c = scraped()
+		return c.GetStatus() == v1.ConditionStatus_CONDITION_STATUS_TRUE
 	})
-	if c := scraped(); c.GetReason() != ReasonScraped {
+	if c.GetReason() != ReasonScraped {
 		t.Fatalf("scraped condition after the size %v", c)
 	}
 }
