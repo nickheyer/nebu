@@ -2,9 +2,11 @@ package sources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,32 +30,117 @@ var github = &Catalog{
 	RepoExample:   "owner/repo",
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "release or ref",
-	Sorts:         []string{SortRelevance, SortLikes, SortUpdated, ghSortForks},
-	// Relevance has no key, it is the API's own order
-	SortKeys:   map[string]string{SortLikes: "stars", SortUpdated: "updated", ghSortForks: "forks"},
-	Reversible: []string{SortLikes, SortUpdated, ghSortForks},
+	Sorts:         []string{SortRelevance, SortLikes, ghSortForks, SortUpdated, ghSortHelpWanted},
+	// Relevance has no key, it is the API's own order. Updated orders by the last push.
+	SortKeys: map[string]string{SortLikes: "stars", ghSortForks: "forks", SortUpdated: "updated", ghSortHelpWanted: "help-wanted-issues"},
+	SortLabels: map[string]string{
+		SortRelevance:    "Best match",
+		SortLikes:        "Most stars",
+		ghSortForks:      "Most forks",
+		ghSortHelpWanted: "Most help wanted issues",
+	},
+	// The API ignores the order of its best match
+	Reversible: []string{SortLikes, ghSortForks, SortUpdated, ghSortHelpWanted},
+	// Qualifiers of the search query, after the licenses read from the API
 	Facets: []*v1.Facet{
+		Hint(NewFacet(ghFacetIn, "Search in", true, Value("name", ""), Value("description", ""), Value("topics", ""), Value("readme", "README")), "Where the query text is matched, the name, description, and topics when none is picked"),
 		Freeform(FacetAuthor, "Owner"),
-		Freeform(FacetTag, "Topic"),
-		Freeform(ghFacetLanguage, "Language"),
+		Hint(Multi(Freeform(FacetTag, "Topic")), "Repositories carrying every topic named"),
+		Hint(Multi(Freeform(ghFacetLanguage, "Language")), "Repositories in any language named"),
+		Between(ghFacetStars, "Stars"),
+		Between(ghFacetForks, "Forks"),
+		Hint(Between(ghFacetSize, "Size (KB)"), "Size of the git repository in kilobytes, release assets not counted"),
+		Hint(Freeform(ghFacetPushed, "Pushed"), "The last push, a date or range such as >=2025-01-01 or 2024-01-01..2024-06-30"),
+		Hint(Freeform(ghFacetCreated, "Created"), "A date or range such as 2024, <2024-06, or 2024-01-01..*"),
+		Hint(NewFacet(ghFacetFork, "Forked", false, Value("true", "Included"), Value("only", "Only")), "GitHub leaves forks out unless asked"),
+		Toggle(ghFacetHideArchived, "Hide archived"),
+		Hint(NewFacet(ghFacetVisibility, "Visibility", false, Value("public", ""), Value("private", "")), "Private repositories are the ones the token can see"),
 	},
-	HitFields: []*v1.ConfigField{
-		{Name: ghFacetLanguage, Label: "Language", Description: "Main language of the repository"},
-		{Name: "archived", Label: "Archived", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Description: "Archived on GitHub, read only"},
-	},
+	Columns: slices.Concat(
+		Shown(
+			Named(Col(ColLikes), "Stars"),
+			ExtraCol(ghSortForks, "Forks", AsCount, "Forks of the repository"),
+			ExtraCol(ghFacetLanguage, "Language", AsText, "Main language of the repository"),
+			Col(ColUpdated),
+		),
+		Cols(ColCreated, ColLicense),
+		[]*v1.HitColumn{
+			Named(Col(ColAuthor), "Owner"),
+			ExtraCol("open_issues", "Open issues", AsCount, "Open issues and pull requests"),
+			ExtraCol("repo_size", "Repository size", AsBytes, "Size of the git repository GitHub reports, release assets not counted"),
+			ExtraCol("fork", "Fork", AsFlag, "A fork of another repository"),
+			ExtraCol("archived", "Archived", AsFlag, "Archived on GitHub, read only"),
+		},
+	),
 	API: githubAPI{},
 }
 
 func init() { register(github) }
 
 const (
-	ghSortForks     = "forks"
-	ghFacetLanguage = "language"
-	ghPageSize      = 100
-	ghReleaseTTL    = 5 * time.Minute
-	ghShaMedia      = "application/vnd.github.sha"
-	ghRawMedia      = "application/vnd.github.raw+json"
+	ghSortForks      = "forks"
+	ghSortHelpWanted = "help_wanted"
+	ghPageSize       = 100
+	ghReleaseTTL     = 5 * time.Minute
+	ghShaMedia       = "application/vnd.github.sha"
+	ghRawMedia       = "application/vnd.github.raw+json"
+	// Results the search API serves of any query, refusing pages beyond them
+	ghSearchWindow = 1000
 )
+
+// Facets only GitHub offers. The counts and dates are named as the qualifiers they fill.
+const (
+	ghFacetLanguage     = "language"
+	ghFacetIn           = "in"
+	ghFacetStars        = "stars"
+	ghFacetForks        = "forks"
+	ghFacetSize         = "size"
+	ghFacetPushed       = "pushed"
+	ghFacetCreated      = "created"
+	ghFacetFork         = "fork"
+	ghFacetHideArchived = "hide_archived"
+	ghFacetVisibility   = "visibility"
+)
+
+// Count qualifiers, written n..m, >=n, or <=n
+var ghCounts = []string{ghFacetStars, ghFacetForks, ghFacetSize}
+
+// Date qualifiers, taking a date or time after an optional comparison, or a range with either end open as *
+var ghDateQualifiers = []string{ghFacetPushed, ghFacetCreated}
+
+// A year, month, or day, the day with an optional time and zone, as the search reads one
+const ghDate = `\d{4}(-\d{2}(-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?)?)?`
+
+var ghDates = regexp.MustCompile(`^(([<>]=?)?` + ghDate + `|(` + ghDate + `|\*)\.\.(` + ghDate + `|\*))$`)
+
+// License keywords the search takes beyond the most used ones the API lists, from GitHub's licensing
+// docs, named as the API names them, and each checked against the search on 2026-11-19
+var ghLicenses = []*v1.FacetValue{
+	Value("0bsd", "BSD Zero Clause License"),
+	Value("afl-3.0", "Academic Free License v3.0"),
+	Value("artistic-2.0", "Artistic License 2.0"),
+	Value("bsd-3-clause-clear", "BSD 3-Clause Clear License"),
+	Value("bsd-4-clause", `BSD 4-Clause "Original" or "Old" License`),
+	Value("cc", "Creative Commons license family"),
+	Value("cc-by-4.0", "Creative Commons Attribution 4.0 International"),
+	Value("cc-by-sa-4.0", "Creative Commons Attribution Share Alike 4.0 International"),
+	Value("ecl-2.0", "Educational Community License v2.0"),
+	Value("epl-1.0", "Eclipse Public License 1.0"),
+	Value("eupl-1.1", "European Union Public License 1.1"),
+	Value("gpl", "GNU General Public License family"),
+	Value("isc", "ISC License"),
+	Value("lgpl", "GNU Lesser General Public License family"),
+	Value("lgpl-3.0", "GNU Lesser General Public License v3.0"),
+	Value("lppl-1.3c", "LaTeX Project Public License v1.3c"),
+	Value("ms-pl", "Microsoft Public License"),
+	Value("ncsa", "University of Illinois/NCSA Open Source License"),
+	Value("ofl-1.1", "SIL Open Font License 1.1"),
+	Value("osl-3.0", "Open Software License 3.0"),
+	Value("other", "Other"),
+	Value("postgresql", "PostgreSQL License"),
+	Value("wtfpl", "Do What The F*ck You Want To Public License"),
+	Value("zlib", "zlib License"),
+}
 
 type ghAsset struct {
 	Name   string `json:"name"`
@@ -109,11 +196,13 @@ type ghItem struct {
 	HTMLURL       string   `json:"html_url"`
 	Stars         uint64   `json:"stargazers_count"`
 	Forks         uint64   `json:"forks_count"`
+	OpenIssues    uint64   `json:"open_issues_count"`
 	Language      string   `json:"language"`
 	Topics        []string `json:"topics"`
 	PushedAt      string   `json:"pushed_at"`
 	CreatedAt     string   `json:"created_at"`
 	Private       bool     `json:"private"`
+	Fork          bool     `json:"fork"`
 	Archived      bool     `json:"archived"`
 	Owner         struct {
 		Login string `json:"login"`
@@ -121,28 +210,134 @@ type ghItem struct {
 	License *struct {
 		SPDX string `json:"spdx_id"`
 	} `json:"license"`
+	// Kilobytes of git storage
+	Size uint64 `json:"size"`
+}
+
+// The licenses GitHub lists as most used, then the rest its search takes, by name
+func (githubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
+	var listed []struct {
+		Key  string `json:"key"`
+		Name string `json:"name"`
+	}
+	if _, err := c.JSON(ctx, c.URL("licenses"), url.Values{"per_page": {"100"}}, &listed); err != nil {
+		return nil, err
+	}
+	values := make([]*v1.FacetValue, 0, len(listed)+len(ghLicenses))
+	for _, l := range listed {
+		values = append(values, Value(l.Key, l.Name))
+	}
+	for _, v := range ghLicenses {
+		if !slices.ContainsFunc(values, func(have *v1.FacetValue) bool { return have.GetId() == v.GetId() }) {
+			values = append(values, v)
+		}
+	}
+	slices.SortFunc(values, func(a, b *v1.FacetValue) int {
+		return strings.Compare(strings.ToLower(a.GetLabel()), strings.ToLower(b.GetLabel()))
+	})
+	return []*v1.Facet{Hint(NewFacet(FacetLicense, "License", true, values...), "Other is a license GitHub matches to none it knows")}, nil
+}
+
+// Builds the search query: the text, then a qualifier for each filter asked. GitHub drops a
+// qualifier value it cannot read and answers unfiltered, so the picked ones are checked here.
+func ghQuery(req *v1.SearchRequest) (string, error) {
+	var terms []string
+	if owner := Author(req); owner != "" {
+		terms = append(terms, ghQualifier("user", owner))
+	}
+	for _, t := range append(Filter(req, FacetTag), req.GetTags()...) {
+		terms = append(terms, ghQualifier("topic", strings.TrimSpace(t)))
+	}
+	for _, lang := range Filter(req, ghFacetLanguage) {
+		terms = append(terms, ghQualifier("language", lang))
+	}
+	// Repeated licenses match any of them, and GitHub refuses one it does not know
+	for _, l := range Filter(req, FacetLicense) {
+		terms = append(terms, ghQualifier("license", l))
+	}
+	for _, id := range ghCounts {
+		bounds, err := Range(req, id)
+		if err != nil {
+			return "", err
+		}
+		if n := ghCount(bounds); n != "" {
+			terms = append(terms, id+":"+n)
+		}
+	}
+	for _, id := range ghDateQualifiers {
+		if d := FilterOne(req, id); d != "" {
+			if !ghDates.MatchString(d) {
+				return "", fmt.Errorf("%w: %s %q is no date or range, want one such as >=2025-01-01 or 2024-01-01..2024-12-31", ErrSource, id, d)
+			}
+			terms = append(terms, id+":"+d)
+		}
+	}
+	if On(req, ghFacetHideArchived) {
+		terms = append(terms, "archived:false")
+	}
+	in, fork, visibility := Filter(req, ghFacetIn), FilterOne(req, ghFacetFork), FilterOne(req, ghFacetVisibility)
+	if err := errors.Join(ghOffered(ghFacetIn, in...), ghOffered(ghFacetFork, fork), ghOffered(ghFacetVisibility, visibility)); err != nil {
+		return "", err
+	}
+	if visibility != "" {
+		terms = append(terms, "is:"+visibility)
+	}
+	// The API refuses a query of only in and fork, so browsing lists everything with a star
+	query := strings.TrimSpace(req.GetQuery())
+	switch {
+	case query != "":
+		terms = append([]string{query}, terms...)
+		if len(in) > 0 {
+			terms = append(terms, "in:"+strings.Join(in, ","))
+		}
+	case len(terms) == 0:
+		terms = append(terms, "stars:>0")
+	}
+	if fork != "" {
+		terms = append(terms, "fork:"+fork)
+	}
+	return strings.Join(terms, " "), nil
+}
+
+// Refuses a value the pick list does not offer, blank standing for none
+func ghOffered(id string, values ...string) error {
+	i := slices.IndexFunc(github.Facets, func(f *v1.Facet) bool { return f.GetId() == id })
+	for _, v := range values {
+		if v != "" && !slices.ContainsFunc(github.Facets[i].GetValues(), func(o *v1.FacetValue) bool { return o.GetId() == v }) {
+			return fmt.Errorf("%w: %s %q is not one GitHub reads", ErrSource, id, v)
+		}
+	}
+	return nil
+}
+
+// A qualifier with its value, quoted when the value holds a space as Jupyter Notebook does
+func ghQualifier(name, value string) string {
+	if strings.ContainsAny(value, " \t") {
+		return name + `:"` + value + `"`
+	}
+	return name + ":" + value
+}
+
+// Writes a count range as GitHub reads it, empty when both sides are open
+func ghCount(b Bounds) string {
+	switch {
+	case b.Min != nil && b.Max != nil:
+		return strconv.FormatUint(*b.Min, 10) + ".." + strconv.FormatUint(*b.Max, 10)
+	case b.Min != nil:
+		return ">=" + strconv.FormatUint(*b.Min, 10)
+	case b.Max != nil:
+		return "<=" + strconv.FormatUint(*b.Max, 10)
+	}
+	return ""
 }
 
 func (githubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	terms := []string{}
-	if query := strings.TrimSpace(req.GetQuery()); query != "" {
-		terms = append(terms, query)
-	}
-	if owner := Author(req); owner != "" {
-		terms = append(terms, "user:"+owner)
-	}
-	for _, t := range append(Filter(req, FacetTag), req.GetTags()...) {
-		terms = append(terms, "topic:"+strings.TrimSpace(t))
-	}
-	if lang := FilterOne(req, ghFacetLanguage); lang != "" {
-		terms = append(terms, "language:"+lang)
-	}
-	// The search API refuses an empty query, so browsing lists everything with a star
-	if len(terms) == 0 {
-		terms = append(terms, "stars:>0")
+	query, err := ghQuery(req)
+	if err != nil {
+		return nil, err
 	}
 	limit, page := c.Limit(req), c.page(req)
-	q := url.Values{"q": {strings.Join(terms, " ")}, "per_page": {strconv.Itoa(limit)}, "page": {strconv.Itoa(page)}}
+	q := url.Values{"q": {query}, "per_page": {strconv.Itoa(limit)}, "page": {strconv.Itoa(page)}}
 	if sort.Key != "" {
 		q.Set("sort", sort.Key)
 		q.Set("order", direction(sort.Ascending, "asc", "desc"))
@@ -158,7 +353,7 @@ func (githubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	for _, it := range body.Items {
 		resp.Hits = append(resp.Hits, ghHit(it))
 	}
-	c.nextPage(resp, page, limit, body.TotalCount)
+	c.nextPage(resp, page, limit, min(body.TotalCount, ghSearchWindow))
 	return resp, nil
 }
 
@@ -175,6 +370,15 @@ func ghHit(it ghItem) *v1.SearchHit {
 	}
 	if it.Forks > 0 {
 		hit.Extra[ghSortForks] = strconv.FormatUint(it.Forks, 10)
+	}
+	if it.OpenIssues > 0 {
+		hit.Extra["open_issues"] = strconv.FormatUint(it.OpenIssues, 10)
+	}
+	if it.Size > 0 {
+		hit.Extra["repo_size"] = strconv.FormatUint(it.Size*1024, 10)
+	}
+	if it.Fork {
+		hit.Extra["fork"] = "true"
 	}
 	if it.Archived {
 		hit.Extra["archived"] = "true"

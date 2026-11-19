@@ -19,7 +19,7 @@
 	import type { DotShape, Lamp } from '#lib/ui/status.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 
-	export type Fact = { value: string; tip?: string; mono?: boolean };
+	export type Fact = { value: string; tip?: string; mono?: boolean; clip?: boolean };
 
 	let {
 		lamp,
@@ -74,7 +74,7 @@
 	let open = $state(false);
 	let width = $state(0);
 	const compact = $derived(list ? list.compact : width > 0 && width < compactBelow);
-	const shownFacts = $derived(list ? facts.slice(0, 3) : facts.filter((f) => f.value !== '').slice(0, 3));
+	const shownFacts = $derived(list ? facts.slice(0, list.factLimit) : facts.filter((f) => f.value !== '').slice(0, 3));
 	const dropped = $derived(compact && ((secondary !== undefined && secondary !== '') || facts.slice(1).some((f) => f.value !== '')));
 	const expandable = $derived(expand !== undefined || dropped);
 	const clickable = $derived(href !== undefined || onclick !== undefined);
@@ -94,7 +94,7 @@
 		if (expandable) slots.push('caret');
 		list.primaryWeight = weightOf(primaryWidthCh, 1);
 		list.secondaryWeight = weightOf(secondaryWidth, 1.4);
-		return list.use(slots, Math.min(3, facts.length));
+		return list.use(slots, Math.min(list.factLimit, facts.length));
 	});
 
 	function inControl(target: EventTarget | null): boolean {
@@ -126,8 +126,8 @@
 
 {#snippet fact(f: Fact | undefined)}
 	{#if f && f.value !== ''}
-		<Tip text={f.tip === f.value ? undefined : f.tip} tag="span" class="facttip">
-			<span class="fact" class:mono={f.mono}>{f.value}</span>
+		<Tip text={f.tip === f.value && !f.clip ? undefined : f.tip} tag="span" class="facttip">
+			<span class="fact" class:mono={f.mono} class:clip={f.clip}>{f.value}</span>
 		</Tip>
 	{/if}
 {/snippet}
@@ -150,7 +150,7 @@
 							<span class="was">{#if list?.head?.secondary}<span class="heading">{list.head.secondary}</span>{/if}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" /></span>
 						{/if}
 						{#each facts.slice(1) as f, i (i)}
-							{#if f.value !== ''}<span class="was">{#if list?.head?.facts?.[i + 1]}<span class="heading">{list.head.facts[i + 1]}</span>{/if}<span class="fact" class:mono={f.mono}>{f.value}</span></span>{/if}
+							{#if f.value !== ''}<span class="was">{#if list?.fact(i + 1)?.label}<span class="heading">{list.fact(i + 1)?.label}</span>{/if}<span class="fact" class:mono={f.mono}>{f.value}</span></span>{/if}
 						{/each}
 					</div>
 				{/if}
@@ -171,7 +171,7 @@
 				<span class="cell secondary-col">{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" clip />{/if}</span>
 			{/if}
 			{#if list.has('instrument')}<span class="cell instrument">{#if instrument}{@render instrument()}{/if}</span>{/if}
-			{#each { length: list.shownFacts } as _, i (i)}<span class="cell end">{@render fact(shownFacts[i])}</span>{/each}
+			{#each { length: list.shownFacts } as _, i (i)}<span class="cell" class:end={!list.fact(i)?.start}>{@render fact(shownFacts[i])}</span>{/each}
 			{#if list.has('action')}<span class="cell end action">{#if action}{@render action()}{/if}</span>{/if}
 			{#if list.has('menu')}<span class="cell">{#if menu?.length}<Menu items={menu} />{/if}</span>{/if}
 			{#if list.has('caret')}<span class="cell">{#if expandable}{@render caret()}{/if}</span>{/if}
@@ -352,6 +352,12 @@
 	}
 	.fact.mono {
 		font-family: var(--nebu-font-mono);
+	}
+	.fact.clip {
+		max-width: 22ch;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		vertical-align: bottom;
 	}
 	:global(.tip.facttip) {
 		flex: 0 0 auto;

@@ -479,10 +479,14 @@ func TestClientChecksSortsAndStampsIds(t *testing.T) {
 	if _, err := c.Search(context.Background(), &v1.SearchRequest{Ascending: true}); err == nil || !strings.Contains(err.Error(), "ascending") {
 		t.Fatalf("ascending %v", err)
 	}
+	var reversible []string
 	for _, s := range c.Capabilities(context.Background()).GetSorts() {
 		if s.GetReversible() {
-			t.Fatalf("hub sort %s should not be reversible", s.GetId())
+			reversible = append(reversible, s.GetId())
 		}
+	}
+	if got := strings.Join(reversible, ","); got != SortCreated+","+SortParameters {
+		t.Fatalf("the hub orders only created and parameters ascending, got %s", got)
 	}
 	if c.CLI() != nil || c.HTTP() == nil || c.Git() != nil {
 		t.Fatal("transports the source did not turn on stay nil")

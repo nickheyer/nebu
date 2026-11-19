@@ -1,7 +1,12 @@
 package sources
 
 import (
+	"cmp"
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +82,86 @@ func TestFiltersAndHelpers(t *testing.T) {
 	}
 	if Humanize("text-generation") != "Text generation" || Sorts(SortDownloads)[0].Label != "Most downloaded" || Sorts("odd")[0].Label != "Odd" {
 		t.Fatal("labels")
+	}
+}
+
+func TestTogglesAndRanges(t *testing.T) {
+	filters := func(v string) *v1.SearchRequest {
+		return &v1.SearchRequest{Filters: map[string]string{"f": v}}
+	}
+	if !On(filters("true"), "f") || On(filters("false"), "f") || On(filters("yes"), "f") || On(&v1.SearchRequest{}, "f") {
+		t.Fatal("a toggle is on only when sent as true")
+	}
+	show := func(b Bounds) string {
+		side := func(n *uint64) string {
+			if n == nil {
+				return "-"
+			}
+			return strconv.FormatUint(*n, 10)
+		}
+		return side(b.Min) + ".." + side(b.Max)
+	}
+	for raw, want := range map[string]string{
+		"":              "-..-",
+		"3B..6B":        "3000000000..6000000000",
+		"1.5k..":        "1500..-",
+		"..250M":        "-..250000000",
+		" 0 .. 10 ":     "0..10",
+		"7..7":          "7..7",
+		"1000..2000000": "1000..2000000",
+	} {
+		if b, err := Range(filters(raw), "f"); err != nil || show(b) != want {
+			t.Fatalf("range %q: want %s, got %s %v", raw, want, show(b), err)
+		}
+	}
+	for _, raw := range []string{"7B", "..", "big..", "1..many", "9..3"} {
+		if b, err := Range(filters(raw), "f"); !errors.Is(err, ErrSource) {
+			t.Fatalf("range %q should be refused, got %s %v", raw, show(b), err)
+		}
+	}
+	// Every span a range facet offers reads as a range, each starting where the one before ends
+	spans := Between("f", "F", ParameterSpans()...).GetValues()
+	var end *uint64
+	for i, s := range spans {
+		b, err := Range(filters(s.GetId()), "f")
+		if err != nil || s.GetLabel() == "" {
+			t.Fatalf("span %q: %v", s.GetId(), err)
+		}
+		if (i == 0) != (b.Min == nil) || (i == len(spans)-1) != (b.Max == nil) || end != nil && *b.Min != *end {
+			t.Fatalf("span %q does not follow the one before, got %s", s.GetId(), show(b))
+		}
+		end = b.Max
+	}
+}
+
+func TestColumnsCarryLabelsTypesAndSorts(t *testing.T) {
+	cols := slices.Concat(Shown(Cols(ColSize, ColDownloads)...), []*v1.HitColumn{Named(Col(ColLikes), "Stars"), ExtraCol("forks", "Forks", AsCount, "Forks of the repository")})
+	var got []string
+	for _, c := range cols {
+		got = append(got, fmt.Sprintf("%s/%s/%s/%t", c.GetId(), c.GetLabel(), strings.TrimPrefix(c.GetType().String(), "COLUMN_TYPE_"), c.GetShown()))
+	}
+	if want := "size_bytes/Size/BYTES/true downloads/Downloads/COUNT/true likes/Stars/COUNT/false forks/Forks/COUNT/false"; strings.Join(got, " ") != want {
+		t.Fatalf("columns\nwant %s\n got %s", want, strings.Join(got, " "))
+	}
+	// Every registered column names the sort that orders by it, and no sort the provider lacks
+	for _, cat := range all() {
+		for _, c := range cat.Columns {
+			want := cmp.Or(columnSorts[c.GetId()], c.GetId())
+			if !slices.Contains(cat.Sorts, want) {
+				want = ""
+			}
+			if c.GetSort() != want {
+				t.Fatalf("%s column %s: sort %q, want %q", cat.ID, c.GetId(), c.GetSort(), want)
+			}
+		}
+	}
+	// Every facet says how it takes its value, so a client can draw it
+	for _, cat := range all() {
+		for _, f := range cat.Facets {
+			if f.GetInput() == v1.FacetInput_FACET_INPUT_UNSPECIFIED || f.GetLabel() == "" {
+				t.Fatalf("%s facet %s needs an input and a label", cat.ID, f.GetId())
+			}
+		}
 	}
 }
 

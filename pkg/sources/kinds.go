@@ -22,6 +22,15 @@ const (
 // Facets shared across providers.
 var SharedFacets = []string{FacetFormat, FacetRuntime, FacetKind}
 
+// SharedColumns returns the columns the daemon fills on every hit, ahead of a provider's own.
+func SharedColumns() []*v1.HitColumn {
+	return []*v1.HitColumn{
+		{Id: "formats", Label: "Formats", Type: AsList, Shown: true},
+		{Id: "kind", Label: "Kind", Type: AsText, Description: "Language model, diffusion model, or a component of one"},
+		{Id: "runtimes", Label: "Runs on", Type: AsList, Description: "Runtimes here that serve the model"},
+	}
+}
+
 // KindName names a kind the way the kind facet spells it.
 func KindName(kind v1.ModelKind) string { return text.Enum(kind) }
 

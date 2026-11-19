@@ -1,12 +1,14 @@
 package sources
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,18 +32,38 @@ var csghub = &Catalog{
 	RepoExample:   "org/model",
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
-	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated},
+	// Every order runs one way, and a search ranks by its own match whatever the sort. The hub also
+	// takes most_star, which orders models by a star count only code and MCP repositories keep.
+	Sorts: []string{SortTrending, SortDownloads, SortLikes, SortUpdated},
 	SortKeys: map[string]string{
 		SortTrending:  "trending",
 		SortDownloads: "most_download",
 		SortLikes:     "most_favorite",
 		SortUpdated:   "recently_update",
 	},
-	Noise: []string{".+:.+", "[a-z]{2,3}"},
-	HitFields: []*v1.ConfigField{
-		{Name: "architecture", Label: "Architecture", Description: "Model architecture"},
-		{Name: "base_model", Label: "Base model", Description: "Base model this was made from"},
+	// Filters the hub takes as parameters of their own, after the facets its tags fill
+	Facets: []*v1.Facet{
+		Hint(Between(csgFacetParameters, "Parameters", ParameterSpans()...), "Parameter count, such as 1B to 8B"),
+		Hint(NewFacet(csgFacetReview, "License review", false, csgReviews...), "Where the hub's check of the model's license stands"),
+		Hint(Toggle(csgFacetServerless, "Serverless"), "Models the hub serves from a running serverless endpoint"),
+		Hint(Multi(Freeform(FacetTag, "Tag")), "Models carrying every tag named, of any category"),
 	},
+	Noise: []string{".+:.+", "[a-z]{2,3}"},
+	// The list leaves out the metadata a repository's own page carries, its size, parameters,
+	// architecture, and base model among it
+	Columns: slices.Concat(
+		Shown(Cols(ColDownloads, ColLikes, ColUpdated)...),
+		Cols(ColCreated, ColTask),
+		[]*v1.HitColumn{Named(Col(ColLibrary), "Framework")},
+		Cols(ColLicense, ColAuthor, ColDescription),
+		[]*v1.HitColumn{
+			ExtraCol("runtime_framework", "Runtime frameworks", AsList, "Inference, fine-tuning, and evaluation frameworks the hub runs the model with"),
+			ExtraCol("languages", "Languages", AsList, "Languages the model is tagged with"),
+			ExtraCol("commercial", "Commercial use", AsText, "What the model's license allows commercially, as the hub reads it"),
+			ExtraCol("review", "License review", AsText, "Where the hub's check of the model's license stands"),
+			ExtraCol("hf_path", "Hugging Face", AsText, "The Hugging Face repository the model mirrors"),
+		},
+	),
 	API: csghubAPI{},
 }
 
@@ -58,15 +80,39 @@ const (
 	csgWalkBudget  = 25 * time.Second
 )
 
-// Listing query parameters by facet id
-var csgFacetParams = map[string]string{
-	FacetTask:      "task_tag",
-	FacetFramework: "framework_tag",
-	FacetLicense:   "license_tag",
+// Facets only CSGHub offers
+const (
+	csgFacetDomain     = "domain"
+	csgFacetLanguage   = "language"
+	csgFacetRuntime    = "runtime_framework"
+	csgFacetResource   = "resource"
+	csgFacetParameters = "parameters"
+	csgFacetReview     = "review"
+	csgFacetServerless = "serverless"
+)
+
+// A facet filled from one category of the hub's built in tags
+type csgCategory struct {
+	category, id, label, hint string
+	// Offers the groups the category's tags fall in rather than the tags
+	groups bool
 }
 
-// Tag categories the hub publishes, by the facet each fills
-var csgTaxonomy = []taxonomy{{"task", FacetTask, "Task"}, {"framework", FacetFramework, "Framework"}, {"license", FacetLicense, "License"}}
+// Tag categories the hub filters models by, by the facet each fills. It stores its industry tags
+// capitalised and matches the name lower cased, so an industry filter finds none of them.
+var csgTaxonomy = []csgCategory{
+	{category: "task", id: FacetTask, label: "Task"},
+	{category: "task", id: csgFacetDomain, label: "Domain", hint: "Every task of one field", groups: true},
+	{category: "framework", id: FacetFramework, label: "Framework"},
+	{category: "license", id: FacetLicense, label: "License"},
+	{category: "language", id: csgFacetLanguage, label: "Language"},
+	{category: "runtime_framework", id: csgFacetRuntime, label: "Runtime framework", hint: "Inference, fine-tuning, and evaluation frameworks the hub runs the model with"},
+	{category: "resource", id: csgFacetResource, label: "Hardware", hint: "Accelerators the hub runs the model on"},
+}
+
+// License review states as the hub's source names them, checked before sending since the hub
+// answers a state it does not know unfiltered
+var csgReviews = []*v1.FacetValue{Value("compliant", ""), Value("pending_review", ""), Value("non_compliant", "")}
 
 // The CSGHub API: enveloped JSON, a paged list, branches, a tree, and Hub style downloads
 type csghubAPI struct{}
@@ -85,27 +131,37 @@ func csgData[T any](ctx context.Context, c *Client, rawURL string, q url.Values)
 
 type csgTag struct {
 	Name     string `json:"name"`
+	Category string `json:"category"`
 	Group    string `json:"group"`
 	BuiltIn  bool   `json:"built_in"`
 	ShowName string `json:"show_name"`
 }
 
-// Reads the hub's own tag taxonomy, keeping the built in entries
+// Reads the hub's own tag taxonomy, keeping the built in entries. The hub matches a tag's name
+// lower cased, so names differing only in case are one value.
 func (csghubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
-	return taxonomyFacets(ctx, csgTaxonomy, func(ctx context.Context, category string) ([]*v1.FacetValue, error) {
-		tags, err := csgData[[]csgTag](ctx, c, c.URL("api", "v1", "tags"), url.Values{"category": {category}, "scope": {"model"}})
-		if err != nil {
-			return nil, err
-		}
-		var values []*v1.FacetValue
+	tags, err := csgData[[]csgTag](ctx, c, c.URL("api", "v1", "tags"), url.Values{"scope": {"model"}, "built_in": {"true"}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*v1.Facet, 0, len(csgTaxonomy))
+	for _, cat := range csgTaxonomy {
+		f := Hint(NewFacet(cat.id, cat.label, false), cat.hint)
+		seen := map[string]bool{}
 		for _, e := range tags {
-			if !e.BuiltIn || e.Name == "" {
+			id, label, group := strings.ToLower(e.Name), cmp.Or(e.ShowName, e.Name), Humanize(e.Group)
+			if cat.groups {
+				id, label, group = e.Group, "", ""
+			}
+			if !e.BuiltIn || e.Category != cat.category || id == "" || seen[id] {
 				continue
 			}
-			values = append(values, GroupedValue(e.Name, e.ShowName, Humanize(e.Group)))
+			seen[id] = true
+			f.Values = append(f.Values, GroupedValue(id, label, group))
 		}
-		return values, nil
-	})
+		out = append(out, f)
+	}
+	return out, nil
 }
 
 type csgModel struct {
@@ -121,12 +177,15 @@ type csgModel struct {
 	Tags        []struct {
 		Name     string `json:"name"`
 		Category string `json:"category"`
+		BuiltIn  bool   `json:"built_in"`
 	} `json:"tags"`
-	License       string `json:"license"`
-	BaseModel     string `json:"base_model"`
-	HFPath        string `json:"hf_path"`
-	DefaultBranch string `json:"default_branch"`
-	Metadata      struct {
+	License              string `json:"license"`
+	ComplianceStatus     string `json:"compliance_status"`
+	CommercialPermission string `json:"commercial_permission"`
+	BaseModel            string `json:"base_model"`
+	HFPath               string `json:"hf_path"`
+	DefaultBranch        string `json:"default_branch"`
+	Metadata             struct {
 		ModelParams  float64 `json:"model_params"`
 		Architecture string  `json:"architecture"`
 	} `json:"metadata"`
@@ -138,10 +197,27 @@ func (csghubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
 		q.Set("search", query)
 	}
-	for facet, param := range csgFacetParams {
-		if v := FilterOne(req, facet); v != "" {
-			q.Set(param, v)
+	// Tags go as category, name, and group, the three lists kept in step. A model must carry every
+	// tag named, and a blank part matches any.
+	tag := func(category, name, group string) {
+		q.Add("tag_category", category)
+		q.Add("tag_name", name)
+		q.Add("tag_group", group)
+	}
+	for _, cat := range csgTaxonomy {
+		switch v := FilterOne(req, cat.id); {
+		case v == "":
+		case cat.groups:
+			tag(cat.category, "", v)
+		default:
+			tag(cat.category, v, "")
 		}
+	}
+	for _, t := range append(Filter(req, FacetTag), req.GetTags()...) {
+		tag("", t, "")
+	}
+	if err := csgFilters(req, q); err != nil {
+		return nil, err
 	}
 	var body struct {
 		Total uint64     `json:"total"`
@@ -158,6 +234,34 @@ func (csghubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	}
 	c.nextPage(resp, page, limit, body.Total)
 	return resp, nil
+}
+
+// Adds the filters the hub takes as parameters of their own rather than as tags.
+func csgFilters(req *v1.SearchRequest, q url.Values) error {
+	// The model list takes no owner and would answer unfiltered
+	if Author(req) != "" {
+		return fmt.Errorf("author: %w", ErrUnsupported)
+	}
+	bounds, err := Range(req, csgFacetParameters)
+	if err != nil {
+		return err
+	}
+	// The hub counts parameters in billions
+	for param, side := range map[string]*uint64{"model_params_min": bounds.Min, "model_params_max": bounds.Max} {
+		if side != nil {
+			q.Set(param, strconv.FormatFloat(float64(*side)/1e9, 'f', -1, 64))
+		}
+	}
+	if review := FilterOne(req, csgFacetReview); review != "" {
+		if !slices.ContainsFunc(csgReviews, func(v *v1.FacetValue) bool { return v.GetId() == review }) {
+			return fmt.Errorf("%w: %s %q is no state the hub reviews licenses to", ErrSource, csgFacetReview, review)
+		}
+		q.Set("compliance_status", review)
+	}
+	if On(req, csgFacetServerless) {
+		q.Set("list_serverless", "true")
+	}
+	return nil
 }
 
 func csgHit(c *Client, m csgModel) *v1.SearchHit {
@@ -181,6 +285,8 @@ func csgHit(c *Client, m csgModel) *v1.SearchHit {
 	if m.Likes > 0 {
 		hit.Likes = uint64(m.Likes)
 	}
+	var runtimes, languages []string
+	builtInTask := false
 	for _, t := range m.Tags {
 		if t.Name == "" {
 			continue
@@ -188,14 +294,31 @@ func csgHit(c *Client, m csgModel) *v1.SearchHit {
 		hit.Tags = append(hit.Tags, t.Name)
 		switch t.Category {
 		case "task":
-			if hit.Task == "" {
-				hit.Task = t.Name
+			// The hub files free labels as tasks too, so one of its own tasks names the model's
+			if hit.Task == "" || t.BuiltIn && !builtInTask {
+				hit.Task, builtInTask = t.Name, t.BuiltIn
 			}
 		case "framework":
 			if hit.Library == "" {
 				hit.Library = t.Name
 			}
+		case "runtime_framework":
+			runtimes = append(runtimes, t.Name)
+		case "language":
+			languages = append(languages, t.Name)
 		}
+	}
+	if len(runtimes) > 0 {
+		hit.Extra["runtime_framework"] = strings.Join(runtimes, ",")
+	}
+	if len(languages) > 0 {
+		hit.Extra["languages"] = strings.Join(languages, ",")
+	}
+	if m.CommercialPermission != "" {
+		hit.Extra["commercial"] = Humanize(m.CommercialPermission)
+	}
+	if m.ComplianceStatus != "" {
+		hit.Extra["review"] = Humanize(m.ComplianceStatus)
 	}
 	if m.Metadata.ModelParams > 0 {
 		hit.Parameters = csgParameters(m.Metadata.ModelParams)

@@ -151,8 +151,16 @@ func runSources(ctx context.Context, e *env, args []string) error {
 				auth += " (" + c.GetTokenEnv() + ")"
 			}
 			var facets, sorts []string
+			// A facet that takes no listed value shows the value --filter gives it
 			for _, f := range c.GetFacets() {
-				facets = append(facets, f.GetId())
+				id := f.GetId()
+				switch f.GetInput() {
+				case v1.FacetInput_FACET_INPUT_TOGGLE:
+					id += "=true"
+				case v1.FacetInput_FACET_INPUT_RANGE:
+					id += "=min..max"
+				}
+				facets = append(facets, id)
 			}
 			// A ± marks the sorts --asc can flip
 			for _, s := range c.GetSorts() {
@@ -335,7 +343,7 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 	runtimeID := fs.String("runtime", "", "only models a runtime serves, by id, see nebu runtimes")
 	var tags, filters, formats multi
 	fs.Var(&tags, "tag", "tag filter, repeatable")
-	fs.Var(&filters, "filter", "facet filter as facet=value, repeatable")
+	fs.Var(&filters, "filter", "facet filter as facet=value, repeatable: several values comma separated, a range as min..max")
 	fs.Var(&formats, "format", "only models held in a format, repeatable: gguf, safetensors, diffusion, nemo, or nemo2")
 	query, err := e.parse(fs, args, 0, -1, "search [query words] [flags]")
 	if err != nil {

@@ -13,6 +13,7 @@
 	import { TraceKind, type Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
+	import Count from '#lib/ui/Count.svelte';
 	import Dialog from '#lib/ui/Dialog.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import Facts from '#lib/ui/Facts.svelte';
@@ -302,7 +303,7 @@
 		</NeoButton>
 		<NeoButton elevation={2} toggle checked={filtersOpen} color={filtersOpen || filterCount ? 'primary' : undefined} aria-expanded={filtersOpen} aria-label={filterCount ? `Filters, ${filterCount} set` : 'Filters'} onclick={() => (filtersOpen = !filtersOpen)}>
 			{#snippet icon()}<FunnelIcon size={18} weight={filterCount ? 'fill' : 'regular'} />{/snippet}
-			Filters{#if filterCount}<span class="count">{filterCount}</span>{/if}
+			Filters{#if filterCount}<Count n={filterCount} after />{/if}
 		</NeoButton>
 		<span class="push"><Segmented bind:value={view} options={[{ value: 'list', label: 'List' }, { value: 'timeline', label: 'Timeline' }]} aria="View" /></span>
 	</Toolbar>
@@ -434,20 +435,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--nebu-space-3);
-	}
-	/* How many filters are set rides on the button that opens them */
-	.count {
-		display: inline-grid;
-		place-items: center;
-		min-width: 18px;
-		height: 18px;
-		margin-left: 6px;
-		padding: 0 5px;
-		font-size: 11px;
-		font-variant-numeric: tabular-nums;
-		color: var(--neo-background-color);
-		background: var(--neo-color-primary);
-		border-radius: 9px;
 	}
 	.routecell {
 		display: flex;

@@ -41,11 +41,35 @@ var ngc = &Catalog{
 		SortCreated:   "dateCreated",
 		SortName:      "name",
 	},
+	// The catalog orders by a popularity weight and publishes no download count
+	SortLabels: map[string]string{SortDownloads: "Most popular"},
 	Reversible: []string{SortDownloads, SortRelevance, SortUpdated, SortCreated, SortName},
+	// Filters beside the catalog's taxonomy, after the facets read from it
 	Facets: []*v1.Facet{
-		Freeform(FacetFramework, "Framework"),
-		Freeform(FacetPublisher, "Publisher"),
+		Hint(Toggle(ngcFacetGuest, "Guest download"), "Models anyone can download without an NGC key"),
+		Hint(Toggle(ngcFacetSigned, "Signed"), "Models with a signed version"),
+		Hint(Multi(Freeform(FacetFramework, "Framework")), "Models built with any framework named, such as PyTorch, NeMo, or TensorFlow"),
+		Hint(Multi(Freeform(ngcFacetPrecision, "Precision")), "Models in any precision named, such as FP16, BF16, or FP8"),
+		Hint(Multi(Freeform(FacetTag, "Label")), "Models carrying any label named"),
 	},
+	Columns: slices.Concat(
+		Shown(
+			Col(ColSize),
+			ExtraCol("framework", "Framework", AsList, "Frameworks the publisher names"),
+			ExtraCol("precision", "Precision", AsList, "Precisions the weights come in"),
+			Col(ColUpdated),
+		),
+		[]*v1.HitColumn{
+			Col(ColCreated),
+			Named(Col(ColTask), "Application"),
+			Named(Col(ColAuthor), "Publisher"),
+			Col(ColGated),
+			ExtraCol("format", "Model format", AsText, "The format NGC files the model under, such as NeMo or SavedModel"),
+			ExtraCol("version", "Version", AsText, "The latest version, which a bare name resolves to"),
+			ExtraCol("popularity", "Popularity", AsCount, "The catalog's popularity weight, which Most popular orders by"),
+			ExtraCol("signed", "Signed", AsFlag, "Whether a version is signed"),
+		},
+	),
 	API: ngcAPI{},
 }
 
@@ -59,13 +83,61 @@ const (
 	ngcRetryAfter      = time.Minute
 )
 
+// Facets only the catalog offers
+const (
+	ngcFacetPlatform  = "platform"
+	ngcFacetIndustry  = "industry"
+	ngcFacetSolution  = "solution"
+	ngcFacetLanguage  = "language"
+	ngcFacetNIM       = "nim"
+	ngcFacetProduct   = "product"
+	ngcFacetOther     = "other"
+	ngcFacetPrecision = "precision"
+	ngcFacetGuest     = "guest"
+	ngcFacetSigned    = "signed"
+)
+
 // Sorts whose natural order runs ascending, the rest run descending
 var ngcAscending = map[string]bool{SortName: true}
 
-// Search filter fields by shared facet id
-var ngcFilterFields = []struct{ facet, field string }{
-	{FacetFramework, "framework"},
-	{FacetPublisher, "publisher"},
+// A facet filled from one category of the catalog's model taxonomy, searched by the category's name
+type ngcCategory struct {
+	field, id string
+	// The catalog joins several values of the field with or
+	multi bool
+	hint  string
+}
+
+// Categories the catalog publishes for models, by the facet each fills. Its framework category
+// holds a handful of the frameworks its framework field matches, so that facet is typed instead.
+var ngcTaxonomy = []ngcCategory{
+	{field: "application", id: FacetTask, multi: true},
+	{field: "publisher", id: FacetPublisher, multi: true},
+	{field: "platform", id: ngcFacetPlatform, multi: true, hint: "NVIDIA platforms and SDKs the model is made for"},
+	{field: "industry", id: ngcFacetIndustry, multi: true},
+	{field: "technology", id: ngcFacetSolution, multi: true},
+	{field: "language", id: ngcFacetLanguage, multi: true},
+	{field: "nvidia_nim", id: ngcFacetNIM, multi: true, hint: "Models packaged for NVIDIA NIM"},
+	// The catalog ands its supported value with the rest of the field, so each value is searched alone
+	{field: "productNames", id: ngcFacetProduct, hint: "Support under NVIDIA AI Enterprise, and the NVIDIA products that ship the model"},
+	{field: "other", id: ngcFacetOther, multi: true, hint: "Labels the catalog files under no other category"},
+}
+
+// Typed facets by the search field each filters, several values joined with or
+var ngcTypedFields = []struct {
+	facet, field string
+	// The catalog indexes the field lower cased without lowering the query
+	lower bool
+}{
+	{facet: FacetFramework, field: "framework"},
+	{facet: ngcFacetPrecision, field: "precision", lower: true},
+	{facet: FacetTag, field: "label"},
+}
+
+// Toggles by the search field each sets. The catalog only ever filters these to true.
+var ngcToggleFields = []struct{ facet, field string }{
+	{ngcFacetGuest, "guestAccess"},
+	{ngcFacetSigned, "signedModels"},
 }
 
 // Label keys that describe a model
@@ -132,19 +204,85 @@ func (a *ngcAuth) exchange(ctx context.Context) string {
 	return body.Token
 }
 
+type ngcFilterCategory struct {
+	Category string `json:"filterCategory"`
+	Label    string `json:"displayName"`
+	Values   []struct {
+		ID    string `json:"filterValue"`
+		Label string `json:"displayName"`
+	} `json:"filterValues"`
+}
+
+// Loads the facets the catalog's model taxonomy fills, skipping categories it leaves empty
+func (ngcAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
+	var categories []ngcFilterCategory
+	if _, err := c.JSON(ctx, c.URL("v2", "search", "catalog", "filters", ngcResourceModel), url.Values{"q": {`{"query":""}`}}, &categories); err != nil {
+		return nil, err
+	}
+	byField := map[string]ngcFilterCategory{}
+	for _, cat := range categories {
+		byField[cat.Category] = cat
+	}
+	var out []*v1.Facet
+	for _, t := range ngcTaxonomy {
+		cat := byField[t.field]
+		var values []*v1.FacetValue
+		for _, v := range cat.Values {
+			if v.ID != "" && !ngcPlaceholder(v.Label) {
+				values = append(values, Value(v.ID, v.Label))
+			}
+		}
+		if len(values) > 0 {
+			out = append(out, Hint(NewFacet(t.id, firstOr(cat.Label, Humanize(t.field)), t.multi, values...), t.hint))
+		}
+	}
+	return out, nil
+}
+
+// One field and value of a search's filters or order
+type ngcTerm struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+}
+
+// The search filters a request asks for. Values of one field the catalog joins with or, fields with and.
+func ngcFilters(req *v1.SearchRequest) []ngcTerm {
+	out := []ngcTerm{}
+	for _, t := range ngcTaxonomy {
+		for _, v := range Filter(req, t.id) {
+			out = append(out, ngcTerm{Field: t.field, Value: v})
+		}
+	}
+	for _, f := range ngcTypedFields {
+		for _, v := range Filter(req, f.facet) {
+			if f.lower {
+				v = strings.ToLower(v)
+			}
+			out = append(out, ngcTerm{Field: f.field, Value: v})
+		}
+	}
+	for _, f := range ngcToggleFields {
+		if On(req, f.facet) {
+			out = append(out, ngcTerm{Field: f.field, Value: "true"})
+		}
+	}
+	return out
+}
+
 type ngcResource struct {
-	ResourceType string `json:"resourceType"`
-	ResourceID   string `json:"resourceId"`
-	OrgName      string `json:"orgName"`
-	TeamName     string `json:"teamName"`
-	Name         string `json:"name"`
-	DisplayName  string `json:"displayName"`
-	Description  string `json:"description"`
-	DateCreated  string `json:"dateCreated"`
-	DateModified string `json:"dateModified"`
-	IsPublic     bool   `json:"isPublic"`
-	GuestAccess  bool   `json:"guestAccess"`
-	Labels       []struct {
+	ResourceType  string  `json:"resourceType"`
+	ResourceID    string  `json:"resourceId"`
+	OrgName       string  `json:"orgName"`
+	TeamName      string  `json:"teamName"`
+	Name          string  `json:"name"`
+	DisplayName   string  `json:"displayName"`
+	Description   string  `json:"description"`
+	DateCreated   string  `json:"dateCreated"`
+	DateModified  string  `json:"dateModified"`
+	IsPublic      bool    `json:"isPublic"`
+	GuestAccess   bool    `json:"guestAccess"`
+	WeightPopular float64 `json:"weightPopular"`
+	Labels        []struct {
 		Key    string   `json:"key"`
 		Values []string `json:"values"`
 	} `json:"labels"`
@@ -162,22 +300,12 @@ func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 		id = SortDownloads
 	}
 	page := Offset(req.GetCursor())
-	type order struct {
-		Field string `json:"field"`
-		Value string `json:"value"`
-	}
-	filters := []order{}
-	for _, f := range ngcFilterFields {
-		for _, v := range Filter(req, f.facet) {
-			filters = append(filters, order{Field: f.field, Value: v})
-		}
-	}
 	data, err := json.Marshal(map[string]any{
 		"query":    query,
 		"page":     page,
 		"pageSize": c.Limit(req),
-		"orderBy":  []order{{Field: c.cat.SortKeys[id], Value: direction(sort.Ascending != ngcAscending[id], "ASC", "DESC")}},
-		"filters":  filters,
+		"orderBy":  []ngcTerm{{Field: c.cat.SortKeys[id], Value: direction(sort.Ascending != ngcAscending[id], "ASC", "DESC")}},
+		"filters":  ngcFilters(req),
 	})
 	if err != nil {
 		return nil, err
@@ -210,10 +338,10 @@ func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	return resp, nil
 }
 
-// Placeholder label values.
+// Placeholder label values, and NVIDIA's internal NSPECT ids however a list spells them
 func ngcPlaceholder(v string) bool {
 	v = strings.TrimSpace(v)
-	if strings.HasPrefix(strings.ToUpper(v), "NSPECT-") {
+	if rest, ok := strings.CutPrefix(strings.ToUpper(v), "NSPECT"); ok && rest != "" && strings.ContainsRune("-_ ", rune(rest[0])) {
 		return true
 	}
 	switch strings.ToLower(v) {
@@ -270,17 +398,34 @@ func ngcHit(c *Client, r ngcResource) *v1.SearchHit {
 	if n, err := strconv.ParseUint(attrs["latestVersionSizeInBytes"], 10, 64); err == nil {
 		hit.SizeBytes = n
 	}
-	for k, v := range map[string]string{
-		"format":    attrs["format"],
-		"version":   attrs["latestVersionIdStr"],
-		"framework": strings.Join(labels["framework"], ","),
-		"precision": strings.Join(labels["precision"], ","),
-	} {
+	ngcExtras(hit, ngcList(attrs["format"]), attrs["latestVersionIdStr"], ngcList(labels["framework"]...), ngcList(labels["precision"]...), slices.Contains(labels["hasSignedVersion"], "true"))
+	if r.WeightPopular > 0 {
+		hit.Extra["popularity"] = strconv.FormatFloat(r.WeightPopular, 'f', 0, 64)
+	}
+	return hit
+}
+
+// Joins the values that say something, each once
+func ngcList(values ...string) string {
+	var out []string
+	for _, v := range values {
+		if v = strings.TrimSpace(v); !ngcPlaceholder(v) && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return strings.Join(out, ",")
+}
+
+// Sets the extras a search hit and a model record share
+func ngcExtras(hit *v1.SearchHit, format, version, framework, precision string, signed bool) {
+	for k, v := range map[string]string{"format": format, "version": version, "framework": framework, "precision": precision} {
 		if v != "" {
 			hit.Extra[k] = v
 		}
 	}
-	return hit
+	if signed {
+		hit.Extra["signed"] = "true"
+	}
 }
 
 type ngcModelInfo struct {
@@ -301,6 +446,7 @@ type ngcModelInfo struct {
 	UpdatedDate        string   `json:"updatedDate"`
 	CanGuestDownload   bool     `json:"canGuestDownload"`
 	LatestVersionSize  uint64   `json:"latestVersionSizeInBytes"`
+	HasSignedVersion   bool     `json:"hasSignedVersion"`
 }
 
 // The model detail as a listing hit, carrying the same facts the search answers with
@@ -325,11 +471,7 @@ func ngcInfoHit(c *Client, repo string, info *ngcModelInfo) *v1.SearchHit {
 			hit.Tags = append(hit.Tags, v)
 		}
 	}
-	for k, v := range map[string]string{"format": info.ModelFormat, "version": info.LatestVersionIDStr, "framework": info.Framework, "precision": info.Precision} {
-		if v != "" {
-			hit.Extra[k] = v
-		}
-	}
+	ngcExtras(hit, ngcList(info.ModelFormat), info.LatestVersionIDStr, ngcList(info.Framework), ngcList(info.Precision), info.HasSignedVersion)
 	return hit
 }
 

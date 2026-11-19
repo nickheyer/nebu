@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,11 +31,26 @@ var dockerhub = &Catalog{
 	RepoExample:   "ai/gemma3:4b-q4_K_M",
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)+(:[\w.-]+)?$`,
 	RevisionLabel: "tag",
-	Sorts:         []string{SortDownloads, SortUpdated},
-	SortKeys:      map[string]string{SortDownloads: "pull_count", SortUpdated: "updated_at"},
-	Reversible:    []string{SortDownloads, SortUpdated},
-	Facets:        []*v1.Facet{Freeform(FacetAuthor, "Author")},
-	API:           dockerhubAPI{},
+	Sorts:         []string{SortDownloads, SortRelevance, SortUpdated},
+	// Best match has no key, the hub's own order by score
+	SortKeys:   map[string]string{SortDownloads: "pull_count", SortUpdated: "updated_at"},
+	SortLabels: map[string]string{SortDownloads: "Pull count", SortRelevance: "Best match"},
+	Reversible: []string{SortDownloads, SortUpdated},
+	// Filters the hub's search takes for models, after the categories read from it
+	Facets: []*v1.Facet{
+		Hint(NewFacet(dhFacetBadge, "Trusted content", true, dhBadges...), "Docker's own models carry Verified Publisher"),
+		Hint(Multi(Freeform(FacetAuthor, "Namespace")), "Repositories under any namespace named. Docker's own ai namespace is searched when no namespace, badge, or category is named."),
+	},
+	Columns: slices.Concat(
+		Shown(Named(Col(ColDownloads), "Pulls"), Named(Col(ColLikes), "Stars"), Col(ColUpdated)),
+		[]*v1.HitColumn{
+			Col(ColCreated),
+			Named(Col(ColAuthor), "Publisher"),
+			ExtraCol("badge", "Trusted content", AsText, "Verified Publisher, Sponsored OSS, or Community"),
+			ExtraCol(dhFacetCategory, "Categories", AsList, "Categories the publisher files the repository under"),
+		},
+	),
+	API: dockerhubAPI{},
 }
 
 func init() { register(dockerhub) }
@@ -44,6 +60,20 @@ const (
 	dhMaxPages    = 10
 	dhFilepathKey = "org.cncf.model.filepath"
 )
+
+// Facets only the hub offers, named as the search parameters they fill
+const (
+	dhFacetBadge    = "badges"
+	dhFacetCategory = "categories"
+)
+
+// Badges model repositories carry, in the hub's words, checked 2026-11-19. Official and hardened
+// images, the hub's other badges, hold no models.
+var dhBadges = []*v1.FacetValue{
+	Value("verified_publisher", "Verified Publisher"),
+	Value("open_source", "Sponsored OSS"),
+	Value("none", "Community"),
+}
 
 // Layer kinds by media type, used to name layers that carry no file path
 const (
@@ -73,32 +103,57 @@ type dhItem struct {
 	RawPullCount     uint64          `json:"raw_pull_count"`
 	ContentTypes     []string        `json:"content_types"`
 	MediaTypes       []string        `json:"media_types"`
+	Badge            string          `json:"badge"`
+	Categories       []dhCategory    `json:"categories"`
+}
+
+// One category the hub files repositories under
+type dhCategory struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
 // Only a source naming a hub API lists, searches, or reads cards
 func (dockerhubAPI) Browses(c *Client) bool { return c.HTTP() != nil }
 
-// Searches the hub, scoped to the author or the namespace unless the query names one
+// Loads the categories the hub files repositories under
+func (dockerhubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
+	if c.HTTP() == nil {
+		return nil, nil
+	}
+	var cats []dhCategory
+	if _, err := c.JSON(ctx, c.URL("v2", "categories"), nil, &cats); err != nil {
+		return nil, err
+	}
+	values := make([]*v1.FacetValue, 0, len(cats))
+	for _, cat := range cats {
+		values = append(values, Value(cat.Slug, cat.Name))
+	}
+	return []*v1.Facet{Hint(NewFacet(dhFacetCategory, "Category", true, values...), "Repositories filed under any category picked, which few models are")}, nil
+}
+
+// Searches the hub's models, the namespace a query names standing for the ones asked
 func (dockerhubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
 	if c.HTTP() == nil {
 		return nil, fmt.Errorf("%w: %s names no hub endpoint to search", ErrUnsupported, c.ID())
 	}
 	from := Offset(req.GetCursor())
-	query := strings.TrimSpace(req.GetQuery())
-	if !strings.Contains(query, "/") {
-		prefix := Author(req)
-		if prefix == "" {
-			prefix = dhNamespace
-		}
-		query = prefix + "/" + query
-	}
+	query, namespaces := dhScope(req)
 	q := url.Values{
 		"query": {query},
 		"type":  {"model"},
 		"size":  {strconv.Itoa(c.Limit(req))},
 		"from":  {strconv.Itoa(from)},
-		"sort":  {sort.Key},
-		"order": {direction(sort.Ascending, "asc", "desc")},
+	}
+	if sort.Key != "" {
+		q.Set("sort", sort.Key)
+		q.Set("order", direction(sort.Ascending, "asc", "desc"))
+	}
+	// Each takes a comma list, matching any value in it
+	for param, values := range map[string][]string{"namespaces": namespaces, "badges": Filter(req, dhFacetBadge), "categories": Filter(req, dhFacetCategory)} {
+		if len(values) > 0 {
+			q.Set(param, strings.Join(values, ","))
+		}
 	}
 	var body struct {
 		Total   uint64   `json:"total"`
@@ -121,6 +176,26 @@ func (dockerhubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest
 		resp.NextCursor = strconv.Itoa(next)
 	}
 	return resp, nil
+}
+
+// Splits the query from the namespaces it searches: one the query names before a slash, else the
+// ones asked, else the ai namespace unless a badge or category narrows the search instead. The
+// hub reads a slash in its query as more text, so only the namespaces parameter scopes it.
+func dhScope(req *v1.SearchRequest) (string, []string) {
+	query := strings.TrimSpace(req.GetQuery())
+	if ns, rest, ok := strings.Cut(query, "/"); ok && strings.TrimSpace(ns) != "" {
+		return strings.TrimSpace(rest), []string{strings.TrimSpace(ns)}
+	}
+	var names []string
+	for _, n := range append([]string{strings.TrimSpace(req.GetAuthor())}, Filter(req, FacetAuthor)...) {
+		if n != "" && !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 && len(Filter(req, dhFacetBadge)) == 0 && len(Filter(req, dhFacetCategory)) == 0 {
+		names = []string{dhNamespace}
+	}
+	return query, names
 }
 
 // Keeps hub results that hold a model rather than an image
@@ -150,19 +225,25 @@ func dhHit(c *Client, it dhItem) *v1.SearchHit {
 	if it.Publisher.Name != "" {
 		author = it.Publisher.Name
 	}
-	hit := &v1.SearchHit{
-		Repo:        repo,
-		Name:        name,
-		Author:      author,
-		Downloads:   it.RawPullCount,
-		Likes:       it.StarCount,
-		Description: Summary(it.ShortDescription),
-		Url:         dhPage(c, repo),
-		UpdatedAt:   Stamp(it.UpdatedAt),
-		CreatedAt:   Stamp(it.CreatedAt),
-	}
+	hit := newHit(repo, name, author)
+	hit.Downloads, hit.Likes = it.RawPullCount, it.StarCount
+	hit.Description, hit.Url = Summary(it.ShortDescription), dhPage(c, repo)
+	hit.UpdatedAt, hit.CreatedAt = Stamp(it.UpdatedAt), Stamp(it.CreatedAt)
 	if hit.Downloads == 0 {
 		hit.Downloads = ParseCount(strings.TrimSuffix(dhRawText(it.PullCount), "+"))
+	}
+	if it.Badge != "" {
+		hit.Extra["badge"] = Humanize(it.Badge)
+		if i := slices.IndexFunc(dhBadges, func(b *v1.FacetValue) bool { return b.GetId() == it.Badge }); i >= 0 {
+			hit.Extra["badge"] = dhBadges[i].GetLabel()
+		}
+	}
+	var cats []string
+	for _, cat := range it.Categories {
+		cats = append(cats, cat.Name)
+	}
+	if len(cats) > 0 {
+		hit.Extra[dhFacetCategory] = strings.Join(cats, ",")
 	}
 	// The listing names layer media types, which say GGUF before the manifest is read.
 	for _, mt := range it.MediaTypes {

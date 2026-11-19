@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,26 +25,62 @@ var kaggle = &Catalog{
 	RepoExample:   "owner/model/framework/instance",
 	RepoPattern:   `^[\w.-]+/[\w.-]+(/[\w.-]+/[\w.-]+)?$`,
 	RevisionLabel: "variant",
-	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated, SortCreated, kgSortNotebooks},
+	// Kaggle takes updateTime and answers in its unordered default, so recently updated is left out
+	Sorts: []string{SortTrending, SortDownloads, SortLikes, SortCreated, kgSortPublished, kgSortNotebooks},
 	SortKeys: map[string]string{
 		SortTrending:    "hotness",
 		SortDownloads:   "downloadCount",
 		SortLikes:       "voteCount",
-		SortUpdated:     "updateTime",
 		SortCreated:     "createTime",
+		kgSortPublished: "publishTime",
 		kgSortNotebooks: "notebookCount",
 	},
-	Facets:    []*v1.Facet{Freeform(FacetAuthor, "Owner")},
-	HitFields: []*v1.ConfigField{{Name: "frameworks", Label: "Frameworks", Description: "Frameworks the model is published for"}},
-	API:       kaggleAPI{},
+	SortLabels: map[string]string{
+		SortLikes:       "Most upvoted",
+		kgSortPublished: "Recently published",
+		kgSortNotebooks: "Most used in notebooks",
+	},
+	MaxLimit: kgPageSize,
+	Facets: []*v1.Facet{
+		Hint(Freeform(FacetAuthor, "Owner"), "A user or organization by its slug, such as google"),
+		Hint(Toggle(kgFacetVertex, "On Vertex AI"), "Models Google Cloud's Vertex AI opens or deploys"),
+	},
+	Columns: slices.Concat(
+		Shown(
+			Described(Col(ColSize), "The first variation, which a bare name downloads"),
+			Named(Col(ColLikes), "Upvotes"),
+			ExtraCol("frameworks", "Frameworks", AsList, "Frameworks the model is published for"),
+			Col(ColUpdated),
+		),
+		[]*v1.HitColumn{
+			ExtraCol(kgSortPublished, "Published", AsTime, "The publish date Kaggle lists, on the models that carry one"),
+			Col(ColTask),
+			Col(ColLicense),
+			Named(Col(ColAuthor), "Owner"),
+			ExtraCol("instances", "Variations", AsCount, "Variations of the model, one per framework and size or tuning"),
+			ExtraCol("fine_tunable", "Fine-tunable", AsFlag, "Whether a variation can be fine-tuned"),
+			ExtraCol("vertex", "On Vertex AI", AsFlag, "Whether Vertex AI opens or deploys the model"),
+		},
+	),
+	API: kaggleAPI{},
 }
 
 func init() { register(kaggle) }
 
 const (
 	kgFilesPageSize = 200
+	// The most models Kaggle lists a page, whatever it is asked
+	kgPageSize = 50
+)
+
+// Sorts only Kaggle offers
+const (
+	kgSortPublished = "published"
 	kgSortNotebooks = "notebooks"
 )
+
+// The facet keeping the models Vertex AI opens or deploys
+const kgFacetVertex = "vertex"
 
 // The Kaggle Models API: a token paged list, instances, versioned file lists, signed downloads
 type kaggleAPI struct{}
@@ -55,6 +92,8 @@ type kgInstance struct {
 	Usage         string `json:"usage"`
 	VersionNumber int    `json:"versionNumber"`
 	LicenseName   string `json:"licenseName"`
+	FineTunable   bool   `json:"fineTunable"`
+	Size          uint64 `json:"totalUncompressedBytes"`
 }
 
 type kgModel struct {
@@ -67,11 +106,16 @@ type kgModel struct {
 	Description string `json:"description"`
 	VoteCount   uint64 `json:"voteCount"`
 	UpdateTime  string `json:"updateTime"`
+	PublishTime string `json:"publishTime"`
 	URL         string `json:"url"`
 	Tags        []struct {
 		Name string `json:"name"`
+		// Where the tag sits in Kaggle's tag tree, such as task > text-generation
+		FullPath string `json:"fullPath"`
 	} `json:"tags"`
 	Instances []kgInstance `json:"instances"`
+	// Vertex AI pages that open or deploy the model
+	VersionLinks []struct{} `json:"modelVersionLinks"`
 }
 
 func (kaggleAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
@@ -82,8 +126,12 @@ func (kaggleAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
 		q.Set("search", query)
 	}
-	if owner := Author(req); owner != "" {
+	owner := Author(req)
+	if owner != "" {
 		q.Set("owner", owner)
+	}
+	if On(req, kgFacetVertex) {
+		q.Set("onlyVertexModels", "true")
 	}
 	if cursor := strings.TrimSpace(req.GetCursor()); cursor != "" {
 		q.Set("pageToken", cursor)
@@ -95,6 +143,14 @@ func (kaggleAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	}
 	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", "list"), q, &body); err != nil {
 		return nil, err
+	}
+	// Kaggle answers an owner it does not know with every model, so a model of anyone else gives it away
+	if owner != "" {
+		for _, it := range body.Models {
+			if o, _ := splitRepo(it.Ref); it.Ref != "" && !strings.EqualFold(o, owner) {
+				return nil, fmt.Errorf("%w: kaggle knows no owner %q", ErrSource, owner)
+			}
+		}
 	}
 	resp := &v1.SearchResponse{Hits: make([]*v1.SearchHit, 0, len(body.Models)), NextCursor: body.NextPageToken, Total: body.TotalResults}
 	for _, it := range body.Models {
@@ -130,12 +186,30 @@ func kgHit(c *Client, it kgModel) *v1.SearchHit {
 		if t.Name != "" {
 			hit.Tags = append(hit.Tags, t.Name)
 		}
+		// The first task names the model's, by the leaf of its path such as text-generation
+		if path := strings.Split(t.FullPath, " > "); hit.Task == "" && len(path) > 1 && path[0] == "task" {
+			hit.Task = path[len(path)-1]
+		}
+	}
+	if ts := Stamp(it.PublishTime); ts != nil {
+		hit.Extra[kgSortPublished] = ts.AsTime().Format(time.RFC3339)
+	}
+	if len(it.VersionLinks) > 0 {
+		hit.Extra["vertex"] = "true"
 	}
 	if len(it.Instances) > 0 {
 		hit.Extra["instances"] = strconv.Itoa(len(it.Instances))
+		// The first variation is the one a bare name resolves to
+		hit.SizeBytes = it.Instances[0].Size
 	}
 	if fw := kgFrameworks(it.Instances); fw != "" {
 		hit.Extra["frameworks"] = fw
+	}
+	for _, in := range it.Instances {
+		if in.FineTunable {
+			hit.Extra["fine_tunable"] = "true"
+			break
+		}
 	}
 	for _, in := range it.Instances {
 		if in.LicenseName != "" {

@@ -1,7 +1,7 @@
 import { createRawSnippet } from 'svelte';
 
-// One choice a field offers
-export type Option<V = string> = { value: V; label: string; description?: string; disabled?: boolean; tip?: string };
+// One choice a field offers, under a heading where it names a group
+export type Option<V = string> = { value: V; label: string; description?: string; disabled?: boolean; tip?: string; group?: string };
 
 export type PickerPage<V> = { items: Option<V>[]; next: string };
 // Asks the daemon for the options matching typed text, one page at a time

@@ -2,8 +2,11 @@ package sources
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -73,6 +76,151 @@ func TestHubResolvesTheDefaultRevisionFromTheHub(t *testing.T) {
 	}
 	if _, err := c.Resolve(context.Background(), "o/empty", ""); err == nil {
 		t.Fatal("a hub that names no commit should fail")
+	}
+}
+
+func TestHubFacetsComeFromItsTaxonomyAndItsOwnErrors(t *testing.T) {
+	var languages []string
+	for i := range hubLanguages + 5 {
+		languages = append(languages, fmt.Sprintf(`{"id":"l%d","label":"Language %d"}`, i, i))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch {
+		case r.URL.Path == "/api/models-tags-by-type" && len(q) == 0:
+			fmt.Fprintf(w, `{
+				"pipeline_tag":[{"id":"text-generation","label":"Text Generation","subType":"nlp"}],
+				"library":[{"id":"gguf","label":"GGUF"}],
+				"license":[{"id":"license:mit","label":"mit"}],
+				"language":[%s],
+				"other":[{"id":"merge","label":"Merge"}],
+				"deploy":[{"id":"endpoints_compatible","label":"Inference Endpoints"},{"id":"deploy:azure","label":"Microsoft Foundry"}],
+				"bucket":[{"id":"bucket:a/b","label":"a/b"}],
+				"dataset":[{"id":"dataset:squad","label":"squad"}]
+			}`, strings.Join(languages, ","))
+		case r.URL.Path == "/api/models" && q.Get("apps") == "-":
+			http.Error(w, `{"error":"✖ Invalid option: expected one of \"llama.cpp\"|\"lmstudio\"|\"brand-new\"\n  → at [0]"}`, http.StatusBadRequest)
+		case r.URL.Path == "/api/models" && q.Get("inference_provider") == "-":
+			// A hub that explains nothing leaves the known providers standing
+			http.Error(w, `{"error":"no"}`, http.StatusBadRequest)
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(t, huggingface, &v1.Source{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"endpoint": srv.URL}})
+	facets := map[string]*v1.Facet{}
+	var order []string
+	for _, f := range c.Capabilities(context.Background()).GetFacets() {
+		facets[f.GetId()] = f
+		order = append(order, f.GetId())
+	}
+	if got, want := strings.Join(order, " "), "task library license language other deploy app inference_provider gated inference region parameters author tag base_model dataset"; got != want {
+		t.Fatalf("facets\nwant %s\n got %s", want, got)
+	}
+	values := func(id string) string {
+		var out []string
+		for _, v := range facets[id].GetValues() {
+			out = append(out, v.GetId()+"="+v.GetLabel())
+		}
+		return strings.Join(out, " ")
+	}
+	for id, want := range map[string]string{
+		FacetTask:      "text-generation=Text Generation",
+		FacetLicense:   "mit=mit",
+		hubFacetDeploy: "endpoints_compatible=Inference Endpoints deploy:azure=Microsoft Foundry",
+		hubFacetApp:    "llama.cpp=llama.cpp lmstudio=LM Studio brand-new=Brand new",
+		hubFacetGated:  "false=Open true=Gated",
+	} {
+		if got := values(id); got != want {
+			t.Fatalf("%s values\nwant %s\n got %s", id, want, got)
+		}
+	}
+	if got := facets[FacetTask].GetValues()[0].GetGroup(); got != "nlp" {
+		t.Fatalf("a task keeps the hub's grouping, got %q", got)
+	}
+	if got := len(facets[hubFacetLanguage].GetValues()); got != hubLanguages {
+		t.Fatalf("the most used %d languages, got %d", hubLanguages, got)
+	}
+	if got := len(facets[hubFacetProvider].GetValues()); got != len(hubProviders) {
+		t.Fatalf("the known providers stand in, got %d", got)
+	}
+	inputs := map[string]v1.FacetInput{
+		FacetTask:          v1.FacetInput_FACET_INPUT_CHOICE,
+		hubFacetParameters: v1.FacetInput_FACET_INPUT_RANGE,
+		FacetAuthor:        v1.FacetInput_FACET_INPUT_TEXT,
+		FacetTag:           v1.FacetInput_FACET_INPUT_TEXT,
+	}
+	for id, want := range inputs {
+		if facets[id].GetInput() != want {
+			t.Fatalf("%s input %s", id, facets[id].GetInput())
+		}
+	}
+	if !facets[hubFacetApp].GetMulti() || !facets[hubFacetProvider].GetMulti() || !facets[FacetTag].GetMulti() || facets[FacetTask].GetMulti() || facets[FacetAuthor].GetMulti() {
+		t.Fatal("apps, providers, and tags go several to a request, a task and an author one")
+	}
+}
+
+func TestHubSendsEveryFilterAndOrder(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		w.Write([]byte(`[{"id":"org/m","downloads":7,"downloadsAllTime":90,"gated":"auto",
+			"tags":["gguf","license:mit","base_model:org/base","base_model:quantized:org/base","region:us"]}]`))
+	}))
+	defer srv.Close()
+	c := testClient(t, huggingface, &v1.Source{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"endpoint": srv.URL}})
+	resp, err := c.Search(context.Background(), &v1.SearchRequest{Sort: SortParameters, Ascending: true, Filters: map[string]string{
+		FacetTask:          "text-generation",
+		FacetLibrary:       "gguf",
+		FacetLicense:       "mit",
+		hubFacetLanguage:   "fr",
+		hubFacetOther:      "merge",
+		hubFacetDeploy:     "deploy:azure",
+		hubFacetRegion:     "eu",
+		FacetBaseModel:     "org/base",
+		hubFacetDataset:    "dataset:squad",
+		FacetTag:           "conversational,moe",
+		hubFacetGated:      "false",
+		hubFacetInference:  "warm",
+		hubFacetApp:        "ollama,lmstudio",
+		hubFacetProvider:   "groq,cerebras",
+		hubFacetParameters: "1B..8B",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for param, want := range map[string]string{
+		"sort":               "num_parameters",
+		"direction":          "1",
+		"pipeline_tag":       "text-generation",
+		"library":            "gguf",
+		"gated":              "false",
+		"inference":          "warm",
+		"apps":               "ollama,lmstudio",
+		"inference_provider": "groq,cerebras",
+		"num_parameters":     "min:1000000000,max:8000000000",
+		"filter":             "license:mit fr merge deploy:azure region:eu base_model:org/base dataset:squad conversational moe",
+	} {
+		if v := strings.Join(got[param], " "); v != want {
+			t.Fatalf("%s\nwant %s\n got %s", param, want, v)
+		}
+	}
+	hit := resp.GetHits()[0]
+	if !hit.GetGated() || hit.GetLicense() != "mit" || hit.GetExtra()["base_model"] != "org/base" || hit.GetExtra()["downloads_all_time"] != "90" {
+		t.Fatalf("hit %v", hit)
+	}
+	if _, err := c.Search(context.Background(), &v1.SearchRequest{Filters: map[string]string{hubFacetParameters: "..8B"}}); err != nil || got.Get("num_parameters") != "max:8000000000" || got.Get("direction") != "-1" {
+		t.Fatalf("an open range sends one side, got %q %v", got.Get("num_parameters"), err)
+	}
+	for facet, bad := range map[string]string{hubFacetParameters: "large", hubFacetGated: "maybe"} {
+		if _, err := c.Search(context.Background(), &v1.SearchRequest{Filters: map[string]string{facet: bad}}); !errors.Is(err, ErrSource) {
+			t.Fatalf("%s=%s should be refused, got %v", facet, bad, err)
+		}
+	}
+	if _, err := c.Search(context.Background(), &v1.SearchRequest{Sort: hubSortLikesWeek}); err != nil || got.Get("sort") != "likes7d" {
+		t.Fatalf("weekly likes sort %q %v", got.Get("sort"), err)
 	}
 }
 

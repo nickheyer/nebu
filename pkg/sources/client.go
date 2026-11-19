@@ -51,8 +51,8 @@ type Catalog struct {
 	NoBrowse, NoSearch bool
 	// Non-model tags to filter by whole-pattern match.
 	Noise []string
-	// Extra result fields shown as chips, in display order.
-	HitFields []*v1.ConfigField
+	// Result columns in display order: shared hit fields from Cols, provider extras from ExtraCol.
+	Columns []*v1.HitColumn
 
 	Description   string
 	RepoExample   string
@@ -63,6 +63,8 @@ type Catalog struct {
 	Sorts []string
 	// Provider sort keys.
 	SortKeys map[string]string
+	// The provider's own wording for a sort, where the shared label misnames it.
+	SortLabels map[string]string
 	// Sort IDs supporting ascending order.
 	Reversible []string
 	// Static facets, preceded by API-provided facets.
@@ -145,6 +147,16 @@ func register(cat *Catalog) {
 			panic(fmt.Sprintf("catalog %s: two settings are labelled %s", cat.ID, f.GetLabel()))
 		}
 		names[f.GetName()], labels[f.GetLabel()] = true, true
+	}
+	columns := map[string]bool{}
+	for _, col := range cat.Columns {
+		if columns[col.GetId()] || col.GetLabel() == "" || col.GetType() == v1.ColumnType_COLUMN_TYPE_UNSPECIFIED {
+			panic(fmt.Sprintf("catalog %s: column %q needs a distinct id, a label, and a type", cat.ID, col.GetId()))
+		}
+		columns[col.GetId()] = true
+		if sort := cmp.Or(columnSorts[col.GetId()], col.GetId()); slices.Contains(cat.Sorts, sort) {
+			col.Sort = sort
+		}
 	}
 	if cat.Name == "" {
 		cat.Name = cat.ID
@@ -461,7 +473,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 		Fields:        c.cat.Fields(),
 		Transports:    c.cat.transportNames(),
 		HiddenTags:    c.cat.Noise,
-		HitFields:     c.cat.HitFields,
+		Columns:       c.cat.Columns,
 	}
 }
 
@@ -469,6 +481,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 func (c *Client) sorts() []*v1.SortOption {
 	out := Sorts(c.cat.Sorts...)
 	for _, s := range out {
+		s.Label = cmp.Or(c.cat.SortLabels[s.GetId()], s.GetLabel())
 		s.Reversible = slices.Contains(c.cat.Reversible, s.GetId())
 	}
 	return out

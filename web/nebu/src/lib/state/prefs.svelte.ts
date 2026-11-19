@@ -22,6 +22,8 @@ class Prefs {
 	railCollapsed = $state(read('rail', false));
 	discoverSource = $state(read('discover.source', ''));
 	discoverSourceLabel = $state(read('discover.sourceLabel', ''));
+	// The columns picked for each source's results, unset while the source's own choice stands
+	discoverColumns = $state<Record<string, string[]>>(read('discover.columns', {}));
 	// Whether the chat settings stand open beside the thread, unset until the person opens or closes them
 	chatSettingsOpen = $state<boolean | null>(read('chat.settings', null));
 	chatTheater = $state(read('chat.theater', false));
@@ -34,6 +36,7 @@ class Prefs {
 			$effect(() => write('rail', this.railCollapsed));
 			$effect(() => write('discover.source', this.discoverSource));
 			$effect(() => write('discover.sourceLabel', this.discoverSourceLabel));
+			$effect(() => write('discover.columns', this.discoverColumns));
 			$effect(() => write('chat.settings', this.chatSettingsOpen));
 			$effect(() => write('chat.theater', this.chatTheater));
 			$effect(() => write('traffic.window', this.trafficWindow));

@@ -8,6 +8,7 @@
 	import type { Model } from '#lib/proto/nebu/v1/model_pb.js';
 	import type { ModelCard, Revision, SourceStatus } from '#lib/proto/nebu/v1/source_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
+	import { catalog } from '#lib/state/catalog.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -76,8 +77,7 @@
 		headError = '';
 		headLoaded = false;
 		try {
-			const s = await rpc.sources.listSources({ query: sourceId });
-			source = s.sources.find((x) => x.source?.id === sourceId);
+			source = await catalog.source(sourceId);
 			if (source?.capabilities?.revisions) {
 				revisions = (await rpc.sources.listRevisions({ sourceId, repo })).revisions;
 				revision = revisions.find((r) => r.default)?.name ?? revisions[0]?.name ?? '';

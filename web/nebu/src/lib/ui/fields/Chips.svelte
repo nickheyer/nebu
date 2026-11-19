@@ -18,8 +18,9 @@
 		max,
 		// A toolbar field, its label and its chips kept inside the box
 		compact = false,
+		aria,
 		onchange
-	}: { value?: string[]; label?: string; info?: string; placeholder?: string; unset?: string; disabled?: boolean; numeric?: boolean; max?: number; compact?: boolean; onchange?: (v: string[]) => void } = $props();
+	}: { value?: string[]; label?: string; info?: string; placeholder?: string; unset?: string; disabled?: boolean; numeric?: boolean; max?: number; compact?: boolean; aria?: string; onchange?: (v: string[]) => void } = $props();
 
 	const id = fieldId();
 	let typed = $state('');
@@ -63,7 +64,7 @@
 		<FieldLabel {label} {info} forId={id} />
 		<div class="chips">{@render pills()}</div>
 	{/if}
-	<NeoInput bind:value={typed} {id} {disabled} {placeholder} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label}>
+	<NeoInput bind:value={typed} {id} {disabled} {placeholder} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label ?? aria}>
 		{#snippet before()}
 			{#if compact && label}<span class="inlabel">{label}</span>{/if}
 			{#if compact && value.length}<span class="chips inline">{@render pills()}</span>{:else}<span class="plus"><PlusIcon size={16} /></span>{/if}

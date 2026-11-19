@@ -53,6 +53,7 @@ const allScenes = [
     { id: 'models-missing', path: '/models/huggingface/moonshotai%2FKimi-K3.1-Pro/default' },
     { id: 'discover', path: '/discover' },
     { id: 'discover-filters', path: '/discover', press: 'Filters' },
+    { id: 'discover-columns', path: '/discover', press: 'Columns' },
     { id: 'discover-repository', path: '/discover', click: 'main .listrow.clickable' },
     { id: 'discover-repository-files', path: '/discover/huggingface/moonshotai%2FKimi-K3.1-Pro?tab=files' },
     { id: 'runtimes', path: '/runtimes' },

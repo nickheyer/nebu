@@ -2,7 +2,9 @@ import { getContext, setContext, untrack } from 'svelte';
 
 export type ListSlot = 'leading' | 'dot' | 'secondary' | 'instrument' | 'action' | 'menu' | 'caret';
 
-export type ListHead = { primary?: string; secondary?: string; instrument?: string; facts?: string[]; action?: string };
+export type FactHead = { label: string; tip?: string; start?: boolean; sorted?: 'ascending' | 'descending'; onsort?: () => void };
+
+export type ListHead = { primary?: string; secondary?: string; instrument?: string; facts?: (string | FactHead)[]; action?: string };
 
 const key = Symbol('nebu-list');
 
@@ -22,12 +24,19 @@ export class ListLayout {
 
 	readonly compact = $derived(this.width > 0 && this.width < this.threshold);
 	readonly factCount = $derived(this.#facts.reduce((m, n) => Math.max(m, n), 0));
+	readonly factLimit = $derived(Math.max(3, this.head?.facts?.length ?? 0));
 	// Fact columns laid out, the first one alone on a compact row
 	readonly shownFacts = $derived(this.compact ? Math.min(1, this.factCount) : this.factCount);
 
 	has(slot: ListSlot): boolean {
 		if (this.compact && (slot === 'secondary' || slot === 'instrument')) return false;
 		return (this.#counts[slot] ?? 0) > 0;
+	}
+
+	// The heading over a fact column
+	fact(i: number): FactHead | undefined {
+		const f = this.head?.facts?.[i];
+		return typeof f === 'string' ? { label: f } : f;
 	}
 
 	// Counts a row's cells and returns the release

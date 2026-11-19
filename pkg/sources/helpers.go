@@ -27,6 +27,8 @@ const (
 	SortUpdated   = "updated"
 	SortCreated   = "created"
 	SortName      = "name"
+	// Parameter count, largest first
+	SortParameters = "parameters"
 )
 
 // Facet ids shared across providers so a client can treat them alike
@@ -53,13 +55,14 @@ const (
 )
 
 var sortLabels = map[string]string{
-	SortRelevance: "Relevance",
-	SortTrending:  "Trending",
-	SortDownloads: "Most downloaded",
-	SortLikes:     "Most liked",
-	SortUpdated:   "Recently updated",
-	SortCreated:   "Newest",
-	SortName:      "Name",
+	SortRelevance:  "Relevance",
+	SortTrending:   "Trending",
+	SortDownloads:  "Most downloaded",
+	SortLikes:      "Most liked",
+	SortUpdated:    "Recently updated",
+	SortCreated:    "Newest",
+	SortName:       "Name",
+	SortParameters: "Most parameters",
 }
 
 // Builds sort options with the shared labels
@@ -90,14 +93,138 @@ func GroupedValue(id, label, group string) *v1.FacetValue {
 	return v
 }
 
-// Builds a facet with fixed values
+// Builds a facet picked from fixed values, several in one request when multi
 func NewFacet(id, label string, multi bool, values ...*v1.FacetValue) *v1.Facet {
-	return &v1.Facet{Id: id, Label: label, Values: values, Multi: multi}
+	return &v1.Facet{Id: id, Label: label, Input: v1.FacetInput_FACET_INPUT_CHOICE, Values: values, Multi: multi}
 }
 
 // Builds a facet the person types a value into
 func Freeform(id, label string) *v1.Facet {
-	return &v1.Facet{Id: id, Label: label, Freeform: true}
+	return &v1.Facet{Id: id, Label: label, Input: v1.FacetInput_FACET_INPUT_TEXT}
+}
+
+// Builds a facet switched on or off, read with On
+func Toggle(id, label string) *v1.Facet {
+	return &v1.Facet{Id: id, Label: label, Input: v1.FacetInput_FACET_INPUT_TOGGLE}
+}
+
+// Builds a facet bounding a count from below and above, read with Range. Spans are ranges offered to pick whole.
+func Between(id, label string, spans ...*v1.FacetValue) *v1.Facet {
+	return &v1.Facet{Id: id, Label: label, Input: v1.FacetInput_FACET_INPUT_RANGE, Values: spans}
+}
+
+// Parameter count ranges offered to pick, cut where published model sizes cluster
+func ParameterSpans() []*v1.FacetValue {
+	return []*v1.FacetValue{
+		Value("..1B", "Under 1B"),
+		Value("1B..6B", "1B to 6B"),
+		Value("6B..12B", "6B to 12B"),
+		Value("12B..32B", "12B to 32B"),
+		Value("32B..128B", "32B to 128B"),
+		Value("128B..", "Over 128B"),
+	}
+}
+
+// Marks a facet whose several values the provider takes in one request
+func Multi(f *v1.Facet) *v1.Facet {
+	f.Multi = true
+	return f
+}
+
+// Adds the hint a client shows beside a facet
+func Hint(f *v1.Facet, description string) *v1.Facet {
+	f.Description = description
+	return f
+}
+
+// Shared hit fields a provider can offer as a result column, by the SearchHit field each reads
+const (
+	ColAuthor      = "author"
+	ColDescription = "description"
+	ColTask        = "task"
+	ColLibrary     = "library"
+	ColLicense     = "license"
+	ColParameters  = "parameters"
+	ColSize        = "size_bytes"
+	ColDownloads   = "downloads"
+	ColLikes       = "likes"
+	ColUpdated     = "updated_at"
+	ColCreated     = "created_at"
+	ColGated       = "gated"
+)
+
+// How a column prints its value
+const (
+	AsText  = v1.ColumnType_COLUMN_TYPE_TEXT
+	AsCount = v1.ColumnType_COLUMN_TYPE_COUNT
+	AsBytes = v1.ColumnType_COLUMN_TYPE_BYTES
+	AsTime  = v1.ColumnType_COLUMN_TYPE_TIME
+	AsFlag  = v1.ColumnType_COLUMN_TYPE_FLAG
+	AsList  = v1.ColumnType_COLUMN_TYPE_LIST
+)
+
+var hitColumns = map[string]struct {
+	label string
+	as    v1.ColumnType
+}{
+	ColAuthor:      {"Author", AsText},
+	ColDescription: {"Description", AsText},
+	ColTask:        {"Task", AsText},
+	ColLibrary:     {"Library", AsText},
+	ColLicense:     {"License", AsText},
+	ColParameters:  {"Parameters", AsCount},
+	ColSize:        {"Size", AsBytes},
+	ColDownloads:   {"Downloads", AsCount},
+	ColLikes:       {"Likes", AsCount},
+	ColUpdated:     {"Updated", AsTime},
+	ColCreated:     {"Created", AsTime},
+	ColGated:       {"Gated", AsFlag},
+}
+
+// The sort ordering by a column, where its id is not the column's own
+var columnSorts = map[string]string{ColUpdated: SortUpdated, ColCreated: SortCreated}
+
+// Builds the column for a shared hit field, hidden until picked
+func Col(id string) *v1.HitColumn {
+	c, ok := hitColumns[id]
+	if !ok {
+		panic(fmt.Sprintf("column %s is no shared hit field", id))
+	}
+	return &v1.HitColumn{Id: id, Label: c.label, Type: c.as}
+}
+
+// Builds the columns for several shared hit fields
+func Cols(ids ...string) []*v1.HitColumn {
+	out := make([]*v1.HitColumn, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, Col(id))
+	}
+	return out
+}
+
+// Builds a column over a key of the hit's extra map
+func ExtraCol(id, label string, as v1.ColumnType, description string) *v1.HitColumn {
+	return &v1.HitColumn{Id: id, Label: label, Type: as, Description: description}
+}
+
+// Renames a column to the provider's own word for it
+func Named(c *v1.HitColumn, label string) *v1.HitColumn {
+	c.Label = label
+	return c
+}
+
+// Says what a column holds where the provider's meaning of it needs spelling out
+func Described(c *v1.HitColumn, description string) *v1.HitColumn {
+	c.Description = description
+	return c
+}
+
+// Marks columns shown before the person picks any
+func Shown(cols ...*v1.HitColumn) []*v1.HitColumn {
+	for _, c := range cols {
+		c.Shown = true
+	}
+	return cols
 }
 
 // One facet a provider reads from its own tag taxonomy
@@ -146,6 +273,46 @@ func FilterOne(req *v1.SearchRequest, facet string) string {
 		return vs[0]
 	}
 	return ""
+}
+
+// Reports whether a toggle facet is switched on
+func On(req *v1.SearchRequest, facet string) bool {
+	on, _ := strconv.ParseBool(FilterOne(req, facet))
+	return on
+}
+
+// The bounds asked of a range facet, a side nil when left open
+type Bounds struct{ Min, Max *uint64 }
+
+// Reads a range facet sent as min..max. Either side may be blank, and both take compact counts such as 7B.
+func Range(req *v1.SearchRequest, facet string) (Bounds, error) {
+	raw := FilterOne(req, facet)
+	if raw == "" {
+		return Bounds{}, nil
+	}
+	lo, hi, cut := strings.Cut(raw, "..")
+	min, okMin := bound(lo)
+	max, okMax := bound(hi)
+	switch {
+	case !cut || !okMin || !okMax || min == nil && max == nil:
+		return Bounds{}, fmt.Errorf("%w: %s %q is no range, want min..max with either side optional", ErrSource, facet, raw)
+	case min != nil && max != nil && *min > *max:
+		return Bounds{}, fmt.Errorf("%w: %s %q starts above its end", ErrSource, facet, raw)
+	}
+	return Bounds{Min: min, Max: max}, nil
+}
+
+// Reads one side of a range: nil when blank, not ok when it is no count
+func bound(s string) (*uint64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, true
+	}
+	n := ParseCount(s)
+	if n == 0 && strings.Trim(s, "0.") != "" {
+		return nil, false
+	}
+	return &n, true
 }
 
 // Returns the author filter from either field
@@ -239,6 +406,8 @@ func SortHits(hits []*v1.SearchHit, id string, ascending bool) {
 			return stamp(a.GetCreatedAt()).After(stamp(b.GetCreatedAt()))
 		case SortName:
 			return strings.ToLower(a.GetRepo()) < strings.ToLower(b.GetRepo())
+		case SortParameters:
+			return a.GetParameters() > b.GetParameters()
 		}
 		return false
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -34,13 +35,39 @@ var ollama = &Catalog{
 	RepoExample:   "llama3.2:3b",
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)?(:[\w.-]+)?$`,
 	RevisionLabel: "tag",
-	Sorts:         []string{SortDownloads, SortCreated},
-	SortKeys:      map[string]string{SortDownloads: "popular", SortCreated: "newest"},
-	Reversible:    []string{SortDownloads, SortCreated},
-	Facets:        []*v1.Facet{olCapabilities()},
-	MaxLimit:      200,
-	HitFields:     []*v1.ConfigField{{Name: "sizes", Label: "Sizes", Description: "A size this model is published in, in parameters"}},
-	API:           ollamaAPI{},
+	// The library page orders by pulls and by age. The search page orders by a popularity of its own
+	// that is not by pulls, by age, by name, and by context or price, which rank cloud models and
+	// leave the rest after them. Both pages call their popular order popular.
+	Sorts: []string{SortDownloads, SortTrending, SortCreated, SortName, olSortContext, olSortPrice},
+	SortKeys: map[string]string{
+		SortDownloads: "popular",
+		SortCreated:   "newest",
+		SortTrending:  "popular",
+		SortName:      "name",
+		olSortContext: "context",
+		olSortPrice:   "price",
+	},
+	SortLabels: map[string]string{SortTrending: "Popular", olSortContext: "Largest context", olSortPrice: "Lowest price"},
+	// The library page lists the whole library at once, so flipping it is the exact ascending order.
+	// The search page pages its results and has no direction.
+	Reversible: olLibrarySorts,
+	Facets:     olFacets(),
+	MaxLimit:   200,
+	Columns: slices.Concat(
+		Shown(Cols(ColDownloads, ColUpdated)...),
+		Shown(
+			ExtraCol("capabilities", "Capabilities", AsList, "What the site says the model can do, such as tools, vision, or thinking"),
+			ExtraCol("sizes", "Sizes", AsList, "Sizes the model is published in, in parameters"),
+		),
+		[]*v1.HitColumn{
+			Col(ColAuthor),
+			ExtraCol("tags", "Tags", AsCount, "Tags published, one per size and quantization"),
+			ExtraCol("cloud", "Cloud", AsFlag, "Ollama's cloud runs it"),
+			ExtraCol(olSortContext, "Context", AsCount, "Context window in tokens, which the search page shows for cloud models"),
+			ExtraCol(olSortPrice, "Price", AsText, "Usage cost on Ollama's cloud, from Low to Extra High"),
+		},
+	),
+	API: ollamaAPI{},
 }
 
 func init() { register(ollama) }
@@ -49,16 +76,83 @@ const (
 	olNamespace     = "library"
 	olPageMax       = 8 << 20
 	olUpdatedLayout = "Jan 2, 2006 3:04 PM UTC"
+	olUpdatedDay    = "January 2, 2006"
 	olLayerPrefix   = "application/vnd.ollama.image."
 )
 
-// Categories the library's c parameter accepts
-func olCapabilities() *v1.Facet {
-	facet := NewFacet(FacetCapability, "Capability", false)
-	for _, c := range []string{"embedding", "vision", "tools", "thinking", "cloud"} {
-		facet.Values = append(facet.Values, Value(c, ""))
+// Sorts only Ollama offers
+const (
+	olSortContext = "context"
+	olSortPrice   = "price"
+)
+
+// Facets only Ollama offers
+const (
+	olFacetWhere = "where"
+	olFacetSize  = "size"
+)
+
+// Sorts the library page serves, the rest are the search page's
+var olLibrarySorts = []string{SortDownloads, SortCreated}
+
+// One download size the search page filters by: its value and the label the page shows
+type olSize struct{ id, label string }
+
+// The choices of the search page's form, read from it on 2026-11-19
+var (
+	olCapabilities = []string{"tools", "thinking", "vision", "embedding", "decision"}
+	olWhere        = []string{"local", "cloud"}
+	olSizes        = []olSize{{"8", "Up to 8 GB"}, {"16", "Up to 16 GB"}, {"32", "Up to 32 GB"}, {"64", "Up to 64 GB"}, {"over64", "Over 64 GB"}}
+)
+
+// The search page's filters
+func olFacets() []*v1.Facet {
+	caps := NewFacet(FacetCapability, "Capabilities", true)
+	for _, c := range olCapabilities {
+		caps.Values = append(caps.Values, Value(c, ""))
 	}
-	return facet
+	where := NewFacet(olFacetWhere, "Where", false)
+	for _, w := range olWhere {
+		where.Values = append(where.Values, Value(w, ""))
+	}
+	sizes := NewFacet(olFacetSize, "Download size", false)
+	for _, s := range olSizes {
+		sizes.Values = append(sizes.Values, Value(s.id, s.label))
+	}
+	return []*v1.Facet{
+		Hint(caps, "Models with every capability picked"),
+		Hint(where, "Models that download to run here, or that Ollama's cloud runs. Some do both."),
+		Hint(sizes, "Models with a tag whose download fits, counting local tags only"),
+	}
+}
+
+// The search page's parameters for the request's filters. The page ignores a value it does not know,
+// and a size beside cloud, so those are refused here.
+func olFilters(req *v1.SearchRequest) (url.Values, error) {
+	q := url.Values{}
+	for _, cap := range Filter(req, FacetCapability) {
+		if !slices.Contains(olCapabilities, cap) {
+			return nil, fmt.Errorf("%w: %s %q is none of %s", ErrSource, FacetCapability, cap, strings.Join(olCapabilities, ", "))
+		}
+		q.Add("c", cap)
+	}
+	where := FilterOne(req, olFacetWhere)
+	if where != "" {
+		if !slices.Contains(olWhere, where) {
+			return nil, fmt.Errorf("%w: %s %q is none of %s", ErrSource, olFacetWhere, where, strings.Join(olWhere, ", "))
+		}
+		q.Add("c", where)
+	}
+	if size := FilterOne(req, olFacetSize); size != "" {
+		if !slices.ContainsFunc(olSizes, func(s olSize) bool { return s.id == size }) {
+			return nil, fmt.Errorf("%w: %s %q is none of 8, 16, 32, 64, or over64", ErrSource, olFacetSize, size)
+		}
+		if where == "cloud" {
+			return nil, fmt.Errorf("%w: Ollama sizes local downloads only, not cloud models", ErrSource)
+		}
+		q.Set("s", size)
+	}
+	return q, nil
 }
 
 // The Ollama library: a site scraped for listings, tags, cards, a registry for layers
@@ -86,27 +180,69 @@ var (
 	olPullsRe    = regexp.MustCompile(`(?s)<span[^>]*>\s*([^<]*?)\s*</span>\s*<span[^>]*>(?:\s|&nbsp;)*Pulls`)
 	olTagsRe     = regexp.MustCompile(`(?s)<span[^>]*>\s*([^<]*?)\s*</span>\s*<span[^>]*>(?:\s|&nbsp;)*Tags`)
 	olUpdatedRe  = regexp.MustCompile(`title="([^"]* UTC)"`)
+	olCloudRe    = regexp.MustCompile(`(?s)<span[^>]*bg-cyan-50[^>]*>\s*cloud\s*</span>`)
 	// The model page counts downloads where the listing counts pulls
 	olDownloadsRe = regexp.MustCompile(`(?s)<span[^>]*>\s*([^<]*?)\s*</span>\s*<span[^>]*>(?:\s|&nbsp;)*Downloads`)
 )
 
-// Searches the library. Every entry is a GGUF language model, so a request for another format or
-// kind has nothing to fetch.
+// What a search page result shows, which a library listing words its own way
+var (
+	// The model a result links to, a library model or a community one under its owner
+	olResultRe     = regexp.MustCompile(`^\s*<a href="/([\w.-]+(?:/[\w.-]+)?)" class="group`)
+	olSummaryRe    = regexp.MustCompile(`(?s)<p[^>]*line-clamp-2[^>]*>(.*?)</p>`)
+	olCountRe      = regexp.MustCompile(`title="([\d,]+) downloads"`)
+	olTagCountRe   = regexp.MustCompile(`<span[^>]*>\s*([\d,]+) tags?\s*</span>`)
+	olUpdatedDayRe = regexp.MustCompile(`title="Updated ([A-Z][a-z]+ \d{1,2}, \d{4})"`)
+	olContextRe    = regexp.MustCompile(`(?s)title="Context window">.*?<span[^>]*>\s*([^<]*?)\s*</span>`)
+	olPriceRe      = regexp.MustCompile(`title="([^"]+) usage"`)
+	// The link the page's script follows for the next page, there while more remain
+	olMoreRe = regexp.MustCompile(`hx-get="/search\?page=\d+`)
+)
+
+// Asks for the search page as its own script does, which is answered with the results alone and
+// is the only way past the first page
+var olScript = http.Header{"HX-Request": {"true"}}
+
+const (
+	// How long the library models a filter admits are kept
+	olMembersTTL = 10 * time.Minute
+	// Search pages read for a filter's members before giving up, the whole library filling fourteen
+	olMembersPages = 50
+)
+
+// Searches the library page for its two orders and the search page for the rest. Every entry is a
+// GGUF language model, so a request for another format or kind has nothing to fetch.
 func (ollamaAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
 	if !AdmitsFormats(req, []string{"gguf"}) || !AdmitsKind(req, v1.ModelKind_MODEL_KIND_LANGUAGE) {
 		return &v1.SearchResponse{}, nil
 	}
+	filters, err := olFilters(req)
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(olLibrarySorts, sort.ID) {
+		return olLibrary(ctx, c, req, sort, filters)
+	}
+	return olSearch(ctx, c, req, sort, filters)
+}
+
+// Lists the library page, every library model in the order asked, narrowed to the ones the search
+// page admits when the request filters
+func olLibrary(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort, filters url.Values) (*v1.SearchResponse, error) {
 	q := url.Values{"sort": {sort.Key}}
 	query := strings.TrimSpace(req.GetQuery())
 	if query != "" {
 		q.Set("q", query)
 	}
-	if cap := FilterOne(req, FacetCapability); cap != "" {
-		q.Set("c", cap)
-	}
 	page, err := c.Text(ctx, c.URL("library"), q, olPageMax)
 	if err != nil {
 		return nil, err
+	}
+	var members map[string]bool
+	if len(filters) > 0 {
+		if members, err = olMembers(ctx, c, filters); err != nil {
+			return nil, err
+		}
 	}
 	owner := Author(req)
 	var hits []*v1.SearchHit
@@ -115,16 +251,103 @@ func (ollamaAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 		if hit == nil || !Matches(hit, query) || !olHasTags(hit, req.GetTags()) {
 			continue
 		}
-		if owner != "" && !strings.EqualFold(hit.GetAuthor(), owner) {
+		if owner != "" && !strings.EqualFold(hit.GetAuthor(), owner) || members != nil && !members[hit.GetRepo()] {
 			continue
 		}
 		hits = append(hits, hit)
 	}
-	// The site already orders the page, so ascending just flips it
+	// The page holds the whole list, so ascending just flips it
 	if sort.Ascending {
 		slices.Reverse(hits)
 	}
 	return Page(hits, req, c.Limit(req)), nil
+}
+
+// Reads one page of the site's search, twenty models, which for a query goes on to community models
+// after the library's. The site decides what a query matches.
+func olSearch(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort, filters url.Values) (*v1.SearchResponse, error) {
+	page := c.page(req)
+	q := filters
+	q.Set("o", sort.Key)
+	q.Set("page", strconv.Itoa(page))
+	if query := strings.TrimSpace(req.GetQuery()); query != "" {
+		q.Set("q", query)
+	}
+	text, err := c.HTTP().TextWith(ctx, c.URL("search"), q, olScript, olPageMax)
+	if err != nil {
+		return nil, err
+	}
+	owner := Author(req)
+	resp := &v1.SearchResponse{}
+	for _, m := range olItemRe.FindAllStringSubmatch(text, -1) {
+		hit := olSearchHit(c, m[1])
+		if hit == nil || !olHasTags(hit, req.GetTags()) || owner != "" && !strings.EqualFold(hit.GetAuthor(), owner) {
+			continue
+		}
+		resp.Hits = append(resp.Hits, hit)
+	}
+	if olMoreRe.MatchString(text) {
+		resp.NextCursor = strconv.Itoa(page + 1)
+	}
+	return resp, nil
+}
+
+// The library models the search page lists for the filters, read to its last page
+func olMembers(ctx context.Context, c *Client, filters url.Values) (map[string]bool, error) {
+	memo := Cached(c, "ollama-members:"+filters.Encode(), func() *Memo[map[string]bool] { return &Memo[map[string]bool]{TTL: olMembersTTL} })
+	return memo.Get(ctx, func(ctx context.Context) (map[string]bool, error) {
+		q := maps.Clone(filters)
+		members := map[string]bool{}
+		for page := 1; page <= olMembersPages; page++ {
+			q.Set("page", strconv.Itoa(page))
+			text, err := c.HTTP().TextWith(ctx, c.URL("search"), q, olScript, olPageMax)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range olItemRe.FindAllStringSubmatch(text, -1) {
+				if r := olResultRe.FindStringSubmatch(m[1]); r != nil {
+					members[strings.TrimPrefix(r[1], olNamespace+"/")] = true
+				}
+			}
+			if !olMoreRe.MatchString(text) {
+				return members, nil
+			}
+		}
+		return nil, fmt.Errorf("%w: ollama search went past %d pages for %s", ErrSource, olMembersPages, filters.Encode())
+	})
+}
+
+// Starts a hit for a model of the library or of a community namespace
+func olNewHit(c *Client, name string) *v1.SearchHit {
+	hit := newHit(name, name, olAuthor(name))
+	hit.Url = c.URL(namespaced(name, olNamespace))
+	hit.Formats = []string{"gguf"}
+	return hit
+}
+
+// Reads a listing's chips: capabilities as tags with the first as the task, the published sizes, and the cloud mark
+func olChips(hit *v1.SearchHit, block string) {
+	for _, chip := range olChipRe.FindAllStringSubmatch(block, -1) {
+		if t := StripTags(chip[1]); t != "" && !slices.Contains(hit.Tags, t) {
+			hit.Tags = append(hit.Tags, t)
+		}
+	}
+	if len(hit.Tags) > 0 {
+		hit.Task = hit.Tags[0]
+		hit.Extra["capabilities"] = strings.Join(hit.Tags, ",")
+	}
+	var sizes []string
+	for _, chip := range olSizeChipRe.FindAllStringSubmatch(block, -1) {
+		if t := StripTags(chip[1]); t != "" && !slices.Contains(sizes, t) {
+			sizes = append(sizes, t)
+		}
+	}
+	if len(sizes) > 0 {
+		hit.Extra["sizes"] = strings.Join(sizes, ",")
+	}
+	if olCloudRe.MatchString(block) {
+		hit.Extra["cloud"] = "true"
+	}
 }
 
 // Reads one library listing block into a hit
@@ -133,35 +356,16 @@ func olHit(c *Client, block string) *v1.SearchHit {
 	if m == nil {
 		return nil
 	}
-	name := m[1]
-	hit := newHit(name, name, olAuthor(name))
-	hit.Url = c.URL(namespaced(name, olNamespace))
-	hit.Formats = []string{"gguf"}
+	hit := olNewHit(c, m[1])
 	if d := olDescRe.FindStringSubmatch(block); d != nil {
 		hit.Description = Summary(d[1])
 	}
-	for _, chip := range olChipRe.FindAllStringSubmatch(block, -1) {
-		if t := StripTags(chip[1]); t != "" {
-			hit.Tags = append(hit.Tags, t)
-		}
-	}
-	if len(hit.Tags) > 0 {
-		hit.Task = hit.Tags[0]
-	}
-	var sizes []string
-	for _, chip := range olSizeChipRe.FindAllStringSubmatch(block, -1) {
-		if t := StripTags(chip[1]); t != "" {
-			sizes = append(sizes, t)
-		}
-	}
-	if len(sizes) > 0 {
-		hit.Extra["sizes"] = strings.Join(sizes, ",")
-	}
+	olChips(hit, block)
 	if p := olPullsRe.FindStringSubmatch(block); p != nil {
 		hit.Downloads = ParseCount(p[1])
 	}
 	if t := olTagsRe.FindStringSubmatch(block); t != nil {
-		hit.Extra["tags"] = strings.TrimSpace(t[1])
+		hit.Extra["tags"] = strconv.FormatUint(ParseCount(t[1]), 10)
 	}
 	if u := olUpdatedRe.FindStringSubmatch(block); u != nil {
 		if ts, err := time.Parse(olUpdatedLayout, u[1]); err == nil {
@@ -171,29 +375,45 @@ func olHit(c *Client, block string) *v1.SearchHit {
 	return hit
 }
 
+// Reads one search page result into a hit. It counts downloads exactly, dates updates to the day,
+// and shows context and price for cloud models.
+func olSearchHit(c *Client, block string) *v1.SearchHit {
+	m := olResultRe.FindStringSubmatch(block)
+	if m == nil {
+		return nil
+	}
+	hit := olNewHit(c, strings.TrimPrefix(m[1], olNamespace+"/"))
+	if d := olSummaryRe.FindStringSubmatch(block); d != nil {
+		hit.Description = Summary(d[1])
+	}
+	olChips(hit, block)
+	if n := olCountRe.FindStringSubmatch(block); n != nil {
+		hit.Downloads = ParseCount(n[1])
+	}
+	if t := olTagCountRe.FindStringSubmatch(block); t != nil {
+		hit.Extra["tags"] = strconv.FormatUint(ParseCount(t[1]), 10)
+	}
+	if u := olUpdatedDayRe.FindStringSubmatch(block); u != nil {
+		if ts, err := time.Parse(olUpdatedDay, u[1]); err == nil {
+			hit.UpdatedAt = timestamppb.New(ts)
+		}
+	}
+	if x := olContextRe.FindStringSubmatch(block); x != nil {
+		if n := ParseCount(x[1]); n > 0 {
+			hit.Extra[olSortContext] = strconv.FormatUint(n, 10)
+		}
+	}
+	if p := olPriceRe.FindStringSubmatch(block); p != nil {
+		hit.Extra[olSortPrice] = p[1]
+	}
+	return hit
+}
+
 // Reads a model page into a hit, the same facts its library listing shows
 func olPageHit(c *Client, name, page string) *v1.SearchHit {
-	hit := newHit(name, name, olAuthor(name))
-	hit.Url = c.URL(namespaced(name, olNamespace))
-	hit.Formats = []string{"gguf"}
+	hit := olNewHit(c, name)
 	hit.Description = Summary(olDescription(page))
-	for _, chip := range olChipRe.FindAllStringSubmatch(page, -1) {
-		if t := StripTags(chip[1]); t != "" && !slices.Contains(hit.Tags, t) {
-			hit.Tags = append(hit.Tags, t)
-		}
-	}
-	if len(hit.Tags) > 0 {
-		hit.Task = hit.Tags[0]
-	}
-	var sizes []string
-	for _, chip := range olSizeChipRe.FindAllStringSubmatch(page, -1) {
-		if t := StripTags(chip[1]); t != "" && !slices.Contains(sizes, t) {
-			sizes = append(sizes, t)
-		}
-	}
-	if len(sizes) > 0 {
-		hit.Extra["sizes"] = strings.Join(sizes, ",")
-	}
+	olChips(hit, page)
 	if m := olDownloadsRe.FindStringSubmatch(page); m != nil {
 		hit.Downloads = ParseCount(m[1])
 	}

@@ -28,21 +28,46 @@ var civitai = &Catalog{
 	RepoExample:   "4201",
 	RepoPattern:   `^\d+(/\d+)?$`,
 	RevisionLabel: "version",
-	Sorts:         []string{SortDownloads, SortLikes, SortTrending, SortCreated},
-	// Recently Added is missing because the API accepts it only inside a collection
+	// Relevance sends no order, which ranks a text search by its match and lists by likes without
+	// one. Highest Rated is left out since the API orders it exactly as Most Liked, and Recently
+	// Added since it accepts that only inside a collection.
+	Sorts: []string{SortDownloads, SortRelevance, SortTrending, SortLikes, civSortComments, civSortCollected, civSortImages, SortUpdated},
 	SortKeys: map[string]string{
-		SortDownloads: "Most Downloaded",
-		SortLikes:     "Most Liked",
-		SortTrending:  "Highest Rated",
-		SortCreated:   "Newest",
+		SortDownloads:    "Most Downloaded",
+		SortTrending:     "Hot",
+		SortLikes:        "Most Liked",
+		civSortComments:  "Most Discussed",
+		civSortCollected: "Most Collected",
+		// A text search ranks this one by its match
+		civSortImages: "Most Images",
+		// By the latest version's release, and by the model's creation in a text search
+		SortUpdated: "Newest",
 	},
-	Reversible: []string{SortCreated},
+	SortLabels: map[string]string{
+		civSortComments:  "Most discussed",
+		civSortCollected: "Most collected",
+		civSortImages:    "Most images",
+	},
+	// Newest turns into Oldest, the API has no direction for the rest
+	Reversible: []string{SortUpdated},
 	Facets:     civFacets(),
-	HitFields: []*v1.ConfigField{
-		{Name: "nsfw", Label: "NSFW", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Description: "Marked adult content by the source"},
-		{Name: "base_model", Label: "Base model", Description: "Base model this was made for"},
-		{Name: "version", Label: "Version", Description: "Latest version"},
-	},
+	Columns: slices.Concat(
+		Shown(Cols(ColSize, ColDownloads, ColLikes)...),
+		Shown(ExtraCol("base_model", "Base models", AsList, "Base models the versions were made for")),
+		[]*v1.HitColumn{
+			Col(ColUpdated),
+			Named(Col(ColTask), "Type"),
+			Col(ColAuthor),
+			ExtraCol(civSortComments, "Comments", AsCount, "Comments on the model"),
+			ExtraCol("version", "Version", AsText, "The version listed first, which a download takes"),
+			ExtraCol("commercial_use", "Commercial use", AsList, "Commercial uses the licence allows"),
+			ExtraCol("no_credit", "No credit", AsFlag, "May be used without crediting the creator"),
+			ExtraCol("merges", "Merges", AsFlag, "Merges of the model may be shared"),
+			ExtraCol("generation", "Generates on Civitai", AsFlag, "The site's own generator runs it"),
+			ExtraCol("paid", "Paid", AsFlag, "A version sits behind a live paywall or early access"),
+			ExtraCol("nsfw", "NSFW", AsFlag, "Marked adult content by the source"),
+		},
+	),
 	API: civitaiAPI{},
 }
 
@@ -50,35 +75,101 @@ func init() { register(civitai) }
 
 const civTrainingData = "Training Data"
 
-// Model types the API filters on
+// Sorts only Civitai offers
+const (
+	civSortComments  = "comments"
+	civSortCollected = "collected"
+	civSortImages    = "images"
+)
+
+// Facets only Civitai offers
+const (
+	civFacetCheckpoint  = "checkpoint"
+	civFacetCommercial  = "commercial_use"
+	civFacetFileFormat  = "file_format"
+	civFacetAccess      = "access"
+	civFacetTrained     = "trained"
+	civFacetNewCreators = "new_creators"
+)
+
+// Model types the API listed on 2026-11-19, in its order, for narrowing types by kind
 var civModelTypes = []string{"Checkpoint", "TextualInversion", "Hypernetwork", "AestheticGradient", "LORA", "LoCon", "DoRA", "Controlnet", "Upscaler", "MotionModule", "VAE", "TextEncoder", "UNet", "CLIPVision", "Poses", "Wildcards", "Workflows", "ComfyWorkflows", "Detection", "VisionLanguage", "CLIP", "LLM", "Other"}
 
-// Periods the API ranks over
-var civPeriods = []struct{ id, label string }{{"Day", "Day"}, {"Week", "Week"}, {"Month", "Month"}, {"Year", "Year"}, {"AllTime", "All time"}}
+// One value of a fixed facet: the API's name for it and the label shown
+type civOption struct{ id, label string }
+
+// Values the API's validation errors listed on 2026-11-19
+var (
+	// Periods since the latest version's release. All time is the same as none.
+	civPeriods = []civOption{{"Day", "Last day"}, {"Week", "Last week"}, {"Month", "Last month"}, {"Year", "Last year"}}
+	// Commercial uses in the model page's words. None is left out: models list it beside uses they
+	// do allow, so it does not mean none.
+	civCommercialUses = []civOption{{"Image", "Sell images"}, {"RentCivit", "Run on Civitai"}, {"Rent", "Run on paid services"}, {"Sell", "Sell the model"}, {"SellMerge", "Sell merges"}}
+	civFileFormats    = []civOption{{"SafeTensor", "SafeTensors"}, {"PickleTensor", "Pickle"}, {"GGUF", ""}, {"Diffusers", ""}, {"Core ML", ""}, {"ONNX", ""}, {"Other", ""}}
+)
+
+// Paid access, by the switch the API turns on for each, each tried on 2026-11-19
+var civAccess = []civOption{{"hidePaid", "Free"}, {"earlyAccess", "Early access"}, {"paidAccess", "Paid"}, {"onSale", "On sale"}}
+
+// Filters the API turns on with true, by facet. Its supportsGeneration is left out: it also cuts
+// each model's versions down to the ones the site's generator covers, often none, leaving hits
+// without sizes, formats, or files.
+var civSwitches = []struct{ facet, param, label, hint string }{
+	{civFacetTrained, "fromPlatform", "Trained on Civitai", "Models with a version made by the site's trainer"},
+	{civFacetNewCreators, "newCreators", "New creators", "Models by creators on the site's new and upcoming board"},
+}
 
 var civRepoRe = regexp.MustCompile(`^(\d+)(?:/(\d+))?$`)
 
 // The Civitai API: models with versions as variants, cursor paging, and signed downloads
 type civitaiAPI struct{}
 
-// Fixed facets, the API takes these enums plus free text
+// Builds a facet over fixed values
+func civChoice(id, label string, multi bool, options []civOption) *v1.Facet {
+	f := NewFacet(id, label, multi)
+	for _, o := range options {
+		f.Values = append(f.Values, Value(o.id, o.label))
+	}
+	return f
+}
+
+// Fixed facets, after the types and base models the API lists
 func civFacets() []*v1.Facet {
+	out := []*v1.Facet{
+		Hint(civChoice(FacetPeriod, "Updated within", false, civPeriods), "Models with a version released in the period"),
+		Hint(NewFacet(civFacetCheckpoint, "Checkpoint", false, Value("Trained", ""), Value("Merge", "Merged")), "Checkpoints trained or merged, other types pass through"),
+		Hint(civChoice(civFacetFileFormat, "File format", true, civFileFormats), "Models with a file in any of these formats"),
+		Hint(civChoice(civFacetCommercial, "Commercial use", true, civCommercialUses), "Models whose licence allows any of these"),
+		Hint(civChoice(civFacetAccess, "Access", false, civAccess), "Free leaves out models behind a live paywall, the others list only models in early access, priced, or on sale"),
+	}
+	for _, s := range civSwitches {
+		out = append(out, Hint(Toggle(s.facet, s.label), s.hint))
+	}
+	return append(out,
+		Hint(Toggle(FacetNSFW, "NSFW"), "Lists models rated for adults too"),
+		Hint(Freeform(FacetTag, "Tag"), "Models carrying this tag"),
+		Hint(Freeform(FacetAuthor, "Author"), "A creator's username"),
+	)
+}
+
+// Reads the model types and base models the API publishes
+func (civitaiAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
+	var enums struct {
+		ModelType []string `json:"ModelType"`
+		BaseModel []string `json:"BaseModel"`
+	}
+	if _, err := c.JSON(ctx, c.URL("api", "v1", "enums"), nil, &enums); err != nil {
+		return nil, err
+	}
 	types := NewFacet(FacetType, "Type", true)
-	for _, t := range civModelTypes {
+	for _, t := range enums.ModelType {
 		types.Values = append(types.Values, Value(t, t))
 	}
-	period := NewFacet(FacetPeriod, "Period", false)
-	for _, p := range civPeriods {
-		period.Values = append(period.Values, Value(p.id, p.label))
+	bases := NewFacet(FacetBaseModel, "Base model", true)
+	for _, b := range enums.BaseModel {
+		bases.Values = append(bases.Values, Value(b, b))
 	}
-	return []*v1.Facet{
-		types,
-		period,
-		Freeform(FacetBaseModel, "Base model"),
-		Freeform(FacetTag, "Tag"),
-		Freeform(FacetAuthor, "Author"),
-		NewFacet(FacetNSFW, "NSFW", false, Value("false", "Hidden"), Value("true", "Shown")),
-	}
+	return []*v1.Facet{types, Hint(bases, "Models with a version made for any of these")}, nil
 }
 
 type civFile struct {
@@ -137,15 +228,22 @@ type civVersion struct {
 }
 
 type civModel struct {
-	ID          int64    `json:"id"`
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	NSFW        bool     `json:"nsfw"`
-	Tags        []string `json:"tags"`
-	Description string   `json:"description"`
-	Stats       struct {
+	ID                 int64    `json:"id"`
+	Name               string   `json:"name"`
+	Type               string   `json:"type"`
+	NSFW               bool     `json:"nsfw"`
+	Tags               []string `json:"tags"`
+	Description        string   `json:"description"`
+	BaseModels         []string `json:"baseModels"`
+	AllowNoCredit      bool     `json:"allowNoCredit"`
+	AllowDerivatives   bool     `json:"allowDerivatives"`
+	AllowCommercialUse []string `json:"allowCommercialUse"`
+	SupportsGeneration bool     `json:"supportsGeneration"`
+	Paid               bool     `json:"hasActivePaidAccess"`
+	Stats              struct {
 		DownloadCount uint64 `json:"downloadCount"`
 		ThumbsUpCount uint64 `json:"thumbsUpCount"`
+		CommentCount  uint64 `json:"commentCount"`
 	} `json:"stats"`
 	Creator struct {
 		Username string `json:"username"`
@@ -154,15 +252,16 @@ type civModel struct {
 }
 
 func (civitaiAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	key := sort.Key
-	// Only the creation order can be flipped, the API has no direction switch
-	if sort.Ascending {
-		key = "Oldest"
-	}
 	q := url.Values{
 		"limit": {strconv.Itoa(c.Limit(req))},
-		"sort":  {key},
-		"nsfw":  {strconv.FormatBool(civShowNSFW(req))},
+		"nsfw":  {strconv.FormatBool(On(req, FacetNSFW))},
+	}
+	if key := sort.Key; key != "" {
+		// Only the newest order can be flipped, the API has no direction switch
+		if sort.Ascending {
+			key = "Oldest"
+		}
+		q.Set("sort", key)
 	}
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
 		q.Set("query", query)
@@ -186,8 +285,12 @@ func (civitaiAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, 
 	for _, b := range Filter(req, FacetBaseModel) {
 		q.Add("baseModels", b)
 	}
-	if tag := civFirstTag(req); tag != "" {
+	tag := civFirstTag(req)
+	if tag != "" {
 		q.Set("tag", tag)
+	}
+	if err := civFilters(req, q); err != nil {
+		return nil, err
 	}
 	var body struct {
 		Items    []civModel `json:"items"`
@@ -198,6 +301,12 @@ func (civitaiAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, 
 	}
 	if _, err := c.JSON(ctx, c.URL("api", "v1", "models"), q, &body); err != nil {
 		return nil, err
+	}
+	// The API drops a tag it does not know and lists every model, so a hit without it means it was dropped
+	if tag != "" && slices.ContainsFunc(body.Items, func(m civModel) bool {
+		return !slices.ContainsFunc(m.Tags, func(t string) bool { return strings.EqualFold(t, tag) })
+	}) {
+		return nil, fmt.Errorf("%w: Civitai has no tag %q", ErrSource, tag)
 	}
 	resp := &v1.SearchResponse{Hits: make([]*v1.SearchHit, 0, len(body.Items)), NextCursor: body.Metadata.NextCursor, Total: body.Metadata.TotalItems}
 	for _, it := range body.Items {
@@ -225,14 +334,35 @@ func civTypesFor(req *v1.SearchRequest) ([]string, bool) {
 	return out, len(out) > 0
 }
 
-// Reads the nsfw switch from the request, hidden unless asked for
-func civShowNSFW(req *v1.SearchRequest) bool {
-	if v := FilterOne(req, FacetNSFW); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
+// Adds the checkpoint, file, licence, access, and switch filters
+func civFilters(req *v1.SearchRequest, q url.Values) error {
+	if t := FilterOne(req, civFacetCheckpoint); t != "" {
+		q.Set("checkpointType", t)
+	}
+	for _, u := range Filter(req, civFacetCommercial) {
+		q.Add("allowCommercialUse", u)
+	}
+	// The API reads file formats only as a list, so a lone one goes twice
+	formats := Filter(req, civFacetFileFormat)
+	if len(formats) == 1 {
+		formats = append(formats, formats[0])
+	}
+	for _, f := range formats {
+		q.Add("fileFormats", f)
+	}
+	// Each access value is a switch of its own, so one the API does not name would go unread
+	if a := FilterOne(req, civFacetAccess); a != "" {
+		if !slices.ContainsFunc(civAccess, func(o civOption) bool { return o.id == a }) {
+			return fmt.Errorf("%w: %s %q is none of hidePaid, earlyAccess, paidAccess, or onSale", ErrSource, civFacetAccess, a)
+		}
+		q.Set(a, "true")
+	}
+	for _, s := range civSwitches {
+		if On(req, s.facet) {
+			q.Set(s.param, "true")
 		}
 	}
-	return false
+	return nil
 }
 
 // The API takes one tag, the facet wins over the request list
@@ -253,19 +383,40 @@ func civHit(c *Client, it civModel) *v1.SearchHit {
 	hit := newHit(id, it.Name, it.Creator.Username)
 	hit.Downloads, hit.Likes, hit.Tags, hit.Task = it.Stats.DownloadCount, it.Stats.ThumbsUpCount, it.Tags, it.Type
 	hit.Description, hit.Url = Summary(it.Description), civPageURL(c, id)
-	if it.NSFW {
-		hit.Extra["nsfw"] = "true"
+	for key, on := range map[string]bool{"nsfw": it.NSFW, "no_credit": it.AllowNoCredit, "merges": it.AllowDerivatives, "generation": it.SupportsGeneration, "paid": it.Paid} {
+		if on {
+			hit.Extra[key] = "true"
+		}
+	}
+	if it.Stats.CommentCount > 0 {
+		hit.Extra[civSortComments] = strconv.FormatUint(it.Stats.CommentCount, 10)
+	}
+	if len(it.BaseModels) > 0 {
+		hit.Extra["base_model"] = strings.Join(it.BaseModels, ",")
+	}
+	var uses []string
+	for _, u := range civCommercialUses {
+		if slices.Contains(it.AllowCommercialUse, u.id) {
+			uses = append(uses, u.label)
+		}
+	}
+	if len(uses) > 0 {
+		hit.Extra["commercial_use"] = strings.Join(uses, ",")
 	}
 	if len(it.Versions) == 0 {
 		return hit
 	}
+	// Updated when the newest version came out, which need not be the one listed first
+	var latest time.Time
+	for _, v := range it.Versions {
+		if v.PublishedAt.After(latest) {
+			latest = v.PublishedAt
+		}
+	}
+	if !latest.IsZero() {
+		hit.UpdatedAt = timestamppb.New(latest)
+	}
 	v := it.Versions[0]
-	if !v.PublishedAt.IsZero() {
-		hit.UpdatedAt = timestamppb.New(v.PublishedAt)
-	}
-	if v.BaseModel != "" {
-		hit.Extra["base_model"] = v.BaseModel
-	}
 	if v.Name != "" {
 		hit.Extra["version"] = v.Name
 	}

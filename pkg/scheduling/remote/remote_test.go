@@ -28,6 +28,9 @@ import (
 
 var ctx = context.Background()
 
+// A scheduler url nothing answers on, port 0 never holds a listener so the dial always fails, where a closed test server's port can go to the next one opened
+const downURL = "http://127.0.0.1:0"
+
 // Endpoints the server side resolves by id
 type source map[datalayer.EndpointID]datalayer.Endpoint
 
@@ -159,8 +162,6 @@ func TestClientFailuresAreUnavailable(t *testing.T) {
 		}
 	}))
 	t.Cleanup(slow.Close)
-	down := httptest.NewServer(http.NotFoundHandler())
-	down.Close()
 
 	tests := []struct {
 		name    string
@@ -169,7 +170,7 @@ func TestClientFailuresAreUnavailable(t *testing.T) {
 		timeout time.Duration
 		reason  string
 	}{
-		{"server down", down.URL, eps, time.Second, "connect"},
+		{"server down", downURL, eps, time.Second, "connect"},
 		{"deadline passes", slow.URL, eps, 50 * time.Millisecond, "deadline"},
 		{"unknown candidate on the server", server(t, local(t), eps[:2]).URL, eps, time.Second, "unknown endpoint"},
 		{"scheduling fails on the server", server(t, local(t), nil).URL, nil, time.Second, "no endpoint"},
@@ -245,8 +246,6 @@ func (f *fixed) Profiles() map[string]*framework.Profile { return nil }
 
 func TestFallback(t *testing.T) {
 	eps := endpoints()
-	down := httptest.NewServer(http.NotFoundHandler())
-	down.Close()
 	up := server(t, local(t), eps)
 	other := errors.New("remote refused by policy")
 	tests := []struct {
@@ -257,8 +256,8 @@ func TestFallback(t *testing.T) {
 		wantLocal     int32
 		wantErr       error
 	}{
-		{"remote down uses local", client(t, down.URL, time.Second), true, 1, 1, nil},
-		{"remote down fails closed", client(t, down.URL, time.Second), false, 0, 0, framework.ErrSchedulerUnavailable},
+		{"remote down uses local", client(t, downURL, time.Second), true, 1, 1, nil},
+		{"remote down fails closed", client(t, downURL, time.Second), false, 0, 0, framework.ErrSchedulerUnavailable},
 		{"remote up skips local", client(t, up.URL, time.Second), true, 0, 0, nil},
 		{"other remote errors pass through", &fixed{err: other}, true, 0, 0, other},
 	}

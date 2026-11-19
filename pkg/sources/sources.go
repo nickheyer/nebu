@@ -640,7 +640,8 @@ type combination struct {
 	req *v1.SearchRequest
 }
 
-// Splits the request into the cross product of values its single valued facets name, nil when none names several
+// Splits the request into the cross product of values its single valued choice facets name, nil when none names several.
+// Typed facets pass through whole, for the provider to read.
 func combinations(ctx context.Context, src Source, req *v1.SearchRequest) []combination {
 	several := false
 	for id := range req.GetFilters() {
@@ -653,7 +654,7 @@ func combinations(ctx context.Context, src Source, req *v1.SearchRequest) []comb
 	var fanned []string
 	for _, f := range src.Capabilities(ctx).GetFacets() {
 		values := distinct(Filter(req, f.GetId()))
-		if f.GetMulti() || f.GetFreeform() || len(values) < 2 {
+		if f.GetInput() != v1.FacetInput_FACET_INPUT_CHOICE || f.GetMulti() || len(values) < 2 {
 			continue
 		}
 		fanned = append(fanned, f.GetId())

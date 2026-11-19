@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -32,29 +34,146 @@ var huggingface = &Catalog{
 	RepoExample:   "org/model",
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
-	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated, SortCreated},
-	// The API orders every one of these descending only
+	Sorts:         []string{SortTrending, SortDownloads, SortLikes, hubSortLikesWeek, hubSortLikesMonth, SortUpdated, SortCreated, SortParameters},
 	SortKeys: map[string]string{
-		SortTrending:  "trendingScore",
-		SortDownloads: "downloads",
-		SortLikes:     "likes",
-		SortUpdated:   "lastModified",
-		SortCreated:   "createdAt",
+		SortTrending:      "trendingScore",
+		SortDownloads:     "downloads",
+		SortLikes:         "likes",
+		hubSortLikesWeek:  "likes7d",
+		hubSortLikesMonth: "likes30d",
+		SortUpdated:       "lastModified",
+		SortCreated:       "createdAt",
+		SortParameters:    "num_parameters",
+	},
+	SortLabels: map[string]string{
+		hubSortLikesWeek:  "Most liked this week",
+		hubSortLikesMonth: "Most liked this month",
+	},
+	// The hub answers 400 to an ascending order of any other sort
+	Reversible: []string{SortCreated, SortParameters},
+	// Filters the hub takes whatever its taxonomy holds, after the facets read from it
+	Facets: []*v1.Facet{
+		NewFacet(hubFacetGated, "Access", false, Value("false", "Open"), Value("true", "Gated")),
+		Hint(NewFacet(hubFacetInference, "Inference", false, Value("warm", ""), Value("cold", ""), Value("frozen", "")), "Whether the hub's own inference has the model loaded, can load it, or cannot serve it"),
+		NewFacet(hubFacetRegion, "Region", false, Value("us", "US"), Value("eu", "EU")),
+		Hint(Between(hubFacetParameters, "Parameters", ParameterSpans()...), "Parameter count, such as 1B to 8B"),
+		Freeform(FacetAuthor, "Author"),
+		Hint(Multi(Freeform(FacetTag, "Tag")), "Models carrying every tag named"),
+		Hint(Freeform(FacetBaseModel, "Base model"), "Finetunes, quantizations, adapters, and merges of a repository"),
+		Hint(Freeform(hubFacetDataset, "Trained on"), "Models trained on a dataset"),
 	},
 	Noise: []string{"endpoints_compatible", "eval-results", "autotrain_compatible", "text-generation-inference", "custom_code", "model-index", "has_space", "safetensors", "gguf", "pytorch", "transformers", ".+:.+", "[a-z]{2,3}"},
-	HitFields: []*v1.ConfigField{
-		{Name: "architecture", Label: "Architecture", Description: "Model architecture the GGUF header names"},
-		{Name: "context", Label: "Context", Description: "Context length in tokens the GGUF header declares"},
-	},
+	Columns: slices.Concat(
+		Shown(
+			Described(Col(ColDownloads), "Downloads in the last 30 days"),
+			Col(ColLikes),
+			Col(ColParameters),
+			Described(Col(ColSize), "The GGUF files together, the only size the hub lists"),
+			Col(ColUpdated),
+		),
+		Cols(ColCreated, ColTask, ColLibrary, ColLicense, ColAuthor, ColGated),
+		[]*v1.HitColumn{
+			ExtraCol("downloads_all_time", "All-time downloads", AsCount, "Downloads since the repository was created, where Downloads counts the last 30 days"),
+			ExtraCol("trending", "Trending", AsCount, "The hub's trending score"),
+			ExtraCol("base_model", "Base model", AsList, "Repositories the model derives from"),
+			ExtraCol("architecture", "Architecture", AsText, "Model architecture the GGUF header names"),
+			ExtraCol("context", "Context", AsCount, "Context length in tokens the GGUF header declares"),
+			ExtraCol("dtypes", "Tensor types", AsList, "Tensor data types of the safetensors weights, largest share first"),
+		},
+	),
 	API: hubAPI{},
 }
 
 func init() { register(huggingface) }
 
-var hubExpand = []string{"pipeline_tag", "library_name", "gated", "private", "downloads", "likes", "lastModified", "createdAt", "tags", "safetensors", "gguf", "trendingScore"}
+// Sorts only the hub offers
+const (
+	hubSortLikesWeek  = "likes_7d"
+	hubSortLikesMonth = "likes_30d"
+)
 
-// Tag types the hub publishes, by the facet each fills
-var hubTaxonomy = []taxonomy{{"pipeline_tag", FacetTask, "Task"}, {"library", FacetLibrary, "Library"}, {"license", FacetLicense, "License"}}
+// Facets only the hub offers
+const (
+	hubFacetLanguage   = "language"
+	hubFacetOther      = "other"
+	hubFacetDeploy     = "deploy"
+	hubFacetRegion     = "region"
+	hubFacetApp        = "app"
+	hubFacetProvider   = "inference_provider"
+	hubFacetInference  = "inference"
+	hubFacetGated      = "gated"
+	hubFacetParameters = "parameters"
+	hubFacetDataset    = "dataset"
+)
+
+var hubExpand = []string{"pipeline_tag", "library_name", "gated", "private", "downloads", "downloadsAllTime", "likes", "lastModified", "createdAt", "tags", "safetensors", "gguf", "trendingScore"}
+
+// A facet filled from one tag type of the hub's taxonomy
+type hubTagType struct {
+	kind, id, label string
+	// What the hub's ids carry that the facet's values drop
+	prefix string
+	// Most used values kept, the hub listing them first. Zero keeps all.
+	limit int
+	hint  string
+}
+
+// Languages offered to pick from. The hub lists thousands, so the rest are reached through the tag facet.
+const hubLanguages = 200
+
+// Tag types the hub publishes, by the facet each fills. Its bucket type names storage, not
+// models, and its datasets run to thousands in no order, so those are typed instead.
+var hubTaxonomy = []hubTagType{
+	{kind: "pipeline_tag", id: FacetTask, label: "Task"},
+	{kind: "library", id: FacetLibrary, label: "Library"},
+	{kind: "license", id: FacetLicense, label: "License", prefix: "license:"},
+	{kind: "language", id: hubFacetLanguage, label: "Language", limit: hubLanguages, hint: "The most used languages. Name any other by its code as a tag."},
+	{kind: "other", id: hubFacetOther, label: "Other"},
+	{kind: "deploy", id: hubFacetDeploy, label: "Deployment", hint: "Services the hub deploys the model to"},
+}
+
+// Tag prefixes of the facets the hub filters as tags, a bare tag when blank
+var hubTagFacets = []struct{ id, prefix string }{
+	{FacetLicense, "license:"},
+	{hubFacetLanguage, ""},
+	{hubFacetOther, ""},
+	{hubFacetDeploy, ""},
+	{hubFacetRegion, "region:"},
+	{FacetBaseModel, "base_model:"},
+	{hubFacetDataset, "dataset:"},
+	{FacetTag, ""},
+}
+
+// Inference providers and local apps the hub filtered by on 2026-11-18, kept for when it names none
+var (
+	hubProviders = []string{"baseten", "cerebras", "cohere", "deepinfra", "fal-ai", "featherless-ai", "fireworks-ai", "groq", "hf-inference", "novita", "nscale", "openrouter", "ovhcloud", "publicai", "replicate", "scaleway", "together", "wavespeed", "zai-org"}
+	hubApps      = []string{"llama.cpp", "llama-app", "lmstudio", "jan", "drawthings", "diffusionbee", "joyfusion", "vllm", "ollama", "mlx-lm", "docker-model-runner", "lemonade", "sglang", "unsloth", "pi", "hermes-agent", "atomic-chat", "openclaw"}
+)
+
+// Names of the providers and apps whose ids do not read as one
+var hubNames = map[string]string{
+	"deepinfra":           "DeepInfra",
+	"fal-ai":              "fal",
+	"featherless-ai":      "Featherless AI",
+	"fireworks-ai":        "Fireworks AI",
+	"hf-inference":        "HF Inference",
+	"openrouter":          "OpenRouter",
+	"ovhcloud":            "OVHcloud",
+	"publicai":            "Public AI",
+	"together":            "Together AI",
+	"wavespeed":           "WaveSpeed",
+	"zai-org":             "Z.ai",
+	"llama.cpp":           "llama.cpp",
+	"lmstudio":            "LM Studio",
+	"drawthings":          "Draw Things",
+	"diffusionbee":        "DiffusionBee",
+	"joyfusion":           "JoyFusion",
+	"vllm":                "vLLM",
+	"mlx-lm":              "MLX LM",
+	"docker-model-runner": "Docker Model Runner",
+	"sglang":              "SGLang",
+	"openclaw":            "OpenClaw",
+}
 
 // The Hub API: a Link paged model list, a tree with LFS digests, and refs
 type hubAPI struct{}
@@ -65,23 +184,51 @@ type hubTag struct {
 	SubType string `json:"subType"`
 }
 
-// Loads facets from the Hub tag taxonomy.
+// Loads the facets the hub's tag taxonomy fills, then the apps and inference providers it filters by.
 func (hubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
-	out, err := taxonomyFacets(ctx, hubTaxonomy, func(ctx context.Context, kind string) ([]*v1.FacetValue, error) {
-		var body map[string][]hubTag
-		if _, err := c.JSON(ctx, c.URL("api", "models-tags-by-type"), url.Values{"type": {kind}}, &body); err != nil {
-			return nil, err
-		}
-		var values []*v1.FacetValue
-		for _, e := range body[kind] {
-			values = append(values, GroupedValue(strings.TrimPrefix(e.ID, kind+":"), e.Label, e.SubType))
-		}
-		return values, nil
-	})
-	if err != nil {
+	var tags map[string][]hubTag
+	if _, err := c.JSON(ctx, c.URL("api", "models-tags-by-type"), nil, &tags); err != nil {
 		return nil, err
 	}
-	return append(out, Freeform(FacetAuthor, "Author")), nil
+	var out []*v1.Facet
+	for _, t := range hubTaxonomy {
+		entries := tags[t.kind]
+		if t.limit > 0 && len(entries) > t.limit {
+			entries = entries[:t.limit]
+		}
+		values := make([]*v1.FacetValue, 0, len(entries))
+		for _, e := range entries {
+			values = append(values, GroupedValue(strings.TrimPrefix(e.ID, t.prefix), e.Label, e.SubType))
+		}
+		out = append(out, Hint(NewFacet(t.id, t.label, false, values...), t.hint))
+	}
+	return append(out,
+		Hint(NewFacet(hubFacetApp, "App", true, hubOptions(ctx, c, "apps", hubApps)...), "Local apps that run the model"),
+		Hint(NewFacet(hubFacetProvider, "Provider", true, hubOptions(ctx, c, "inference_provider", hubProviders)...), "Inference providers serving the model through the hub"),
+	), nil
+}
+
+var hubOption = regexp.MustCompile(`\\"([^"\\]+)\\"`)
+
+// The values the hub takes for a list parameter. It publishes no list of them, so they are read
+// from the error it answers an unknown value with, the known ones standing in when that names none.
+func hubOptions(ctx context.Context, c *Client, param string, known []string) []*v1.FacetValue {
+	ids := known
+	var se *StatusError
+	if _, err := c.JSON(ctx, c.URL("api", "models"), url.Values{"limit": {"1"}, param: {"-"}}, nil); errors.As(err, &se) && se.Code == http.StatusBadRequest {
+		var named []string
+		for _, m := range hubOption.FindAllStringSubmatch(se.Body, -1) {
+			named = append(named, m[1])
+		}
+		if len(named) > 0 {
+			ids = named
+		}
+	}
+	values := make([]*v1.FacetValue, 0, len(ids))
+	for _, id := range ids {
+		values = append(values, Value(id, hubNames[id]))
+	}
+	return values
 }
 
 type hubItem struct {
@@ -89,6 +236,7 @@ type hubItem struct {
 	Sha           string          `json:"sha"`
 	Author        string          `json:"author"`
 	Downloads     uint64          `json:"downloads"`
+	AllDownloads  uint64          `json:"downloadsAllTime"`
 	Likes         uint64          `json:"likes"`
 	LastModified  time.Time       `json:"lastModified"`
 	CreatedAt     time.Time       `json:"createdAt"`
@@ -132,7 +280,7 @@ func hubSearch(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort,
 	q := url.Values{
 		"limit":     {strconv.Itoa(c.Limit(req))},
 		"sort":      {sort.Key},
-		"direction": {"-1"},
+		"direction": {direction(sort.Ascending, "1", "-1")},
 	}
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
 		q.Set("search", query)
@@ -149,14 +297,16 @@ func hubSearch(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort,
 	if lib := FilterOne(req, FacetLibrary); lib != "" {
 		q.Set("library", lib)
 	}
-	for _, license := range Filter(req, FacetLicense) {
-		q.Add("filter", "license:"+strings.TrimPrefix(license, "license:"))
+	if err := hubFilters(req, q); err != nil {
+		return nil, err
 	}
 	for _, t := range req.GetTags() {
 		q.Add("filter", t)
 	}
-	for _, t := range Filter(req, FacetTag) {
-		q.Add("filter", t)
+	for _, f := range hubTagFacets {
+		for _, v := range Filter(req, f.id) {
+			q.Add("filter", f.prefix+strings.TrimPrefix(v, f.prefix))
+		}
 	}
 	if tag != "" {
 		q.Add("filter", tag)
@@ -182,6 +332,43 @@ func hubSearch(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort,
 		resp.Total = total
 	}
 	return resp, nil
+}
+
+// Adds the filters the hub takes as parameters of their own rather than as tags.
+func hubFilters(req *v1.SearchRequest, q url.Values) error {
+	// The hub drops a gated value it cannot read and answers unfiltered, so it is checked here
+	if raw := FilterOne(req, hubFacetGated); raw != "" {
+		gated, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("%w: %s %q is neither true nor false", ErrSource, hubFacetGated, raw)
+		}
+		q.Set("gated", strconv.FormatBool(gated))
+	}
+	if status := FilterOne(req, hubFacetInference); status != "" {
+		q.Set("inference", status)
+	}
+	if apps := Filter(req, hubFacetApp); len(apps) > 0 {
+		q.Set("apps", strings.Join(apps, ","))
+	}
+	if providers := Filter(req, hubFacetProvider); len(providers) > 0 {
+		q.Set("inference_provider", strings.Join(providers, ","))
+	}
+	// Counts go whole, since the hub reads a suffix other than B as part of the number
+	bounds, err := Range(req, hubFacetParameters)
+	if err != nil {
+		return err
+	}
+	var sides []string
+	if bounds.Min != nil {
+		sides = append(sides, "min:"+strconv.FormatUint(*bounds.Min, 10))
+	}
+	if bounds.Max != nil {
+		sides = append(sides, "max:"+strconv.FormatUint(*bounds.Max, 10))
+	}
+	if len(sides) > 0 {
+		q.Set("num_parameters", strings.Join(sides, ","))
+	}
+	return nil
 }
 
 // Marks a cursor that pages several tag streams at once.
@@ -294,10 +481,21 @@ func hubHit(c *Client, it hubItem) *v1.SearchHit {
 	if !it.CreatedAt.IsZero() {
 		hit.CreatedAt = timestamppb.New(it.CreatedAt)
 	}
+	var bases []string
 	for _, t := range it.Tags {
-		if strings.HasPrefix(t, "license:") {
-			hit.License = strings.TrimPrefix(t, "license:")
+		if license, ok := strings.CutPrefix(t, "license:"); ok {
+			hit.License = license
 		}
+		// A base is tagged bare and once more under its relation, as base_model:quantized:org/name
+		if base, ok := strings.CutPrefix(t, "base_model:"); ok && !strings.Contains(base, ":") {
+			bases = append(bases, base)
+		}
+	}
+	if len(bases) > 0 {
+		hit.Extra["base_model"] = strings.Join(bases, ",")
+	}
+	if it.AllDownloads > 0 {
+		hit.Extra["downloads_all_time"] = strconv.FormatUint(it.AllDownloads, 10)
 	}
 	if it.Safetensors != nil {
 		if it.Safetensors.Total > 0 {

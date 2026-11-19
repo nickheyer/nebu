@@ -95,17 +95,65 @@ message FacetValue {
   string group = 3;
 }
 
+// How a facet takes its value
+enum FacetInput {
+  FACET_INPUT_UNSPECIFIED = 0;
+  // Picked from the facet's values
+  FACET_INPUT_CHOICE = 1;
+  // Typed by the person
+  FACET_INPUT_TEXT = 2;
+  // On or off, sent as true when on
+  FACET_INPUT_TOGGLE = 3;
+  // Lower and upper bound of a count, sent as min..max with either side optional
+  FACET_INPUT_RANGE = 4;
+}
+
 // Search filter.
 message Facet {
   string id = 1;
   string label = 2;
+  // Values a choice facet offers, and ranges a range facet offers to pick whole, each id a min..max.
   repeated FacetValue values = 3;
+  // The provider takes several values in one request. Several values of a choice facet without it
+  // are searched one request each and merged, and a text facet without it takes one value.
   bool multi = 4;
-  bool freeform = 5;
+  FacetInput input = 6;
+  // What the filter narrows results to, shown as a hint.
+  string description = 7;
+}
+
+// How a client prints a result column
+enum ColumnType {
+  COLUMN_TYPE_UNSPECIFIED = 0;
+  COLUMN_TYPE_TEXT = 1;
+  // A number printed compactly, such as 1.4M
+  COLUMN_TYPE_COUNT = 2;
+  COLUMN_TYPE_BYTES = 3;
+  COLUMN_TYPE_TIME = 4;
+  // True or false
+  COLUMN_TYPE_FLAG = 5;
+  // Comma separated values
+  COLUMN_TYPE_LIST = 6;
+}
+
+// One column of a source's search results.
+message HitColumn {
+  // SearchHit field the column reads, or a key of the hit's extra map.
+  string id = 1;
+  string label = 2;
+  ColumnType type = 3;
+  string description = 4;
+  // Shown until the person picks columns.
+  bool shown = 5;
+  // Sort that orders results by this column, when the source offers one.
+  string sort = 6;
 }
 
 // Source capabilities used to configure the catalog UI.
 message SourceCapabilities {
+  reserved 22;
+  reserved "hit_fields";
+
   bool browse = 1;
   bool search = 2;
   bool paginate = 3;
@@ -128,8 +176,8 @@ message SourceCapabilities {
   repeated string transports = 20;
   // Provider metadata tags to hide. Patterns match whole tags.
   repeated string hidden_tags = 21;
-  // Ordered search-result badges. Booleans show their label, comma lists show one badge per value.
-  repeated ConfigField hit_fields = 22;
+  // Search result columns in display order.
+  repeated HitColumn columns = 23;
 }
 
 // Configured source and its capabilities.
@@ -220,7 +268,7 @@ message SearchRequest {
   uint32 limit = 4 [(buf.validate.field).uint32.lte = 10000];
   string sort = 5;
   bool ascending = 6;
-  // Facet id to value, comma separated for multi valued facets
+  // Facet id to value: several values comma separated, a toggle as true, a range as min..max
   map<string, string> filters = 7;
   string cursor = 8;
   string author = 9;

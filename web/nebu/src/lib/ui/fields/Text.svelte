@@ -27,6 +27,7 @@
 		after,
 		// A toolbar field, its label inside the box before the text unless an icon stands there
 		compact = false,
+		aria,
 		onchange
 	}: {
 		value?: string;
@@ -47,6 +48,7 @@
 		before?: Snippet;
 		after?: Snippet;
 		compact?: boolean;
+		aria?: string;
 		onchange?: (v: string) => void;
 	} = $props();
 
@@ -78,7 +80,7 @@
 		{autocomplete}
 		before={compact && label && !before ? lead : before}
 		{after}
-		aria-label={label}
+		aria-label={label ?? aria}
 		onchange={() => onchange?.(value)}
 	/>
 	{#if unset && value === ''}<Resting text={unset} />{/if}

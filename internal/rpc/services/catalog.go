@@ -287,23 +287,25 @@ func (s *SourceService) formatIDs() []string {
 
 // Shared runtime and format facets.
 func (s *SourceService) sharedFacets() []*v1.Facet {
-	runtime := &v1.Facet{Id: sources.FacetRuntime, Label: "Runtime"}
+	runtime := sources.NewFacet(sources.FacetRuntime, "Runtime", false)
 	for _, rt := range s.runtimes.List() {
-		runtime.Values = append(runtime.Values, &v1.FacetValue{Id: rt.ID(), Label: rt.Name()})
+		runtime.Values = append(runtime.Values, sources.Value(rt.ID(), rt.Name()))
 	}
-	format := &v1.Facet{Id: sources.FacetFormat, Label: "Format", Multi: true}
+	format := sources.NewFacet(sources.FacetFormat, "Format", true)
+	// A format goes by its id, the name result rows print
 	for _, f := range s.formats.List() {
-		format.Values = append(format.Values, &v1.FacetValue{Id: f.ID(), Label: f.Description()})
+		format.Values = append(format.Values, sources.Value(f.ID(), f.ID()))
 	}
 	return []*v1.Facet{runtime, format}
 }
 
-// Lists sources with shared facets before provider-specific facets.
+// Lists sources with shared facets and columns before provider-specific ones.
 func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1.ListSourcesRequest]) (*connect.Response[v1.ListSourcesResponse], error) {
 	statuses := s.sources.Registry.Statuses(ctx)
 	for _, st := range statuses {
 		if st.GetCapabilities() != nil {
 			st.Capabilities.Facets = append(s.sharedFacets(), st.Capabilities.Facets...)
+			st.Capabilities.Columns = append(sources.SharedColumns(), st.Capabilities.Columns...)
 		}
 	}
 	statuses = match(statuses, req.Msg.GetQuery(), func(st *v1.SourceStatus) []string {
