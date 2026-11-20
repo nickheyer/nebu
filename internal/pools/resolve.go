@@ -7,11 +7,69 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"time"
 
+	"cel.dev/cel-go/cel"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 )
+
+type leftKey struct{}
+
+// Carries the pools a request already left, whose targets Resolve then draws no more
+func WithLeft(ctx context.Context, left func(pool datalayer.PoolID) bool) context.Context {
+	return context.WithValue(ctx, leftKey{}, left)
+}
+
+// Whether the request behind ctx already left a pool
+func leftOf(ctx context.Context, pool datalayer.PoolID) bool {
+	left, _ := ctx.Value(leftKey{}).(func(datalayer.PoolID) bool)
+	return left != nil && left(pool)
+}
+
+// The names a target condition reads: the time, the target's ready endpoints, and the requests they have room for
+var whenEnv, _ = cel.NewEnv(cel.Variable("now", cel.TimestampType), cel.Variable("ready", cel.IntType), cel.Variable("free", cel.IntType))
+
+// A target condition compiled once, nil for an empty one, refusing one that does not parse or answer true or false
+func (m *Manager) condition(expr string) (cel.Program, error) {
+	if expr == "" {
+		return nil, nil
+	}
+	if p, ok := m.whens.Load(expr); ok {
+		return p.(cel.Program), nil
+	}
+	ast, iss := whenEnv.Compile(expr)
+	if iss.Err() != nil {
+		return nil, iss.Err()
+	}
+	if ast.OutputType() != cel.BoolType {
+		return nil, fmt.Errorf("%q answers %s, not true or false", expr, ast.OutputType())
+	}
+	p, err := whenEnv.Program(ast)
+	if err != nil {
+		return nil, err
+	}
+	m.whens.Store(expr, p)
+	return p, nil
+}
+
+// Whether a target's condition holds for its scope now, one that fails to evaluate holding nothing
+func (m *Manager) holds(v *view, t target, s scope) bool {
+	p, err := m.condition(t.when)
+	if err != nil {
+		return false
+	}
+	if p == nil {
+		return true
+	}
+	out, _, err := p.Eval(map[string]any{"now": time.Now(), "ready": len(m.readyIn(v, s)), "free": m.freeCapacity(v, s)})
+	if err != nil {
+		return false
+	}
+	ok, _ := out.Value().(bool)
+	return ok
+}
 
 // A pool serving a name, whether it is an adapter there, and the owners serving it
 type scope struct {
@@ -96,7 +154,10 @@ func (m *Manager) Resolve(ctx context.Context, clientModel string) (datalayer.Po
 	case len(r.targets) == 0:
 		return datalayer.Pool{}, "", fmt.Errorf("%w: route %s has no targets", requestcontrol.ErrNoReadyEndpoints, r.route)
 	}
-	t := m.draw(ctx, v, r)
+	t, drawn := m.draw(ctx, v, r)
+	if !drawn {
+		return datalayer.Pool{}, "", fmt.Errorf("%w: route %s has no target left whose condition holds", requestcontrol.ErrNoReadyEndpoints, r.route)
+	}
 	pool, ok := m.store.Pool(t.pool)
 	if !ok {
 		return datalayer.Pool{}, "", fmt.Errorf("%w: route %s sends to pool %s which does not exist", requestcontrol.ErrNoReadyEndpoints, r.route, t.pool)
@@ -166,8 +227,9 @@ func nameScope(v *view, pool datalayer.PoolID, model string) scope {
 	return scope{pool: pool, any: true}
 }
 
-// Draws a target by the rule's balance among those a ready endpoint serves, among all when none is served
-func (m *Manager) draw(ctx context.Context, v *view, r *rule) target {
+// Draws a target by the rule's balance among those the request has not left whose condition holds, among the ones a ready
+// endpoint serves while any is, an ordered rule taking the first in order; false when none is left
+func (m *Manager) draw(ctx context.Context, v *view, r *rule) (target, bool) {
 	scopes := make([]scope, len(r.targets))
 	for i, t := range r.targets {
 		scopes[i] = m.ruleScope(v, r, t.pool, m.targetModel(t))
@@ -181,19 +243,34 @@ func (m *Manager) draw(ctx context.Context, v *view, r *rule) target {
 		}
 		defer m.metrics.Deciding(ctx, ids)()
 	}
-	weights := make([]int, len(r.targets))
-	anyReady := false
+	open := make([]bool, len(r.targets))
+	ready := make([]int, len(r.targets))
+	anyOpen, anyReady := false, false
 	for i, t := range r.targets {
-		ready := len(m.readyIn(v, scopes[i]))
-		if ready == 0 {
+		if leftOf(ctx, t.pool) || !m.holds(v, t, scopes[i]) {
 			continue
 		}
-		anyReady = true
-		weights[i] = t.weight * max(m.balanceFactor(v, r.balance, scopes[i], ready), 1)
+		open[i], ready[i] = true, len(m.readyIn(v, scopes[i]))
+		anyOpen, anyReady = true, anyReady || ready[i] > 0
 	}
-	if !anyReady {
+	if !anyOpen {
+		return target{}, false
+	}
+	if r.balance == v1.RouteBalance_ROUTE_BALANCE_ORDERED {
 		for i, t := range r.targets {
+			if open[i] && (ready[i] > 0 || !anyReady) {
+				return t, true
+			}
+		}
+	}
+	weights := make([]int, len(r.targets))
+	for i, t := range r.targets {
+		switch {
+		case !open[i]:
+		case !anyReady:
 			weights[i] = t.weight
+		case ready[i] > 0:
+			weights[i] = t.weight * max(m.balanceFactor(v, r.balance, scopes[i], ready[i]), 1)
 		}
 	}
 	cum := make([]int, len(weights))
@@ -203,7 +280,7 @@ func (m *Manager) draw(ctx context.Context, v *view, r *rule) target {
 		cum[i] = total
 	}
 	x := rand.IntN(total)
-	return r.targets[sort.Search(len(cum), func(i int) bool { return cum[i] > x })]
+	return r.targets[sort.Search(len(cum), func(i int) bool { return cum[i] > x })], true
 }
 
 // What a target's static weight is scaled by, one for static weights, the ready endpoint count, or the free request capacity
@@ -294,12 +371,12 @@ func (m *Manager) wokenLocked(ps *poolState, publisher OwnerRef) {
 	}
 }
 
-// The only pool with a ready endpoint and its model, false unless exactly one has one
+// The only pool with a ready endpoint the request has not left and its model, false unless exactly one has one
 func (m *Manager) Default(ctx context.Context) (datalayer.Pool, string, bool) {
 	var found datalayer.Pool
 	n := 0
 	for _, p := range m.store.Pools() {
-		if len(m.store.Endpoints(p.ID, datalayer.ReadyAndHealthy)) == 0 {
+		if leftOf(ctx, p.ID) || len(m.store.Endpoints(p.ID, datalayer.ReadyAndHealthy)) == 0 {
 			continue
 		}
 		if n++; n > 1 {
@@ -321,13 +398,21 @@ func (m *Manager) Lookup(ctx context.Context, model string) (datalayer.Pool, str
 func (m *Manager) lookup(ctx context.Context, v *view, model string) (datalayer.Pool, string, error) {
 	var pools []datalayer.Pool
 	var scopes []scope
+	left := false
 	for _, s := range v.served[model] {
+		if leftOf(ctx, s.pool) {
+			left = true
+			continue
+		}
 		if p, ok := m.store.Pool(s.pool); ok {
 			pools = append(pools, p)
 			scopes = append(scopes, s)
 		}
 	}
-	if len(pools) == 0 {
+	switch {
+	case len(pools) == 0 && left:
+		return datalayer.Pool{}, "", fmt.Errorf("%w: every pool serving %q was left", requestcontrol.ErrNoReadyEndpoints, model)
+	case len(pools) == 0:
 		return datalayer.Pool{}, "", fmt.Errorf("%w: %q", requestcontrol.ErrUnknownModel, model)
 	}
 	i := m.byReadiness(v, scopes)

@@ -54,14 +54,15 @@
 	const dirty = $derived(!editing || toJsonString(RouteSpecSchema, draft) !== baseline);
 	const current = $derived(editing ? live.routes.get(name) : undefined);
 	const objectives = $derived([...live.objectives.values()].map((o) => ({ value: o.name, label: o.name, description: `priority ${o.priority}` })));
-	const balanceNote = $derived(spec.balance === RouteBalance.READY_ENDPOINTS ? 'A target with more ready endpoints takes more' : spec.balance === RouteBalance.FREE_CAPACITY ? 'A target with more room for requests takes more' : 'Each target takes its weight as written');
+	const inOrder = $derived(spec.balance === RouteBalance.ORDERED);
+	const balanceNote = $derived(spec.balance === RouteBalance.READY_ENDPOINTS ? 'A target with more ready endpoints takes more' : spec.balance === RouteBalance.FREE_CAPACITY ? 'A target with more room for requests takes more' : inOrder ? 'The first target with a ready endpoint takes each request' : 'Each target takes its weight as written');
 	// What the route still needs, the first thing missing
 	const missing = $derived.by(() => {
 		if (name.trim() === '') return 'Name the route';
 		if (ordered.length === 0) return 'Add a rule';
 		const at = ordered.findIndex((r) => r.targets.length === 0 || r.targets.some((t) => !t.poolId));
 		if (at >= 0) return ordered.length > 1 ? `Pick a pool for every target of rule ${at + 1}` : 'Pick a pool for every target';
-		if (ordered.some((r) => r.targets.some((t) => t.weight < 1))) return 'Give every target a weight of at least 1';
+		if (!inOrder && ordered.some((r) => r.targets.some((t) => t.weight < 1))) return 'Give every target a weight of at least 1';
 		return '';
 	});
 
@@ -139,10 +140,11 @@
 				<div class="target">
 					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} current={target.poolId || undefined} required disabled={owned || locked} /></span>
 					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} info={t === 0 ? 'Sent to the pool in place of the name asked for' : undefined} max={64} unset={pool?.spec?.model ? `${pool.spec.model}, the pool's own` : undefined} disabled={owned || locked} /></span>
-					{#if rule.targets.length > 1}
+					{#if rule.targets.length > 1 && !inOrder}
 						<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} info={t === 0 ? 'The share of the rule\'s requests a target takes is its weight over the sum of them all' : undefined} disabled={owned || locked} /></span>
 						<span class="share num" aria-label="Share of the rule's requests">{targetShare(rule, target.weight)}</span>
 					{/if}
+					<span class="when"><Text bind:value={target.when} label={t === 0 ? 'When' : undefined} info={t === 0 ? 'A condition over now, ready and free, such as ready > 0' : undefined} unset="always" max={1024} mono disabled={owned || locked} /></span>
 					{#if !owned && rule.targets.length > 1}{@render removeButton(`Remove target ${t + 1}`, () => (rule.targets = rule.targets.filter((_, j) => j !== t)))}{/if}
 					{#if target.poolId}
 						<span class="state"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} /><span class="secondary">{pool ? poolWord(pool) : 'no such pool'}</span></span>
@@ -174,9 +176,10 @@
 			options={[
 				{ value: RouteBalance.UNSPECIFIED, label: 'Weights' },
 				{ value: RouteBalance.READY_ENDPOINTS, label: 'Ready endpoints' },
-				{ value: RouteBalance.FREE_CAPACITY, label: 'Free capacity' }
+				{ value: RouteBalance.FREE_CAPACITY, label: 'Free capacity' },
+				{ value: RouteBalance.ORDERED, label: 'In order' }
 			]}
-			label="Balance" info="What the weights of a rule's targets are scaled by before a request is sent"
+			label="Balance" info="How a rule picks among its targets before a request is sent"
 			message={balanceNote}
 			disabled={locked}
 		/>
@@ -295,6 +298,15 @@
 	}
 	.weight > :global(*) {
 		flex: 1 1 auto;
+	}
+	.when {
+		display: flex;
+		flex: 2 1 9rem;
+		min-width: 0;
+	}
+	.when > :global(*) {
+		flex: 1 1 auto;
+		min-width: 0;
 	}
 	/* What a weight comes to stands beside the box that sets it, on the line of the box */
 	.share {

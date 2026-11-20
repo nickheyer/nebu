@@ -3,7 +3,9 @@ package requestcontrol
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/nickheyer/nebu/pkg/bodyparse"
 )
@@ -27,6 +29,9 @@ func Status(err error) (int, string) {
 			return http.StatusBadRequest, ""
 		}
 		return http.StatusForbidden, ""
+	case errors.As(err, new(*SpentError)):
+		se, _ := errors.AsType[*SpentError](err)
+		return http.StatusTooManyRequests, strconv.Itoa(max(1, int(math.Ceil(se.Retry.Seconds()))))
 	case errors.Is(err, ErrShed):
 		return http.StatusTooManyRequests, retryShed
 	case errors.Is(err, ErrNoReadyEndpoints), errors.Is(err, ErrSchedulerUnavailable):

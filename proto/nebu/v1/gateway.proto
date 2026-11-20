@@ -54,6 +54,8 @@ message RewriteTarget {
     gte: 1
     lte: 1000000
   }];
+  // A CEL condition over now, ready and free that must hold for the target to be drawn, always when empty
+  string when = 4 [(buf.validate.field).string.max_len = 1024];
 }
 
 // Matches a client model name and splits its traffic over weighted targets
@@ -71,6 +73,8 @@ enum RouteBalance {
   ROUTE_BALANCE_READY_ENDPOINTS = 1;
   // Each weight scaled by the request capacity the target pool's ready endpoints have free
   ROUTE_BALANCE_FREE_CAPACITY = 2;
+  // The targets in the order written, weights ignored, the first with a ready endpoint taking the request
+  ROUTE_BALANCE_ORDERED = 3;
 }
 
 // What a route is asked to do
@@ -458,6 +462,8 @@ message Trace {
   repeated TraceFallback fallbacks = 52;
   // The reasoning the model wrote before its answer, capped. Returned by GetTrace, not events.
   string reasoning = 53;
+  // The name of the provider credential the answer came under, never its secret
+  string credential = 54;
 }
 
 // One piece of a traced turn
@@ -516,6 +522,10 @@ message TraceFallback {
   bool request_written = 3;
   // Bytes the client had received when the decision was made
   uint64 bytes_to_client = 4;
+  // The pool of the decision the request was decided again after, empty for an endpoint left inside one decision
+  string pool_id = 5;
+  // The name of the provider credential the pass left behind went under, never its secret
+  string credential = 6;
 }
 
 // One filter of a profile run and the endpoints it removed, host colon port each

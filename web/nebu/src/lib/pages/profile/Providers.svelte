@@ -1,10 +1,11 @@
 <script lang="ts">
+	import { clone, create } from '@bufbuild/protobuf';
 	import { onMount } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, when } from '#lib/format.js';
-	import { CredentialKind, type ProviderCredential, type ProviderSignIn } from '#lib/proto/nebu/v1/auth_pb.js';
+	import { ago, num, when } from '#lib/format.js';
+	import { BudgetPeriod, BudgetUnit, CredentialBudgetSchema, CredentialKind, WindowKind, type CredentialBudget, type CredentialWindow, type ProviderCredential, type ProviderSignIn } from '#lib/proto/nebu/v1/auth_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { catalog } from '#lib/state/catalog.svelte.js';
 	import CopyButton from '#lib/ui/CopyButton.svelte';
@@ -15,8 +16,16 @@
 	import LoadMore from '#lib/ui/LoadMore.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
+	import Bar from '#lib/ui/Bar.svelte';
+	import Chips from '#lib/ui/fields/Chips.svelte';
+	import Duration from '#lib/ui/fields/Duration.svelte';
+	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import NumberField from '#lib/ui/fields/Number.svelte';
+	import Percent from '#lib/ui/fields/Percent.svelte';
 	import Secret from '#lib/ui/fields/Secret.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
+	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
@@ -143,7 +152,86 @@
 		waiting?.abort();
 		pending = undefined;
 	}
+
+	// The credentials kept for the same source, in position order
+	const siblings = (c: ProviderCredential) => credentials.items.filter((o) => o.sourceId === c.sourceId);
+
+	async function move(c: ProviderCredential, by: number) {
+		try {
+			await rpc.auth.putCredential({ id: c.id, position: c.position + by });
+			await credentials.load({});
+		} catch (err) {
+			toast.error('Reorder failed', reason(err));
+		}
+	}
+
+	const units = [
+		{ value: BudgetUnit.TOKENS, label: 'Tokens' },
+		{ value: BudgetUnit.INPUT_TOKENS, label: 'Input tokens' },
+		{ value: BudgetUnit.OUTPUT_TOKENS, label: 'Output tokens' },
+		{ value: BudgetUnit.REQUESTS, label: 'Requests' },
+		{ value: BudgetUnit.PERCENT_LEFT, label: 'Percent left' }
+	];
+	const periods = [
+		{ value: BudgetPeriod.ROLLING, label: 'Rolling' },
+		{ value: BudgetPeriod.DAY, label: 'Day' },
+		{ value: BudgetPeriod.WEEK, label: 'Week' },
+		{ value: BudgetPeriod.MONTH, label: 'Month' },
+		{ value: BudgetPeriod.REPORTED, label: 'Reported window' }
+	];
+	const starts: Partial<Record<BudgetPeriod, { label: string; max: number }>> = {
+		[BudgetPeriod.DAY]: { label: 'Starts at hour', max: 23 },
+		[BudgetPeriod.WEEK]: { label: 'Starts on weekday', max: 6 },
+		[BudgetPeriod.MONTH]: { label: 'Starts on day', max: 28 }
+	};
+
+	let budgetsOpen = $state(false);
+	let budgeting = $state<ProviderCredential | undefined>(undefined);
+	let budgets = $state<CredentialBudget[]>([]);
+
+	function openBudgets(c: ProviderCredential) {
+		budgeting = c;
+		budgets = c.budgets.map((b) => clone(CredentialBudgetSchema, b));
+		error = '';
+		budgetsOpen = true;
+	}
+
+	function addBudget() {
+		budgets = [...budgets, create(CredentialBudgetSchema, { name: `budget ${budgets.length + 1}`, unit: BudgetUnit.TOKENS, period: BudgetPeriod.DAY, limit: 1_000_000 })];
+	}
+
+	async function saveBudgets() {
+		busy = true;
+		error = '';
+		try {
+			await rpc.auth.putCredential({ id: budgeting?.id ?? '', budgets, budgetsSet: true });
+			budgetsOpen = false;
+			toast.success(`Budgets saved for ${budgeting?.name}`);
+			await credentials.load({});
+		} catch (err) {
+			error = reason(err);
+		} finally {
+			busy = false;
+		}
+	}
+
+	// A window's reading, a cooldown having nothing but its end
+	function reading(w: CredentialWindow): string {
+		if (w.kind === WindowKind.COOLDOWN) return 'cooling down';
+		return `${num(Math.round(w.used))} / ${num(Math.round(w.limit))}`;
+	}
 </script>
+
+{#snippet windows(c: ProviderCredential)}
+	<div class="windows">
+		{#each c.windows as w (w.name + w.kind)}
+			<span class="tag">{w.name}</span>
+			<span class="track"><Bar segments={[{ kind: w.spent ? 'warning' : 'used', label: 'used', bytes: w.kind === WindowKind.COOLDOWN ? 1 : w.used }]} total={w.kind === WindowKind.COOLDOWN ? 1 : w.limit} height={6} format={(n) => num(Math.round(n))} /></span>
+			<span class="used">{reading(w)}</span>
+			<span class="reset secondary">{w.resetsAt ? `resets ${ago(w.resetsAt, clockTick.now)}` : ''}</span>
+		{/each}
+	</div>
+{/snippet}
 
 <Card title="Providers" flush>
 	{#snippet tools()}
@@ -166,10 +254,15 @@
 					facts={[c.expiresAt ? { value: ago(c.expiresAt, clockTick.now), tip: `access lapses ${when(c.expiresAt)}, refreshed before` } : { value: '', tip: `updated ${when(c.updatedAt)}` }]}
 					menu={[
 						...(c.kind === CredentialKind.KEY ? [{ label: 'Replace key', onclick: () => openKey(c) }] : []),
+						{ label: 'Budgets', onclick: () => openBudgets(c) },
+						...(siblings(c)[0]?.id !== c.id ? [{ label: 'Move up', onclick: () => move(c, -1) }] : []),
+						...(siblings(c).at(-1)?.id !== c.id ? [{ label: 'Move down', onclick: () => move(c, 1) }] : []),
 						{ label: 'Remove', danger: true, confirm: `Remove ${c.name}?`, onclick: () => remove(c) }
 					]}
 				>
 					{#snippet instrument()}<span class="secondary">{c.kind === CredentialKind.SIGN_IN ? 'Sign-in' : 'Key'}{c.position > 1 ? ` · ${c.position}` : ''}</span>{/snippet}
+					{#snippet badges()}{#if c.windows.some((w) => w.spent)}<StateWord label="spent" lamp="warning" />{/if}{/snippet}
+					{#snippet below()}{#if c.windows.length}{@render windows(c)}{/if}{/snippet}
 				</ListRow>
 			{/each}
 		</List>
@@ -181,6 +274,41 @@
 	{#if !editing}<Select bind:value={sourceId} options={keyed} label="Source" required />{/if}
 	<Text bind:value={name} label="Name" max={64} placeholder={editing ? editing.name : sourceName(sourceId)} />
 	<Secret bind:value={secret} label="Key" required />
+	{#snippet footer()}
+		{#if error}<span class="error-text">{error}</span>{/if}
+	{/snippet}
+</Dialog>
+
+<Dialog bind:open={budgetsOpen} title={`Budgets of ${budgeting?.name ?? ''}`} confirm="Save" {busy} needs={budgets.some((b) => !b.name.trim()) ? 'Name every budget' : budgets.some((b) => !(b.limit > 0)) ? 'Give every budget a limit' : ''} onconfirm={saveBudgets} onclose={() => (budgeting = undefined)}>
+	{#each budgets as b, i (i)}
+		<div class="budget">
+			<FieldRow>
+				<Text bind:value={b.name} label="Name" max={64} required />
+				<NumberField bind:value={b.limit} label={b.unit === BudgetUnit.PERCENT_LEFT ? 'Limit, percent' : 'Limit'} min={0} fraction />
+			</FieldRow>
+			<FieldRow>
+				<Select bind:value={b.unit} options={units} label="Unit" />
+				{#if b.unit !== BudgetUnit.PERCENT_LEFT}<Select bind:value={b.period} options={periods} label="Period" />{/if}
+			</FieldRow>
+			<Chips bind:value={b.models} label="Models" placeholder="gpt-4*" unset="every model" />
+			{#if b.unit === BudgetUnit.PERCENT_LEFT || b.period === BudgetPeriod.REPORTED}
+				<Text bind:value={b.window} label="Reported window" placeholder="tokens" max={64} required />
+			{:else if b.period === BudgetPeriod.ROLLING}
+				<Duration bind:value={b.seconds} base="s" label="Over" />
+			{:else if starts[b.period]}
+				<FieldRow>
+					<NumberField bind:value={b.start} label={starts[b.period]?.label} min={0} max={starts[b.period]?.max} />
+					<Text bind:value={b.zone} label="Zone" placeholder="UTC" max={64} />
+				</FieldRow>
+			{/if}
+			<FieldRow>
+				<Percent bind:value={b.reservePercent} label="Reserve" />
+				<Switch bind:checked={b.cached} label="Cached input counts" />
+			</FieldRow>
+			<span class="remove"><NeoButton text class="danger" onclick={() => (budgets = budgets.filter((_, j) => j !== i))}>Remove budget</NeoButton></span>
+		</div>
+	{/each}
+	<span class="remove"><NeoButton text onclick={addBudget}>{#snippet icon()}<PlusIcon size={18} />{/snippet}Budget</NeoButton></span>
 	{#snippet footer()}
 		{#if error}<span class="error-text">{error}</span>{/if}
 	{/snippet}
@@ -208,6 +336,40 @@
 </Dialog>
 
 <style>
+	.windows {
+		display: grid;
+		grid-template-columns: max-content minmax(5rem, 1fr) max-content max-content;
+		gap: var(--nebu-space-1) var(--nebu-space-3);
+		align-items: center;
+		min-width: 0;
+		font-size: var(--nebu-text-secondary);
+	}
+	.tag {
+		font-weight: 500;
+	}
+	.track {
+		display: flex;
+		min-width: 0;
+	}
+	.used {
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+		white-space: nowrap;
+	}
+	.reset {
+		white-space: nowrap;
+	}
+	.budget {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+		padding-bottom: var(--nebu-space-3);
+		border-bottom: 1px solid var(--nebu-border);
+	}
+	.remove {
+		display: inline-flex;
+		align-self: flex-start;
+	}
 	.code {
 		display: flex;
 		gap: var(--nebu-space-2);

@@ -339,11 +339,12 @@ type rule struct {
 	targets  []target
 }
 
-// A rule target with its static weight and the owner whose endpoints serve it, zero for a user rule's
+// A rule target with its static weight, the condition it is drawn under, and the owner whose endpoints serve it, zero for a user rule's
 type target struct {
 	pool   datalayer.PoolID
 	model  string
 	weight int
+	when   string
 	owner  OwnerRef
 }
 
@@ -405,7 +406,7 @@ func (m *Manager) ruleTargetsLocked(rs *routeState, rr *v1.RewriteRule, live boo
 func targetsOf(in []*v1.RewriteTarget, owner OwnerRef) []target {
 	out := make([]target, len(in))
 	for i, t := range in {
-		out[i] = target{pool: datalayer.PoolID(t.GetPoolId()), model: t.GetModel(), weight: int(t.GetWeight()), owner: owner}
+		out[i] = target{pool: datalayer.PoolID(t.GetPoolId()), model: t.GetModel(), weight: int(t.GetWeight()), when: t.GetWhen(), owner: owner}
 	}
 	return out
 }

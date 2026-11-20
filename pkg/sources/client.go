@@ -75,6 +75,8 @@ type Catalog struct {
 	Speaks v1.ApiFlavor
 	// How a caller signs in to a provider of models, each caller with a credential of their own
 	SignIn *SignIn
+	// The headers a provider of models reports its rate limits in on each answer, nil for one that reports none
+	Limits *Limits
 
 	API API
 }

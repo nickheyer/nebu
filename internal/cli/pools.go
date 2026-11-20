@@ -445,16 +445,18 @@ func renderRoute(w io.Writer, r *v1.Route, defaults *v1.Policy) {
 		{"effective policy", policyText(inherit(spec.GetPolicy(), defaults))},
 		{"profile", profileText(spec.GetProfile())},
 		{"objective", orDash(spec.GetObjective())},
+		{"balance", balanceText(spec.GetBalance())},
 		{"generation", fmt.Sprintf("%d, observed %d", r.GetMeta().GetGeneration(), st.GetObservedGeneration())},
 	})
 	section(w, "rules")
-	rulesTable(w, spec.GetRules())
+	rulesTable(w, spec.GetRules(), spec.GetBalance())
 	section(w, "conditions")
 	conditionsTable(w, st.GetConditions())
 }
 
-// One row per weighted target with its share of its rule's traffic, a star matching every model
-func rulesTable(w io.Writer, rules []*v1.RewriteRule) {
+// One row per target with its share of its rule's traffic, or its place for an ordered rule, and its condition, a star matching every model
+func rulesTable(w io.Writer, rules []*v1.RewriteRule, balance v1.RouteBalance) {
+	ordered := balance == v1.RouteBalance_ROUTE_BALANCE_ORDERED
 	var rows [][]string
 	for _, rule := range rules {
 		var total uint64
@@ -465,27 +467,68 @@ func rulesTable(w io.Writer, rules []*v1.RewriteRule) {
 		if match == "" {
 			match = "*"
 		}
-		for _, t := range rule.GetTargets() {
-			share := "-"
-			if total > 0 {
-				share = fmt.Sprintf("%.0f%%", float64(t.GetWeight())*100/float64(total))
+		for i, t := range rule.GetTargets() {
+			row := []string{match, t.GetPoolId(), orDash(t.GetModel())}
+			switch {
+			case ordered:
+				row = append(row, strconv.Itoa(i+1))
+			case total > 0:
+				row = append(row, strconv.Itoa(int(t.GetWeight())), fmt.Sprintf("%.0f%%", float64(t.GetWeight())*100/float64(total)))
+			default:
+				row = append(row, strconv.Itoa(int(t.GetWeight())), "-")
 			}
-			rows = append(rows, []string{match, t.GetPoolId(), orDash(t.GetModel()), strconv.Itoa(int(t.GetWeight())), share})
+			rows = append(rows, append(row, orDash(t.GetWhen())))
 		}
 	}
-	table(w, []string{"MATCH", "POOL", "MODEL", "WEIGHT", "SHARE"}, rows)
+	if ordered {
+		table(w, []string{"MATCH", "POOL", "MODEL", "ORDER", "WHEN"}, rows)
+		return
+	}
+	table(w, []string{"MATCH", "POOL", "MODEL", "WEIGHT", "SHARE", "WHEN"}, rows)
+}
+
+// How a route weighs its targets in words
+func balanceText(b v1.RouteBalance) string {
+	if b == v1.RouteBalance_ROUTE_BALANCE_UNSPECIFIED {
+		return "weights"
+	}
+	return enumShort(b)
+}
+
+// The balance a name stands for, weights for static weights alone
+func balanceOf(name string) (v1.RouteBalance, error) {
+	if strings.EqualFold(strings.TrimSpace(name), "weights") {
+		return v1.RouteBalance_ROUTE_BALANCE_UNSPECIFIED, nil
+	}
+	n, err := enumNamed(v1.RouteBalance(0).Descriptor(), name, "balance")
+	if err != nil {
+		return 0, fmt.Errorf("balance %q is not weights, ready-endpoints, free-capacity, or ordered", name)
+	}
+	return v1.RouteBalance(n), nil
 }
 
 func runRoutesPut(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("routes put")
 	file := fs.String("file", "", "a YAML or JSON RouteSpec the other flags apply over, the route's current spec when unset")
-	var targets multi
-	fs.Var(&targets, "target", "weighted destination as POOL[=MODEL][:WEIGHT], repeatable, weight 1 when no trailing :N")
+	var targets []*v1.RewriteTarget
+	fs.Func("target", "weighted destination as POOL[=MODEL][:WEIGHT], repeatable, weight 1 when no trailing :N", func(s string) error {
+		t, err := parseTarget(s)
+		targets = append(targets, t)
+		return err
+	})
+	fs.Func("when", "a CEL condition over now, ready and free the --target before it is drawn under", func(s string) error {
+		if len(targets) == 0 {
+			return errors.New("--when follows the --target it holds for")
+		}
+		targets[len(targets)-1].When = s
+		return nil
+	})
 	match := fs.String("match", "", "the client model name the rule of the targets takes, every request when empty")
 	objective := fs.String("objective", "", "the objective requests carry unless they name their own")
+	balance := fs.String("balance", "", "weights, ready-endpoints, free-capacity, or ordered, the targets then tried in the order given")
 	policy, readPolicy := policyFlags(fs)
 	profile, readProfile := profileFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "routes put <name> [--file SPEC] [--target POOL[=MODEL][:WEIGHT]]... [--match NAME] [--objective NAME] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF]... [--mutating-tools]")
+	positional, err := e.parse(fs, args, 1, 1, "routes put <name> [--file SPEC] [--target POOL[=MODEL][:WEIGHT] [--when EXPR]]... [--match NAME] [--balance NAME] [--objective NAME] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF]... [--mutating-tools]")
 	if err != nil {
 		return err
 	}
@@ -495,13 +538,12 @@ func runRoutesPut(ctx context.Context, e *env, args []string) error {
 	}
 	var rule *v1.RewriteRule
 	if set["target"] {
-		rule = &v1.RewriteRule{Match: *match}
-		for _, s := range targets {
-			t, err := parseTarget(s)
-			if err != nil {
-				return err
-			}
-			rule.Targets = append(rule.Targets, t)
+		rule = &v1.RewriteRule{Match: *match, Targets: targets}
+	}
+	var weighing v1.RouteBalance
+	if set["balance"] {
+		if weighing, err = balanceOf(*balance); err != nil {
+			return err
 		}
 	}
 	if err := readPolicy(); err != nil {
@@ -519,6 +561,9 @@ func runRoutesPut(ctx context.Context, e *env, args []string) error {
 	}
 	if set["objective"] {
 		spec.Objective = *objective
+	}
+	if set["balance"] {
+		spec.Balance = weighing
 	}
 	if spec.Policy == nil {
 		spec.Policy = &v1.Policy{}

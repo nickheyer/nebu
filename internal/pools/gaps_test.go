@@ -691,3 +691,72 @@ func TestSourcesRestartAfterFailure(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 }
+
+// An ordered rule takes the first target in order with a ready endpoint, a false condition is skipped under every balance,
+// a bad one is refused when put, and a target the request left is drawn no more
+func TestOrderedTargetsConditionsAndLeft(t *testing.T) {
+	ctx := context.Background()
+	m, _, _ := newManager(t)
+	a, b := PoolIDOf(llama, "vllm", ""), PoolIDOf(llama, "sglang", "")
+	if err := m.Publish(ctx, OwnerRef{Kind: OwnerInstance, ID: "a"}, membership("vllm"), []Published{published("a", 1, true)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Publish(ctx, OwnerRef{Kind: OwnerInstance, ID: "b"}, membership("sglang"), []Published{published("b", 2, true)}); err != nil {
+		t.Fatal(err)
+	}
+	put := func(balance v1.RouteBalance, first, second *v1.RewriteTarget) error {
+		_, err := m.PutRoute(ctx, "split", &v1.RouteSpec{Rules: []*v1.RewriteRule{rewrite("chat", first, second)}, Balance: balance})
+		return err
+	}
+	when := func(target *v1.RewriteTarget, expr string) *v1.RewriteTarget {
+		target.When = expr
+		return target
+	}
+	if err := put(v1.RouteBalance_ROUTE_BALANCE_ORDERED, to(a, "a-model", 1), to(b, "b-model", 1000)); err != nil {
+		t.Fatal(err)
+	}
+	if counts := drawCounts(t, m, "chat", 200); counts[a] != 200 {
+		t.Fatalf("in order the first takes every request whatever the weights, drew %v", counts)
+	}
+	m.SetReady(ctx, "a", false)
+	if counts := drawCounts(t, m, "chat", 50); counts[b] != 50 {
+		t.Fatalf("the first without a ready endpoint passes to the next, drew %v", counts)
+	}
+	m.SetReady(ctx, "a", true)
+	if err := put(v1.RouteBalance_ROUTE_BALANCE_ORDERED, when(to(a, "a-model", 1), "ready > 5"), to(b, "b-model", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if counts := drawCounts(t, m, "chat", 50); counts[b] != 50 {
+		t.Fatalf("a false condition is skipped in order, drew %v", counts)
+	}
+	if err := put(v1.RouteBalance_ROUTE_BALANCE_UNSPECIFIED, when(to(a, "a-model", 1), "now > timestamp('2000-01-01T00:00:00Z') && free >= 1"), when(to(b, "b-model", 1), "ready == 0")); err != nil {
+		t.Fatal(err)
+	}
+	if counts := drawCounts(t, m, "chat", 200); counts[a] != 200 {
+		t.Fatalf("a false condition is skipped among weights, drew %v", counts)
+	}
+	for _, bad := range []string{"ready +", "ready", "unknown > 1"} {
+		if err := put(v1.RouteBalance_ROUTE_BALANCE_ORDERED, when(to(a, "a-model", 1), bad), to(b, "b-model", 1)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("condition %q accepted: %v", bad, err)
+		}
+	}
+	if err := put(v1.RouteBalance_ROUTE_BALANCE_ORDERED, to(a, "a-model", 1), to(b, "b-model", 1)); err != nil {
+		t.Fatal(err)
+	}
+	var left []datalayer.PoolID
+	leaving := WithLeft(ctx, func(pool datalayer.PoolID) bool { return slices.Contains(left, pool) })
+	if pool, model, err := m.Resolve(leaving, "chat"); err != nil || pool.ID != a || model != "a-model" {
+		t.Fatalf("nothing left yet %v %s %v", pool.ID, model, err)
+	}
+	left = append(left, a)
+	if pool, model, err := m.Resolve(leaving, "chat"); err != nil || pool.ID != b || model != "b-model" {
+		t.Fatalf("the first left %v %s %v", pool.ID, model, err)
+	}
+	left = append(left, b)
+	if _, _, err := m.Resolve(leaving, "chat"); !errors.Is(err, requestcontrol.ErrNoReadyEndpoints) {
+		t.Fatalf("every target left %v", err)
+	}
+	if _, _, err := m.Resolve(leaving, "a-model"); !errors.Is(err, requestcontrol.ErrNoReadyEndpoints) {
+		t.Fatalf("a model served by a pool the request left %v", err)
+	}
+}

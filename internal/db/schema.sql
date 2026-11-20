@@ -492,6 +492,7 @@ CREATE INDEX api_tokens_owner ON api_tokens (provider, subject);
 -- Credentials callers keep for providers serving models. The owner is the subject the caller's
 -- traces are kept under, daemon for the daemon token and auth.disabled. The kind is key or
 -- sign_in, the secret a key or a sign-in's tokens as JSON, and expires_at when those lapse.
+-- budgets holds the owner's budgets as JSON, empty when there are none.
 CREATE TABLE provider_credentials (
   id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
@@ -502,9 +503,23 @@ CREATE TABLE provider_credentials (
   expires_at TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  budgets TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX provider_credentials_owner ON provider_credentials (owner, source_id, position);
+
+-- Requests and tokens each provider credential was used for, per model and bucket, the bucket
+-- the unix time divided by 300. Input tokens count the cached ones among them.
+CREATE TABLE credential_usage (
+  credential_id TEXT NOT NULL REFERENCES provider_credentials (id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  bucket INTEGER NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (credential_id, model, bucket)
+);
 
 -- Saved web chat conversations, owned by the account that made them. The turns
 -- and settings are one JSON document, the columns what lists show.

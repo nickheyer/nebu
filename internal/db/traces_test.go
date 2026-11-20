@@ -39,8 +39,8 @@ func fullTrace(id, route string, started time.Time) *v1.Trace {
 		Forwarded: true, NodeId: "node-b", ConductorTrace: "tr-remote", Seats: []string{"in-1", "in-2"}, Relay: "prefill+decode",
 		DraftOffered: 64, DraftAccepted: 40, CachedTokens: 96, QueuedBehind: 3, Endpoint: "127.0.0.1:8081", PoolId: "pool-a",
 		Profile: "default", Score: 0.875, QueueWaitMs: 12, FairnessId: "team-a", Priority: -2, Objective: "interactive",
-		ObjectiveAttained: true, FailedOpen: true, Fallbacks: []*v1.TraceFallback{{Address: "127.0.0.1:8082", Reason: "connection refused"}, {Address: "127.0.0.1:8083", Reason: "503", RequestWritten: true, BytesToClient: 12}}, RequestId: "req-9", EntryNode: "node-a",
-		Owner: "alice", Filters: []*v1.TraceFilter{{Name: "ready", Dropped: []string{"127.0.0.1:8084"}}}, Candidates: []*v1.TraceScore{{Endpoint: "127.0.0.1:8081", Score: 0.875, ByScorer: map[string]float64{"queue": 0.5}}},
+		ObjectiveAttained: true, FailedOpen: true, Fallbacks: []*v1.TraceFallback{{Address: "127.0.0.1:8082", Reason: "connection refused"}, {Address: "127.0.0.1:8083", Reason: "503", RequestWritten: true, BytesToClient: 12, PoolId: "pool-b", Credential: "spare"}}, RequestId: "req-9", EntryNode: "node-a",
+		Owner: "alice", Credential: "main", Filters: []*v1.TraceFilter{{Name: "ready", Dropped: []string{"127.0.0.1:8084"}}}, Candidates: []*v1.TraceScore{{Endpoint: "127.0.0.1:8081", Score: 0.875, ByScorer: map[string]float64{"queue": 0.5}}},
 	}
 }
 

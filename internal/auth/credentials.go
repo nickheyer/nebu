@@ -55,8 +55,13 @@ type Credentials struct {
 
 	mu      sync.Mutex
 	pending map[string]*pendingSignIn
+	// What each credential's provider reports of its limits and its cooldown, by credential id
+	standings map[string]*standing
 	// One refresh at a time, since a provider may take each refresh token once
 	refreshMu sync.Mutex
+	// Usage recorded since the last write, held whole while a write runs
+	ledger    sync.RWMutex
+	unwritten map[usageKey]*v1.CredentialUsage
 }
 
 // A sign-in the person has yet to approve, by device or by the address the provider sends the browser to
@@ -77,7 +82,7 @@ type signedIn struct {
 }
 
 func NewCredentials(store *db.DB, srcs *sources.Registry, log *slog.Logger, host string) *Credentials {
-	return &Credentials{db: store, sources: srcs, log: log, client: &http.Client{Timeout: time.Minute}, now: time.Now, host: host, pending: map[string]*pendingSignIn{}}
+	return &Credentials{db: store, sources: srcs, log: log, client: &http.Client{Timeout: time.Minute}, now: time.Now, host: host, pending: map[string]*pendingSignIn{}, standings: map[string]*standing{}, unwritten: map[usageKey]*v1.CredentialUsage{}}
 }
 
 // The owner a caller's provider credentials are kept under, its trace owner, the daemon token and auth.disabled sharing one
@@ -103,14 +108,18 @@ func sourceName(src sources.Source, cat *sources.Catalog) string {
 	return cat.Name
 }
 
-// The owner's credentials by source and position, never with a secret
+// The owner's credentials by source and position with their windows as they stand, never with a secret
 func (c *Credentials) List(ctx context.Context, owner string) ([]*v1.ProviderCredential, error) {
 	rows, err := c.db.ListCredentials(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
+	now := c.now()
 	out := make([]*v1.ProviderCredential, 0, len(rows))
 	for _, r := range rows {
+		for _, w := range c.windows(ctx, r, now) {
+			r.Credential.Windows = append(r.Credential.Windows, w.CredentialWindow)
+		}
 		out = append(out, r.Credential)
 	}
 	return out, nil
@@ -121,6 +130,11 @@ func (c *Credentials) Put(ctx context.Context, owner string, in *v1.PutCredentia
 	name, secret := strings.TrimSpace(in.GetName()), strings.TrimSpace(in.GetSecret())
 	if len(name) > maxCredentialName {
 		return nil, fmt.Errorf("%w: name is longer than %d characters", ErrProviderCredential, maxCredentialName)
+	}
+	if in.GetBudgetsSet() {
+		if err := checkBudgets(in.GetBudgets()); err != nil {
+			return nil, err
+		}
 	}
 	var row db.CredentialRow
 	if in.GetId() == "" {
@@ -153,15 +167,45 @@ func (c *Credentials) Put(ctx context.Context, owner string, in *v1.PutCredentia
 		}
 		row.Credential.Name, row.Secret = cmp.Or(name, row.Credential.GetName()), cmp.Or(secret, row.Secret)
 	}
-	if in.GetPosition() > 0 {
-		row.Credential.Position = in.GetPosition()
+	if in.GetBudgetsSet() {
+		row.Credential.Budgets = in.GetBudgets()
 	}
 	row.Credential.UpdatedAt = timestamppb.New(c.now().UTC())
 	if err := c.save(ctx, row); err != nil {
 		return nil, err
 	}
+	if in.GetPosition() > 0 {
+		if err := c.place(ctx, owner, row.Credential.GetSourceId(), row.Credential.GetId(), in.GetPosition()); err != nil {
+			return nil, err
+		}
+	}
 	c.log.Info("provider credential stored", "owner", owner, "source", row.Credential.GetSourceId(), "id", row.Credential.GetId())
 	return c.reread(ctx, owner, row.Credential.GetId())
+}
+
+// Moves one of the owner's credentials for a source to a position from 1, the others keeping their order around it
+func (c *Credentials) place(ctx context.Context, owner, sourceID, id string, position uint32) error {
+	rows, err := c.db.SourceCredentials(ctx, owner, sourceID)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(rows, func(r db.CredentialRow) bool { return r.Credential.GetId() == id })
+	if i < 0 {
+		return fmt.Errorf("%w: %s", ErrUnknownCredential, id)
+	}
+	moved := rows[i]
+	rows = slices.Delete(rows, i, i+1)
+	rows = slices.Insert(rows, min(int(position)-1, len(rows)), moved)
+	for n, r := range rows {
+		if r.Credential.GetPosition() == uint32(n+1) {
+			continue
+		}
+		r.Credential.Position = uint32(n + 1)
+		if err := c.save(ctx, r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // A new row placed after the owner's last credential for the source, refusing an owner holding the most allowed
@@ -213,6 +257,7 @@ func (c *Credentials) Delete(ctx context.Context, owner, id string) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrUnknownCredential, id)
 	}
+	c.forgetStanding(id)
 	c.log.Info("provider credential removed", "owner", owner, "id", id)
 	return nil
 }
@@ -448,36 +493,32 @@ func jwtExpiry(token string) time.Time {
 	return time.Unix(claims.Exp, 0)
 }
 
-// The credential a request to the source uses among the owner's, the first by position. Budgets will choose here later.
-func chosen(rows []db.CredentialRow) (db.CredentialRow, bool) {
-	if len(rows) == 0 {
-		return db.CredentialRow{}, false
-	}
-	return rows[0], true
-}
-
-// The headers the owner's requests to a provider source carry beside the ones sent. ok is false for a source
-// serving no models, and sources.ErrNoCredential says the owner keeps none for it.
-func (c *Credentials) Headers(ctx context.Context, owner, sourceID string, sent http.Header) (map[string]string, bool, error) {
+// The credential the owner's requests for a model of a provider source go under and the headers they carry beside
+// the ones sent, an empty model counting for every model. Both are nil for a source serving no models,
+// sources.ErrNoCredential says the owner keeps none for it, and a requestcontrol.SpentError that every one is spent.
+func (c *Credentials) Headers(ctx context.Context, owner, sourceID, model string, sent http.Header) (*v1.ProviderCredential, map[string]string, error) {
 	src, cat, err := c.provider(sourceID)
 	if err != nil || cat == nil {
-		return nil, false, nil
+		return nil, nil, nil
 	}
 	rows, err := c.db.SourceCredentials(ctx, owner, sourceID)
 	if err != nil {
-		return nil, true, err
+		return nil, nil, err
 	}
-	row, found := chosen(rows)
+	if len(rows) == 0 {
+		return nil, nil, fmt.Errorf("%w for %s, add one under Profile, Providers", sources.ErrNoCredential, sourceName(src, cat))
+	}
+	row, reset, found := c.chosen(ctx, rows, model)
 	if !found {
-		return nil, true, fmt.Errorf("%w for %s, add one under Profile, Providers", sources.ErrNoCredential, sourceName(src, cat))
+		return nil, nil, spent(sourceName(src, cat), model, reset, c.now())
 	}
 	if row.Credential.GetKind() != v1.CredentialKind_CREDENTIAL_KIND_SIGN_IN || cat.SignIn.OAuth == nil {
-		return cat.SignIn.Headers(row.Secret, sent), true, nil
+		return row.Credential, cat.SignIn.Headers(row.Secret, sent), nil
 	}
 	o := cat.SignIn.OAuth
 	tok, err := c.fresh(ctx, o, row)
 	if err != nil {
-		return nil, true, fmt.Errorf("%s: %w", sourceName(src, cat), err)
+		return nil, nil, fmt.Errorf("%s: %w", sourceName(src, cat), err)
 	}
 	out := cat.SignIn.Headers(tok.AccessToken, sent)
 	for k, v := range o.Fixed {
@@ -490,13 +531,13 @@ func (c *Credentials) Headers(ctx context.Context, owner, sourceID string, sent 
 			out[k] = v
 		}
 	}
-	return out, true, nil
+	return row.Credential, out, nil
 }
 
 // The caller's headers for each provider source, for the sources a request reaches
 func (c *Credentials) Authorizer(ctx context.Context, owner string) func(sourceID string) http.Header {
 	return func(sourceID string) http.Header {
-		h, _, err := c.Headers(ctx, owner, sourceID, nil)
+		_, h, err := c.Headers(ctx, owner, sourceID, "", nil)
 		if err != nil || h == nil {
 			return nil
 		}

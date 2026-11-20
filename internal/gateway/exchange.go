@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -97,6 +99,13 @@ type exchange struct {
 	// What the serving endpoint answered, fed to the director once the request ends
 	resp   framework.Response
 	served datalayer.Endpoint
+	// The provider credential the decision goes under, nil for a pool no provider serves
+	credential *v1.ProviderCredential
+	// The last refusal the request was decided again after, given to the client when nothing remains
+	last *kept
+	// The pools the request left, which no later decision goes to, and the credentials a provider refused it under
+	left   map[datalayer.PoolID]bool
+	cooled map[string]bool
 	// The instance count the request is held under, moving with each attempt
 	counted *atomic.Int64
 }
@@ -227,18 +236,46 @@ func (o observer) Completed(dec *requestcontrol.Decision, resp *framework.Respon
 	o.g.tally(dec, resp)
 }
 
-// Records the response status and size while passing flushes through
+// A refusal kept back from the client while the gateway decides again, with what the pass that met it left on the trace
+type kept struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+	trace  *v1.Trace
+	pool   datalayer.Pool
+	sent   []byte
+	resp   framework.Response
+	// The trace's record of the pass, added once another decision is made
+	fallback *v1.TraceFallback
+	// Whether the next decision may go to the same pool, the provider having refused the credential alone
+	stay bool
+}
+
+// Records the response status and size while passing flushes through, or keeps a refusal back from the client
 type writer struct {
 	http.ResponseWriter
 	status int
 	bytes  uint64
 	wrote  bool
 	clock  Clock
+	// What is written while the gateway may still decide again, nil while writes reach the client
+	kept *kept
+}
+
+func (w *writer) Header() http.Header {
+	if w.kept != nil {
+		return w.kept.header
+	}
+	return w.ResponseWriter.Header()
 }
 
 func (w *writer) WriteHeader(status int) {
 	if !w.wrote {
 		w.wrote, w.status = true, status
+	}
+	if w.kept != nil {
+		w.kept.status = cmp.Or(w.kept.status, status)
+		return
 	}
 	w.ResponseWriter.WriteHeader(status)
 }
@@ -246,6 +283,9 @@ func (w *writer) WriteHeader(status int) {
 func (w *writer) Write(b []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
+	}
+	if w.kept != nil {
+		return w.kept.body.Write(b)
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += uint64(n)
@@ -256,7 +296,29 @@ func (w *writer) Flush() {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
 	}
+	if w.kept != nil {
+		return
+	}
 	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Takes out what was kept back, the writer then as it was before anything was written
+func (w *writer) take() *kept {
+	k := w.kept
+	if k != nil {
+		w.kept, w.wrote, w.status = nil, false, 0
+	}
+	return k
+}
+
+// Writes a kept refusal to the client as it was written
+func (w *writer) give(k *kept) {
+	h := w.ResponseWriter.Header()
+	for name, v := range k.header {
+		h[name] = v
+	}
+	w.WriteHeader(k.status)
+	w.Write(k.body.Bytes())
 }
 
 func (w *writer) Unwrap() http.ResponseWriter { return w.ResponseWriter }

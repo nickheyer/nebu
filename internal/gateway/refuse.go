@@ -99,6 +99,9 @@ func (g *Gateway) refusal(err error, model string, route *v1.Route, pool datalay
 		return chat.Failure{Status: statusLoop, Code: chat.CodeInvalidRequest, Message: "model " + model + " was forwarded past the hop limit: " + err.Error()}
 	case errors.Is(err, mesh.ErrMesh):
 		return chat.Failure{Status: http.StatusBadRequest, Code: chat.CodeInvalidRequest, Message: err.Error()}
+	case errors.As(err, new(*requestcontrol.SpentError)):
+		se, _ := errors.AsType[*requestcontrol.SpentError](err)
+		return chat.Failure{Status: http.StatusTooManyRequests, Code: chat.CodeRateLimit, Message: se.Message, RetryAfter: seconds(se.Retry)}
 	case errors.As(err, new(*flowcontrol.QuotaError)):
 		qe, _ := errors.AsType[*flowcontrol.QuotaError](err)
 		return chat.Failure{Status: http.StatusTooManyRequests, Code: chat.CodeRateLimit, Message: qe.Error(), RetryAfter: seconds(qe.Retry)}

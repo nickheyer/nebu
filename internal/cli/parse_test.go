@@ -336,3 +336,24 @@ func TestRunRouteFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBudgetAndBalance(t *testing.T) {
+	got, err := parseBudget("name=daily,unit=input-tokens,limit=1e6,period=day,start=6,zone=Europe/Paris,model=gpt-4*,model=o3-mini,reserve=10,cached=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameMessage(t, "budget", got, &v1.CredentialBudget{Name: "daily", Unit: v1.BudgetUnit_BUDGET_UNIT_INPUT_TOKENS, Limit: 1e6, Period: v1.BudgetPeriod_BUDGET_PERIOD_DAY, Start: 6, Zone: "Europe/Paris", Models: []string{"gpt-4*", "o3-mini"}, ReservePercent: 10, Cached: true})
+	for _, bad := range []string{"name", "unit=pebbles", "limit=lots", "colour=red", "reserve=-1"} {
+		if got, err := parseBudget(bad); err == nil {
+			t.Fatalf("%q parsed to %v, want an error", bad, got)
+		}
+	}
+	for name, want := range map[string]v1.RouteBalance{"weights": v1.RouteBalance_ROUTE_BALANCE_UNSPECIFIED, "ordered": v1.RouteBalance_ROUTE_BALANCE_ORDERED, "free-capacity": v1.RouteBalance_ROUTE_BALANCE_FREE_CAPACITY} {
+		if got, err := balanceOf(name); err != nil || got != want {
+			t.Fatalf("%s: %v %v", name, got, err)
+		}
+	}
+	if _, err := balanceOf("sideways"); err == nil {
+		t.Fatal("an unknown balance parsed")
+	}
+}

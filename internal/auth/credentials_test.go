@@ -149,15 +149,15 @@ func TestCredentialsBelongToTheirOwner(t *testing.T) {
 	if first.GetPosition() != 1 || second.GetPosition() != 2 || !first.GetSecretSet() || first.GetName() == "" || first.GetKind() != v1.CredentialKind_CREDENTIAL_KIND_KEY {
 		t.Fatalf("credentials %v %v", first, second)
 	}
-	h, provider, err := c.Headers(ctx, "ann", "lab", nil)
-	if err != nil || !provider || h["Authorization"] != "Bearer sk-one" {
-		t.Fatalf("the first by position signs, got %v %v %v", h, provider, err)
+	signer, h, err := c.Headers(ctx, "ann", "lab", "", nil)
+	if err != nil || signer.GetId() != first.GetId() || h["Authorization"] != "Bearer sk-one" {
+		t.Fatalf("the first by position signs, got %v %v %v", h, signer, err)
 	}
-	if _, provider, err := c.Headers(ctx, "bob", "lab", nil); !provider || !errors.Is(err, sources.ErrNoCredential) {
-		t.Fatalf("another owner keeps none, got %v %v", provider, err)
+	if _, _, err := c.Headers(ctx, "bob", "lab", "", nil); !errors.Is(err, sources.ErrNoCredential) {
+		t.Fatalf("another owner keeps none, got %v", err)
 	}
-	if h, provider, err := c.Headers(ctx, "ann", "huggingface", nil); provider || h != nil || err != nil {
-		t.Fatalf("a catalog of weights is no provider, got %v %v %v", h, provider, err)
+	if signer, h, err := c.Headers(ctx, "ann", "huggingface", "", nil); signer != nil || h != nil || err != nil {
+		t.Fatalf("a catalog of weights is no provider, got %v %v %v", h, signer, err)
 	}
 	if _, err := c.Put(ctx, "bob", &v1.PutCredentialRequest{Id: first.GetId(), Secret: "sk-stolen"}); !errors.Is(err, ErrUnknownCredential) {
 		t.Fatalf("another owner's credential is unknown, got %v", err)
@@ -169,7 +169,7 @@ func TestCredentialsBelongToTheirOwner(t *testing.T) {
 	if _, err := c.Put(ctx, "ann", &v1.PutCredentialRequest{Id: first.GetId(), Position: 3}); err != nil {
 		t.Fatal(err)
 	}
-	if h, _, _ := c.Headers(ctx, "ann", "lab", nil); h["Authorization"] != "Bearer sk-two" {
+	if _, h, _ := c.Headers(ctx, "ann", "lab", "", nil); h["Authorization"] != "Bearer sk-two" {
 		t.Fatalf("the reordered first signs, got %v", h)
 	}
 	list, err := c.List(ctx, "ann")
@@ -213,22 +213,22 @@ func TestSignInKeepsAndRefreshesTokens(t *testing.T) {
 	if cred.GetKind() != v1.CredentialKind_CREDENTIAL_KIND_SIGN_IN || cred.GetExpiresAt() == nil || cred.GetName() != "Codex" {
 		t.Fatalf("credential %v", cred)
 	}
-	h, _, err := c.Headers(ctx, "ann", "codex", nil)
+	_, h, err := c.Headers(ctx, "ann", "codex", "", nil)
 	if err != nil || h["Authorization"] != "Bearer access-1" || h["chatgpt-account-id"] != "acct-1" || h["originator"] == "" {
 		t.Fatalf("headers %v %v", h, err)
 	}
 	// Close to its expiry the access is refreshed and kept, the id token carried over
 	c.now = func() time.Time { return time.Now().Add(58 * time.Minute) }
-	h, _, err = c.Headers(ctx, "ann", "codex", nil)
+	_, h, err = c.Headers(ctx, "ann", "codex", "", nil)
 	if err != nil || h["Authorization"] != "Bearer access-2" || h["chatgpt-account-id"] != "acct-1" || refreshes.Load() != 1 {
 		t.Fatalf("refreshed headers %v %v, %d refreshes", h, err, refreshes.Load())
 	}
-	if h, _, _ = c.Headers(ctx, "ann", "codex", nil); h["Authorization"] != "Bearer access-2" || refreshes.Load() != 1 {
+	if _, h, _ = c.Headers(ctx, "ann", "codex", "", nil); h["Authorization"] != "Bearer access-2" || refreshes.Load() != 1 {
 		t.Fatalf("a refreshed sign-in is not refreshed again, %v %d", h, refreshes.Load())
 	}
 	// A refused refresh past the expiry names no token the provider echoed
 	c.now = func() time.Time { return time.Now().Add(3 * time.Hour) }
-	if _, _, err := c.Headers(ctx, "ann", "codex", nil); err == nil || strings.Contains(err.Error(), "refresh-") {
+	if _, _, err := c.Headers(ctx, "ann", "codex", "", nil); err == nil || strings.Contains(err.Error(), "refresh-") {
 		t.Fatalf("refused refresh %v", err)
 	}
 }
@@ -258,12 +258,12 @@ func TestSignInByRedirect(t *testing.T) {
 	if cred.GetKind() != v1.CredentialKind_CREDENTIAL_KIND_SIGN_IN || cred.GetName() != "plan" {
 		t.Fatalf("credential %v", cred)
 	}
-	if h, _, err := c.Headers(ctx, "ann", "openai", nil); err != nil || h["Authorization"] != "Bearer plan-access" {
+	if _, h, err := c.Headers(ctx, "ann", "openai", "", nil); err != nil || h["Authorization"] != "Bearer plan-access" {
 		t.Fatalf("headers %v %v", h, err)
 	}
 	// The issued client signs its refresh, with the resource the provider asks for
 	c.now = func() time.Time { return time.Now().Add(58 * time.Minute) }
-	if h, _, err := c.Headers(ctx, "ann", "openai", nil); err != nil || h["Authorization"] != "Bearer plan-access-2" {
+	if _, h, err := c.Headers(ctx, "ann", "openai", "", nil); err != nil || h["Authorization"] != "Bearer plan-access-2" {
 		t.Fatalf("refreshed headers %v %v", h, err)
 	}
 
@@ -282,7 +282,7 @@ func TestSignInByRedirect(t *testing.T) {
 	if cred.GetKind() != v1.CredentialKind_CREDENTIAL_KIND_KEY || !cred.GetSecretSet() {
 		t.Fatalf("a sign-in ending in a key keeps a key, got %v", cred)
 	}
-	if h, _, _ := c.Headers(ctx, "ann", "openrouter", nil); h["Authorization"] != "Bearer sk-or-issued" {
+	if _, h, _ := c.Headers(ctx, "ann", "openrouter", "", nil); h["Authorization"] != "Bearer sk-or-issued" {
 		t.Fatalf("headers %v", h)
 	}
 }

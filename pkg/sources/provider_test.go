@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -123,5 +124,35 @@ func TestAnthropicListsEveryPage(t *testing.T) {
 	}
 	if h := anthropic.SignIn.Headers("sk", http.Header{"Anthropic-Version": {"2026-10-21"}}); len(h) != 1 {
 		t.Fatalf("a version the client sent stands, got %v", h)
+	}
+}
+
+// Each provider's limit headers read with every reset format in use, a header naming no limit read as none
+func TestLimitsReadEachResetFormat(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name   string
+		limits *Limits
+		window string
+		header http.Header
+		reset  time.Time
+	}{
+		{"anthropic rfc 3339", ProviderOf(v1.SourceKind_SOURCE_KIND_ANTHROPIC).Limits, "input-tokens", http.Header{"Anthropic-Ratelimit-Input-Tokens-Limit": {"2000000"}, "Anthropic-Ratelimit-Input-Tokens-Remaining": {"1000"}, "Anthropic-Ratelimit-Input-Tokens-Reset": {"2026-11-20T12:00:30Z"}}, now.Add(30 * time.Second)},
+		{"openai duration", ProviderOf(v1.SourceKind_SOURCE_KIND_OPENAI).Limits, "tokens", http.Header{"X-Ratelimit-Limit-Tokens": {"150000"}, "X-Ratelimit-Remaining-Tokens": {"1000"}, "X-Ratelimit-Reset-Tokens": {"6m0s"}}, now.Add(6 * time.Minute)},
+		{"groq fractional duration", ProviderOf(v1.SourceKind_SOURCE_KIND_GROQ).Limits, "requests", http.Header{"X-Ratelimit-Limit-Requests": {"14400"}, "X-Ratelimit-Remaining-Requests": {"1000"}, "X-Ratelimit-Reset-Requests": {"2m59.56s"}}, now.Add(2*time.Minute + 59560*time.Millisecond)},
+		{"seconds", &Limits{Header: "x-{field}"}, "", http.Header{"X-Limit": {"10"}, "X-Remaining": {"1000"}, "X-Reset": {"2"}}, now.Add(2 * time.Second)},
+		{"unix seconds", &Limits{Header: "x-{field}"}, "", http.Header{"X-Limit": {"10"}, "X-Remaining": {"1000"}, "X-Reset": {"1795176000"}}, time.Unix(1795176000, 0)},
+		{"unix milliseconds", &Limits{Header: "x-{field}"}, "", http.Header{"X-Limit": {"10"}, "X-Remaining": {"1000"}, "X-Reset": {"1795176000500"}}, time.UnixMilli(1795176000500)},
+	} {
+		limit, remaining, reset, ok := c.limits.Read(c.header, c.window, now)
+		if !ok || limit <= 0 || remaining != 1000 || !reset.Equal(c.reset) {
+			t.Fatalf("%s: %v %v %v %v, want reset %v", c.name, limit, remaining, reset, ok, c.reset)
+		}
+	}
+	if _, _, _, ok := ProviderOf(v1.SourceKind_SOURCE_KIND_OPENAI).Limits.Read(http.Header{}, "tokens", now); ok {
+		t.Fatal("an answer stating no limit was read as one")
+	}
+	if ProviderOf(v1.SourceKind_SOURCE_KIND_XAI).Limits != nil {
+		t.Fatal("xAI documents no limit headers")
 	}
 }

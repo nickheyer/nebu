@@ -8,12 +8,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/auth"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"golang.org/x/term"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func userCommands() command {
@@ -253,6 +258,8 @@ func credentialCommands() command {
 		{name: "add", summary: "keep a key for a provider source", run: runCredentialsAdd, local: true},
 		{name: "update", summary: "rename, reorder, or replace the key of a credential", run: runCredentialsUpdate, local: true},
 		{name: "signin", summary: "sign in with a provider and keep its tokens", run: runCredentialsSignIn, local: true},
+		{name: "budgets", summary: "show or set a credential's budgets with its windows", run: runCredentialsBudgets, local: true},
+		{name: "usage", summary: "requests and tokens each credential was used for, by model", run: runCredentialsUsage, local: true},
 		{name: "remove", summary: "remove a credential", run: runCredentialsRemove, local: true},
 	}}
 }
@@ -273,9 +280,180 @@ func runCredentialsList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, c := range resp.Msg.GetCredentials() {
-			rows = append(rows, []string{c.GetId(), c.GetSourceId(), c.GetName(), enumShort(c.GetKind()), fmt.Sprint(c.GetPosition()), when(c.GetExpiresAt(), "2006-01-02 15:04"), when(c.GetUpdatedAt(), "2006-01-02 15:04")})
+			var spent []string
+			for _, win := range c.GetWindows() {
+				if win.GetSpent() {
+					spent = append(spent, win.GetName())
+				}
+			}
+			rows = append(rows, []string{c.GetId(), c.GetSourceId(), c.GetName(), enumShort(c.GetKind()), fmt.Sprint(c.GetPosition()), fmt.Sprint(len(c.GetBudgets())), orDash(strings.Join(spent, ", ")), when(c.GetExpiresAt(), "2006-01-02 15:04"), when(c.GetUpdatedAt(), "2006-01-02 15:04")})
 		}
-		table(w, []string{"ID", "SOURCE", "NAME", "KIND", "POSITION", "EXPIRES", "UPDATED"}, rows)
+		table(w, []string{"ID", "SOURCE", "NAME", "KIND", "POSITION", "BUDGETS", "SPENT", "EXPIRES", "UPDATED"}, rows)
+	})
+}
+
+func runCredentialsBudgets(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials budgets")
+	var set, drop multi
+	fs.Var(&set, "budget", "a budget as name=N,unit=U,limit=L,period=P and any of seconds, start, zone, window, reserve, cached, model, repeatable, replacing one of the same name")
+	fs.Var(&drop, "drop", "the name of a budget to remove, repeatable")
+	signIn := accountFlags(e, fs)
+	positional, err := e.parse(fs, args, 1, 1, "credentials budgets <id> [--budget SPEC]... [--drop NAME]... "+tokenSignIn)
+	if err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	list, err := e.cl.auth.ListCredentials(ctx, connect.NewRequest(&v1.ListCredentialsRequest{}))
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(list.Msg.GetCredentials(), func(c *v1.ProviderCredential) bool { return c.GetId() == positional[0] })
+	if i < 0 {
+		return fmt.Errorf("no credential %s is kept, see nebu credentials list", positional[0])
+	}
+	cred := list.Msg.GetCredentials()[i]
+	if len(set)+len(drop) > 0 {
+		budgets := slices.DeleteFunc(slices.Clone(cred.GetBudgets()), func(b *v1.CredentialBudget) bool { return slices.Contains(drop, b.GetName()) })
+		for _, s := range set {
+			b, err := parseBudget(s)
+			if err != nil {
+				return err
+			}
+			if j := slices.IndexFunc(budgets, func(o *v1.CredentialBudget) bool { return o.GetName() == b.GetName() }); j >= 0 {
+				budgets[j] = b
+			} else {
+				budgets = append(budgets, b)
+			}
+		}
+		if _, err := e.cl.auth.PutCredential(ctx, connect.NewRequest(&v1.PutCredentialRequest{Id: cred.GetId(), Budgets: budgets, BudgetsSet: true})); err != nil {
+			return err
+		}
+		again, err := e.cl.auth.ListCredentials(ctx, connect.NewRequest(&v1.ListCredentialsRequest{}))
+		if err != nil {
+			return err
+		}
+		for _, c := range again.Msg.GetCredentials() {
+			if c.GetId() == cred.GetId() {
+				cred = c
+			}
+		}
+	}
+	return e.print(cred, func(w io.Writer) {
+		var rows [][]string
+		for _, b := range cred.GetBudgets() {
+			rows = append(rows, []string{b.GetName(), orDash(strings.Join(b.GetModels(), ", ")), enumShort(b.GetUnit()), strconv.FormatFloat(b.GetLimit(), 'f', -1, 64), periodText(b), fmt.Sprintf("%d%%", b.GetReservePercent())})
+		}
+		table(w, []string{"BUDGET", "MODELS", "UNIT", "LIMIT", "PERIOD", "RESERVE"}, rows)
+		section(w, "windows")
+		rows = nil
+		for _, win := range cred.GetWindows() {
+			state := "-"
+			if win.GetSpent() {
+				state = "spent"
+			}
+			rows = append(rows, []string{win.GetName(), enumShort(win.GetKind()), strconv.FormatFloat(win.GetUsed(), 'f', -1, 64), strconv.FormatFloat(win.GetLimit(), 'f', -1, 64), state, when(win.GetResetsAt(), "2006-01-02 15:04:05")})
+		}
+		table(w, []string{"WINDOW", "KIND", "USED", "LIMIT", "STATE", "RESETS"}, rows)
+	})
+}
+
+// The span a budget counts over in words
+func periodText(b *v1.CredentialBudget) string {
+	switch b.GetPeriod() {
+	case v1.BudgetPeriod_BUDGET_PERIOD_ROLLING:
+		return fmt.Sprintf("rolling %s", time.Duration(b.GetSeconds())*time.Second)
+	case v1.BudgetPeriod_BUDGET_PERIOD_REPORTED:
+		return "follows " + b.GetWindow()
+	case v1.BudgetPeriod_BUDGET_PERIOD_UNSPECIFIED:
+		if b.GetWindow() != "" {
+			return "follows " + b.GetWindow()
+		}
+		return "-"
+	}
+	out := fmt.Sprintf("%s from %d", enumShort(b.GetPeriod()), b.GetStart())
+	if b.GetZone() != "" {
+		out += " " + b.GetZone()
+	}
+	return out
+}
+
+// Reads a budget written as comma separated name=value pairs, model repeatable
+func parseBudget(s string) (*v1.CredentialBudget, error) {
+	b := &v1.CredentialBudget{}
+	for _, pair := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if !ok {
+			return nil, fmt.Errorf("budget %q: %q is not name=value", s, pair)
+		}
+		var err error
+		var n protoreflect.EnumNumber
+		var u uint64
+		switch k {
+		case "name":
+			b.Name = v
+		case "model":
+			b.Models = append(b.Models, v)
+		case "unit":
+			n, err = enumNamed(v1.BudgetUnit(0).Descriptor(), v, "unit")
+			b.Unit = v1.BudgetUnit(n)
+		case "period":
+			n, err = enumNamed(v1.BudgetPeriod(0).Descriptor(), v, "period")
+			b.Period = v1.BudgetPeriod(n)
+		case "limit":
+			b.Limit, err = strconv.ParseFloat(v, 64)
+		case "seconds", "start", "reserve":
+			u, err = strconv.ParseUint(v, 10, 32)
+			switch k {
+			case "seconds":
+				b.Seconds = uint32(u)
+			case "start":
+				b.Start = uint32(u)
+			default:
+				b.ReservePercent = uint32(u)
+			}
+		case "zone":
+			b.Zone = v
+		case "window":
+			b.Window = v
+		case "cached":
+			b.Cached, err = strconv.ParseBool(v)
+		default:
+			return nil, fmt.Errorf("budget %q: %s is not name, model, unit, limit, period, seconds, start, zone, window, reserve, or cached", s, k)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("budget %q: %s: %w", s, k, err)
+		}
+	}
+	return b, nil
+}
+
+func runCredentialsUsage(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials usage")
+	since := fs.Duration("since", 30*24*time.Hour, "how far back to count")
+	signIn := accountFlags(e, fs)
+	positional, err := e.parse(fs, args, 0, 1, "credentials usage [<id>] [--since D] "+tokenSignIn)
+	if err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	req := &v1.ListCredentialUsageRequest{From: timestamppb.New(time.Now().Add(-*since))}
+	if len(positional) == 1 {
+		req.CredentialId = positional[0]
+	}
+	resp, err := e.cl.auth.ListCredentialUsage(ctx, connect.NewRequest(req))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, u := range resp.Msg.GetUsage() {
+			rows = append(rows, []string{u.GetCredentialId(), u.GetModel(), strconv.FormatUint(u.GetRequests(), 10), strconv.FormatUint(u.GetInputTokens(), 10), strconv.FormatUint(u.GetOutputTokens(), 10), strconv.FormatUint(u.GetCachedTokens(), 10)})
+		}
+		table(w, []string{"CREDENTIAL", "MODEL", "REQUESTS", "INPUT", "OUTPUT", "CACHED"}, rows)
 	})
 }
 

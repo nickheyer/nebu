@@ -69,6 +69,50 @@ type Device struct {
 	Wait func(ctx context.Context) (*oauth2.Token, error)
 }
 
+// The headers a provider reports its rate limits in, {window} in Header standing for each of Windows and {field} for limit, remaining and reset
+type Limits struct {
+	Header  string
+	Windows []string
+}
+
+// One window's limit, what is left and when it resets as an answer's headers state them, false when they state no limit
+func (l *Limits) Read(h http.Header, window string, now time.Time) (limit, remaining float64, reset time.Time, ok bool) {
+	field := func(f string) string {
+		return strings.TrimSpace(h.Get(strings.NewReplacer("{window}", window, "{field}", f).Replace(l.Header)))
+	}
+	limit, err := strconv.ParseFloat(field("limit"), 64)
+	if err != nil || limit <= 0 {
+		return 0, 0, time.Time{}, false
+	}
+	if remaining, err = strconv.ParseFloat(field("remaining"), 64); err != nil {
+		return 0, 0, time.Time{}, false
+	}
+	return limit, remaining, resetAt(field("reset"), now), true
+}
+
+// When a reset value names: an RFC 3339 time, a duration such as 6m0s or 7.66s, or a number of seconds, unix seconds or unix milliseconds
+func resetAt(v string, now time.Time) time.Time {
+	if v == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t
+	}
+	if d, err := time.ParseDuration(v); err == nil {
+		return now.Add(d)
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	switch {
+	case err != nil || n < 0:
+		return time.Time{}
+	case n > 1e12:
+		return time.UnixMilli(int64(n))
+	case n > 1e9:
+		return time.Unix(int64(n), 0)
+	}
+	return now.Add(time.Duration(n * float64(time.Second)))
+}
+
 // The kinds of credential the provider takes
 func (s *SignIn) Kinds() []v1.CredentialKind {
 	var out []v1.CredentialKind

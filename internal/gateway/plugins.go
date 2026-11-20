@@ -228,7 +228,7 @@ func effectivePolicy(route, def *v1.Policy) *v1.Policy {
 	return out
 }
 
-// Counts a route's requests and rate limits them once per request across the mesh, at the node that dispatches
+// Counts a route's requests and rate limits them once per request across the mesh, at the node that dispatches, a request decided again holding a slot alone
 type routePolicy struct{ g *Gateway }
 
 func (*routePolicy) TypedName() framework.TypedName {
@@ -238,13 +238,16 @@ func (*routePolicy) TypedName() framework.TypedName {
 func (p *routePolicy) PreRequest(ctx context.Context, _ *requestcontrol.Inbound, req *framework.Request) error {
 	x := exchangeOf(ctx)
 	st := p.g.routeState(x.routeName())
-	st.requests.Add(1)
+	again := x.last != nil
+	if !again {
+		st.requests.Add(1)
+	}
 	if x.forwarding() {
 		return nil
 	}
 	pol := x.policy
 	st.inflight.Add(1)
-	if rate := pol.GetRequestsPerSecond(); rate > 0 {
+	if rate := pol.GetRequestsPerSecond(); rate > 0 && !again {
 		burst := int(pol.GetBurst())
 		if burst == 0 {
 			burst = int(math.Ceil(rate))
@@ -350,23 +353,36 @@ func (*providerCredential) TypedName() framework.TypedName {
 }
 
 func (p *providerCredential) PostDecision(ctx context.Context, in *requestcontrol.Inbound, dec *requestcontrol.Decision) error {
-	sourceID, _, named := strings.Cut(dec.Pool.Model, ":")
+	sourceID, model, named := providerModel(dec.Pool.Model)
 	if p.g.creds == nil || !named {
 		return nil
 	}
-	headers, provider, err := p.g.creds.Headers(ctx, exchangeOf(ctx).who.credentialOwner(), sourceID, in.Headers)
+	x := exchangeOf(ctx)
+	cred, headers, err := p.g.creds.Headers(ctx, x.who.credentialOwner(), sourceID, model, in.Headers)
 	switch {
-	case !provider:
-		return nil
 	case errors.Is(err, sources.ErrNoCredential):
 		return &chat.Failure{Status: http.StatusForbidden, Code: chat.CodePermission, Message: err.Error()}
+	case errors.As(err, new(*requestcontrol.SpentError)):
+		return err
 	case err != nil:
 		return &chat.Failure{Status: http.StatusBadGateway, Code: chat.CodeUpstream, Message: err.Error()}
+	case cred == nil:
+		return nil
 	}
+	x.credential, x.t.Credential = cred, cred.GetName()
 	for k, v := range headers {
 		dec.Headers[k] = v
 	}
 	return nil
+}
+
+// The source and the model id a pool's model key names, false for one naming no source
+func providerModel(key string) (string, string, bool) {
+	sourceID, rest, named := strings.Cut(key, ":")
+	if i := strings.LastIndexByte(rest, ':'); i >= 0 {
+		rest = rest[:i]
+	}
+	return sourceID, rest, named
 }
 
 // Folds tools into the prompt when the template cannot render them or token ids bypass the endpoint's parser

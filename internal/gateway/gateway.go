@@ -80,10 +80,14 @@ type Instances interface {
 	TokenizerFile(instanceID string) (string, error)
 }
 
-// What the gateway reads of the credentials callers keep for providers serving models
+// What the gateway reads of the credentials callers keep for providers serving models, and what it tells them
 type Credentials interface {
-	// The headers the owner's requests to a source carry beside the ones sent, ok false for a source serving no models
-	Headers(ctx context.Context, owner, sourceID string, sent http.Header) (map[string]string, bool, error)
+	// The credential the owner's requests for a model of a source go under and the headers they carry beside the ones sent, both nil for a source serving no models
+	Headers(ctx context.Context, owner, sourceID, model string, sent http.Header) (*v1.ProviderCredential, map[string]string, error)
+	// Notes what a provider answered under a credential, with the wait a refusal named
+	Answered(cred *v1.ProviderCredential, status int, header http.Header, retry time.Duration)
+	// Adds one finished request's tokens to what the credential was used for with the model
+	Record(cred *v1.ProviderCredential, model string, in, out, cached int)
 }
 
 // Connections to other members, for forwarded routes and the relay's slot moves

@@ -8,4 +8,8 @@ import v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 var anthropic = modelCatalog(v1.SourceKind_SOURCE_KIND_ANTHROPIC, "anthropic", "Anthropic", "https://api.anthropic.com/v1", v1.ApiFlavor_API_FLAVOR_ANTHROPIC,
 	&SignIn{Header: "Authorization", Scheme: "Bearer", Key: true, Fixed: map[string]string{"anthropic-version": "2023-06-01"}})
 
-func init() { register(anthropic) }
+func init() {
+	// Resets in RFC 3339, https://platform.claude.com/docs/en/api/rate-limits#response-headers
+	anthropic.Limits = &Limits{Header: "anthropic-ratelimit-{window}-{field}", Windows: []string{"requests", "tokens", "input-tokens", "output-tokens"}}
+	register(anthropic)
+}

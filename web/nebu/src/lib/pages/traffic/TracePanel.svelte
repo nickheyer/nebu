@@ -90,6 +90,7 @@
 						{ label: 'request id', value: t.requestId || t.id, mono: true, copy: true },
 						{ label: 'pool', value: t.poolId },
 						{ label: 'endpoint', value: t.endpoint, mono: true },
+						{ label: 'credential', value: t.credential },
 						{ label: 'kind', value: kindWord(t.kind) },
 						{ label: 'client api', value: enumLabel(ApiFlavorSchema, t.clientApi) },
 						{ label: 'upstream api', value: enumLabel(ApiFlavorSchema, t.upstreamApi) },
@@ -136,10 +137,10 @@
 				{/if}
 				{#if t.fallbacks.length}
 					<Section title="Fallbacks" level={3}>
-						<List head={{ primary: 'Address', secondary: 'Reason' }}>
+						<List head={{ primary: 'Address', secondary: 'Reason', facts: ['Credential'] }}>
 							{#each t.fallbacks as f, i (i)}
-								<ListRow primary={f.address} primaryKind="address" secondary={f.reason} secondaryKind="message">
-									{#snippet badges()}{#if f.requestWritten}<StateWord label="sent" lamp="warning" />{/if}{/snippet}
+								<ListRow primary={f.address || f.poolId} primaryKind={f.address ? 'address' : 'name'} primaryTip={f.poolId || undefined} secondary={f.reason} secondaryKind="message" facts={[{ value: f.credential }]}>
+									{#snippet badges()}{#if f.poolId}<StateWord label="decided again" lamp="muted" />{/if}{#if f.requestWritten}<StateWord label="sent" lamp="warning" />{/if}{/snippet}
 								</ListRow>
 							{/each}
 						</List>

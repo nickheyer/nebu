@@ -6,6 +6,7 @@ require (
 	ariga.io/atlas v1.3.0
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	buf.build/go/protovalidate v1.4.0
+	cel.dev/cel-go v0.32.0
 	connectrpc.com/connect v1.19.1
 	connectrpc.com/grpcreflect v1.3.0
 	github.com/bwmarrin/discordgo v0.29.0
@@ -37,7 +38,6 @@ require (
 )
 
 require (
-	cel.dev/cel-go v0.32.0 // indirect
 	cel.dev/expr v0.25.3 // indirect
 	github.com/agext/levenshtein v1.2.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect

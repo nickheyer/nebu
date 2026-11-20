@@ -160,8 +160,82 @@ enum CredentialKind {
   CREDENTIAL_KIND_SIGN_IN = 2;
 }
 
+// What a budget counts
+enum BudgetUnit {
+  BUDGET_UNIT_UNSPECIFIED = 0;
+  // Input and output tokens
+  BUDGET_UNIT_TOKENS = 1;
+  BUDGET_UNIT_INPUT_TOKENS = 2;
+  BUDGET_UNIT_OUTPUT_TOKENS = 3;
+  BUDGET_UNIT_REQUESTS = 4;
+  // The percent of a reported window used, from what the provider says is left
+  BUDGET_UNIT_PERCENT_LEFT = 5;
+}
+
+// The span a budget counts over
+enum BudgetPeriod {
+  BUDGET_PERIOD_UNSPECIFIED = 0;
+  // The seconds before each request
+  BUDGET_PERIOD_ROLLING = 1;
+  BUDGET_PERIOD_DAY = 2;
+  BUDGET_PERIOD_WEEK = 3;
+  BUDGET_PERIOD_MONTH = 4;
+  // From one reset of a reported window to the next
+  BUDGET_PERIOD_REPORTED = 5;
+}
+
+// A limit the owner sets on what one credential is used for
+message CredentialBudget {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  // Model ids it counts, * standing for any run of characters, every model when empty
+  repeated string models = 2 [(buf.validate.field).repeated.max_items = 64];
+  BudgetUnit unit = 3 [(buf.validate.field).enum.defined_only = true];
+  double limit = 4 [(buf.validate.field).double = {
+    gt: 0
+    finite: true
+  }];
+  BudgetPeriod period = 5 [(buf.validate.field).enum.defined_only = true];
+  // Seconds a rolling period spans
+  uint32 seconds = 6;
+  // Where a day, week or month starts: the hour, the weekday from Sunday as 0, or the day of the month
+  uint32 start = 7 [(buf.validate.field).uint32.lte = 31];
+  // The time zone a day, week or month is counted in, UTC when empty
+  string zone = 8 [(buf.validate.field).string.max_len = 64];
+  // The reported window a percent left unit or a reported period reads
+  string window = 9 [(buf.validate.field).string.max_len = 64];
+  // Percent of the limit held back, the credential spent once the rest is used
+  uint32 reserve_percent = 10 [(buf.validate.field).uint32.lte = 100];
+  // Whether input the provider served from its cache counts
+  bool cached = 11;
+}
+
+// What a window measures
+enum WindowKind {
+  WINDOW_KIND_UNSPECIFIED = 0;
+  // A budget the owner set, measured against the usage recorded
+  WINDOW_KIND_BUDGET = 1;
+  // A limit the provider reports on its answers
+  WINDOW_KIND_REPORTED = 2;
+  // The wait after the provider refused a request as over its limits
+  WINDOW_KIND_COOLDOWN = 3;
+}
+
+// One limit on a credential, how much of it is used and when it resets
+message CredentialWindow {
+  string name = 1;
+  WindowKind kind = 2;
+  double limit = 3;
+  double used = 4;
+  google.protobuf.Timestamp resets_at = 5;
+  // Whether requests pass the credential over until it resets
+  bool spent = 6;
+}
+
 // A credential a caller keeps for one provider source. Gateway requests to the source's
-// models carry the caller's first by position. The secret never leaves the daemon.
+// models carry the caller's first by position whose windows are not spent. The secret never leaves the daemon.
 message ProviderCredential {
   string id = 1;
   string source_id = 2;
@@ -176,6 +250,10 @@ message ProviderCredential {
   uint32 position = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
+  // Limits the owner set, in the order written
+  repeated CredentialBudget budgets = 10;
+  // Each budget, reported limit and cooldown as it stands, kept in memory since the daemon started
+  repeated CredentialWindow windows = 11;
 }
 
 // Asks for the caller's own credentials, the ones whose name or source holds every word of the query
@@ -200,6 +278,9 @@ message PutCredentialRequest {
   string secret = 4;
   // Order among the caller's credentials for the source from 1. Zero keeps it, or places a new one last.
   uint32 position = 5;
+  // The budgets the credential takes in place of its own when budgets_set is true
+  repeated CredentialBudget budgets = 6 [(buf.validate.field).repeated.max_items = 32];
+  bool budgets_set = 7;
 }
 
 // The credential after the change
@@ -214,6 +295,32 @@ message DeleteCredentialRequest {
 
 // Confirms the removal
 message DeleteCredentialResponse {}
+
+// Asks for what the caller's credentials were used for over a time range
+message ListCredentialUsageRequest {
+  // One credential's, every one's when empty
+  string credential_id = 1;
+  // Thirty days back when unset
+  google.protobuf.Timestamp from = 2;
+  // Now when unset
+  google.protobuf.Timestamp to = 3;
+}
+
+// What one credential was used for with one model
+message CredentialUsage {
+  string credential_id = 1;
+  string model = 2;
+  uint64 requests = 3;
+  uint64 input_tokens = 4;
+  uint64 output_tokens = 5;
+  // Input tokens the provider served from its cache, counted among the input tokens
+  uint64 cached_tokens = 6;
+}
+
+// Usage by credential and model, the most requests first
+message ListCredentialUsageResponse {
+  repeated CredentialUsage usage = 1;
+}
 
 // A sign-in waiting for the person to approve it at the provider
 message ProviderSignIn {
@@ -277,6 +384,8 @@ service AuthService {
   rpc PutCredential(PutCredentialRequest) returns (PutCredentialResponse);
   // Removes one of the caller's provider credentials
   rpc DeleteCredential(DeleteCredentialRequest) returns (DeleteCredentialResponse);
+  // Reads what the caller's credentials were used for, by model
+  rpc ListCredentialUsage(ListCredentialUsageRequest) returns (ListCredentialUsageResponse);
   // Starts a sign-in with a provider
   rpc StartSignIn(StartSignInRequest) returns (StartSignInResponse);
   // Completes an approved sign-in and keeps its tokens

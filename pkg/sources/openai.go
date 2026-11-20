@@ -28,4 +28,8 @@ var openai = modelCatalog(v1.SourceKind_SOURCE_KIND_OPENAI, "openai", "OpenAI", 
 	},
 })
 
-func init() { register(openai) }
+func init() {
+	// Resets as durations such as 6m0s, https://developers.openai.com/api/docs/guides/rate-limits
+	openai.Limits = &Limits{Header: "x-ratelimit-{field}-{window}", Windows: []string{"requests", "tokens", "project-tokens"}}
+	register(openai)
+}

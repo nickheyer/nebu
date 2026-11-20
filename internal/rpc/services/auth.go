@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/auth"
@@ -120,6 +121,18 @@ func (s *AuthService) PutCredential(ctx context.Context, req *connect.Request[v1
 
 func (s *AuthService) DeleteCredential(ctx context.Context, req *connect.Request[v1.DeleteCredentialRequest]) (*connect.Response[v1.DeleteCredentialResponse], error) {
 	return authReply(&v1.DeleteCredentialResponse{}, s.credentials.Delete(ctx, s.owner(req.Header()), req.Msg.GetId()))
+}
+
+func (s *AuthService) ListCredentialUsage(ctx context.Context, req *connect.Request[v1.ListCredentialUsageRequest]) (*connect.Response[v1.ListCredentialUsageResponse], error) {
+	var from, to time.Time
+	if req.Msg.GetFrom() != nil {
+		from = req.Msg.GetFrom().AsTime()
+	}
+	if req.Msg.GetTo() != nil {
+		to = req.Msg.GetTo().AsTime()
+	}
+	usage, err := s.credentials.Usage(ctx, s.owner(req.Header()), req.Msg.GetCredentialId(), from, to)
+	return authReply(&v1.ListCredentialUsageResponse{Usage: usage}, err)
 }
 
 func (s *AuthService) StartSignIn(ctx context.Context, req *connect.Request[v1.StartSignInRequest]) (*connect.Response[v1.StartSignInResponse], error) {

@@ -190,7 +190,7 @@ func (d *Daemon) start(ctx context.Context) error {
 		}
 	}
 	d.Pools.Store().MarkSynced()
-	for _, loop := range []func(context.Context){d.Gateway.Run, d.Notifier.Run, d.Instances.RefreshDescriptors, d.watchHost, d.Installs.Refresh, d.watchConfig} {
+	for _, loop := range []func(context.Context){d.Gateway.Run, d.Credentials.Run, d.Notifier.Run, d.Instances.RefreshDescriptors, d.watchHost, d.Installs.Refresh, d.watchConfig} {
 		d.background.Go(func() { loop(d.base) })
 	}
 	if _, err := d.Doctor.Start(ctx); err != nil {

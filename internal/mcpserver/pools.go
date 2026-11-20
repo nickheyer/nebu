@@ -17,6 +17,7 @@ type routeTargetIn struct {
 	PoolID string `json:"pool_id" jsonschema:"the pool the share of requests goes to"`
 	Model  string `json:"model,omitempty" jsonschema:"the model name written into each request, the pool's model when empty"`
 	Weight uint32 `json:"weight" jsonschema:"the target's share of the rule's traffic relative to the others, at least 1"`
+	When   string `json:"when,omitempty" jsonschema:"a CEL condition over now, ready and free that must hold for the target to be drawn, always when empty"`
 }
 
 type routeRuleIn struct {
@@ -39,6 +40,7 @@ type putRouteIn struct {
 	ToolServers   []string      `json:"tool_servers,omitempty" jsonschema:"tool servers every request on the route gets"`
 	MutatingTools bool          `json:"mutating_tools,omitempty"`
 	Objective     string        `json:"objective,omitempty" jsonschema:"the objective every request carries unless it names its own"`
+	Balance       string        `json:"balance,omitempty" jsonschema:"weights, ready-endpoints, free-capacity, or ordered, which tries the targets in the order written, weights when empty"`
 }
 
 type staticEndpointIn struct {
@@ -132,13 +134,32 @@ func failureModeOf(name string) (v1.FailureMode, error) {
 	return 0, fmt.Errorf("failure mode %q is not fail-close or fail-open", name)
 }
 
+// The balance a name stands for, weights when empty
+func balanceOf(name string) (v1.RouteBalance, error) {
+	switch strings.ToLower(name) {
+	case "", "weights":
+		return v1.RouteBalance_ROUTE_BALANCE_UNSPECIFIED, nil
+	case "ready-endpoints":
+		return v1.RouteBalance_ROUTE_BALANCE_READY_ENDPOINTS, nil
+	case "free-capacity":
+		return v1.RouteBalance_ROUTE_BALANCE_FREE_CAPACITY, nil
+	case "ordered":
+		return v1.RouteBalance_ROUTE_BALANCE_ORDERED, nil
+	}
+	return 0, fmt.Errorf("balance %q is not weights, ready-endpoints, free-capacity, or ordered", name)
+}
+
 // The route spec a put_route call describes, keeping the route's current rules when the call names none
 func (n *nebu) routeSpec(ctx context.Context, in putRouteIn) (*v1.RouteSpec, error) {
-	spec := &v1.RouteSpec{Objective: in.Objective}
+	balance, err := balanceOf(in.Balance)
+	if err != nil {
+		return nil, err
+	}
+	spec := &v1.RouteSpec{Objective: in.Objective, Balance: balance}
 	for _, r := range in.Rules {
 		rule := &v1.RewriteRule{Match: r.Match}
 		for _, t := range r.Targets {
-			rule.Targets = append(rule.Targets, &v1.RewriteTarget{PoolId: t.PoolID, Model: t.Model, Weight: t.Weight})
+			rule.Targets = append(rule.Targets, &v1.RewriteTarget{PoolId: t.PoolID, Model: t.Model, Weight: t.Weight, When: t.When})
 		}
 		spec.Rules = append(spec.Rules, rule)
 	}

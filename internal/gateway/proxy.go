@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/mesh"
 	"github.com/nickheyer/nebu/pkg/bodyparse"
 	"github.com/nickheyer/nebu/pkg/datalayer"
@@ -161,7 +162,8 @@ func (x *exchange) uncount() {
 	}
 }
 
-// Sends to each endpoint in order, passing on refusals and failures of requests that never got written while no byte reached the client
+// Sends to each endpoint in order, passing on refusals and failures of requests that never got written while no byte reached the client,
+// the last endpoint's kept back for another decision on the first round
 func (x *exchange) attempt(ctx context.Context, out *upstream, eps []datalayer.Endpoint) (*http.Response, datalayer.Endpoint, error) {
 	var last error
 	for i, ep := range eps {
@@ -173,16 +175,34 @@ func (x *exchange) attempt(ctx context.Context, out *upstream, eps []datalayer.E
 			last = err
 			continue
 		case err != nil:
+			if retryable(err, out.method, written) && !isTimeout(err) {
+				x.keepBack(ctx, ep, err.Error(), written, false)
+			}
 			return nil, ep, err
 		case !final && refused(resp.StatusCode):
 			io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
 			resp.Body.Close()
 			x.fellBack(ep, resp.Status, written)
 			continue
+		case refused(resp.StatusCode):
+			x.keepBack(ctx, ep, resp.Status, written, resp.StatusCode == http.StatusTooManyRequests && x.credential != nil)
 		}
 		return resp, ep, nil
 	}
 	return nil, nil, last
+}
+
+// Keeps the refusal written next back from the client so the request may be decided again, while it is the first round of a decision
+// in a pool not left before and nothing reached the client
+func (x *exchange) keepBack(ctx context.Context, ep datalayer.Endpoint, why string, written, stay bool) {
+	if x.dec == nil || x.served != nil || x.w.wrote || ctx.Err() != nil || x.left[x.pool.ID] {
+		return
+	}
+	f := &v1.TraceFallback{Reason: why, RequestWritten: written, PoolId: string(x.pool.ID), Credential: x.credential.GetName()}
+	if ep != nil {
+		f.Address = ep.Address().String()
+	}
+	x.w.kept = &kept{header: http.Header{}, fallback: f, stay: stay}
 }
 
 // Records an endpoint the request left for the next one, with whether the request had been written and what the client had by then
@@ -216,6 +236,9 @@ func (x *exchange) sendTo(ctx context.Context, ep datalayer.Endpoint, out *upstr
 	span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
 	if first {
 		x.resp.FirstByteAt = x.g.clock.Now()
+	}
+	if x.credential != nil {
+		x.g.creds.Answered(x.credential, resp.StatusCode, resp.Header, chat.RetryAfterOf(resp.Header, x.g.clock.Now()))
 	}
 	return resp, true, nil
 }

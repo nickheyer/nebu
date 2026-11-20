@@ -18,6 +18,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/bodyparse"
 	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/datalayer"
@@ -25,6 +26,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/scheduling/framework"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -95,7 +97,8 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	x.run(r.Context())
 }
 
-// Decides on the headers alone when they name the model, reading the body after, and serves the request by kind
+// Decides on the headers alone when they name the model, reading the body after, and serves the request by kind,
+// deciding again after a refusal another decision may meet while nothing reached the client
 func (x *exchange) run(ctx context.Context) {
 	g := x.g
 	var err error
@@ -137,13 +140,92 @@ func (x *exchange) run(ctx context.Context) {
 		x.forward(ctx, x.inbound())
 		return
 	}
+	x.left, x.cooled = map[datalayer.PoolID]bool{}, map[string]bool{}
+	ctx = pools.WithLeft(ctx, func(pool datalayer.PoolID) bool { return x.left[pool] })
+	before := proto.Clone(x.t).(*v1.Trace)
+	read := !byHeader
+	for {
+		again := x.pass(ctx, &read)
+		if k := x.w.take(); k != nil {
+			if k.status == 0 || ctx.Err() != nil {
+				x.give(k)
+				return
+			}
+			k.trace, k.pool, k.sent, k.resp = proto.Clone(x.t).(*v1.Trace), x.pool, x.sent, x.resp
+			x.passed(k.fallback)
+			if k.stay && !x.cooled[x.credential.GetId()] {
+				x.cooled[x.credential.GetId()] = true
+			} else {
+				x.left[x.pool.ID] = true
+			}
+			x.last = k
+		} else if !again {
+			return
+		}
+		x.reset(before)
+	}
+}
+
+// Records on the trace a decision the request was decided again after
+func (x *exchange) passed(f *v1.TraceFallback) {
+	x.t.Fallbacks = append(x.t.Fallbacks, f)
+	x.g.log.Warn("decision did not take the request, deciding again", "model", x.model, "pool", f.GetPoolId(), "credential", f.GetCredential(), "endpoint", f.GetAddress(), "why", f.GetReason())
+}
+
+// Writes the last refusal as the pass that met it would have, its trace, pool and answer back in place
+func (x *exchange) give(k *kept) {
+	if k.trace != nil {
+		proto.Reset(x.t)
+		proto.Merge(x.t, k.trace)
+		x.pool, x.sent, x.resp = k.pool, k.sent, k.resp
+	}
+	if k.status != 0 {
+		x.w.give(k)
+	}
+}
+
+// Puts back everything a decision set: the trace as it was before the first with the passes left behind, the body as the client sent it,
+// and the pool, credential, upstream, tool plan, answer and counts of the decision
+func (x *exchange) reset(before *v1.Trace) {
+	fallbacks := x.t.Fallbacks
+	proto.Reset(x.t)
+	proto.Merge(x.t, before)
+	x.t.Fallbacks, x.t.RequestBytes = fallbacks, uint64(len(x.body))
+	x.sink = &traceSink{t: x.t, clock: x.g.clock, keep: x.traced}
+	if x.doc != nil {
+		if doc, err := parseDoc(x.r.URL.Path, x.body); err == nil {
+			x.doc = doc
+		}
+	}
+	x.plan.close()
+	x.uncount()
+	x.in, x.dec, x.pool, x.credential, x.served, x.resp, x.sent = nil, nil, datalayer.Pool{}, nil, nil, framework.Response{}, nil
+	x.plan, x.changed, x.emulate, x.prompts, x.runtime, x.upstream = nil, false, false, nil, nil, v1.ApiFlavor_API_FLAVOR_UNSPECIFIED
+}
+
+// Decides where the request goes and serves it, keeping back a refusal another decision may meet, and answers whether a decision
+// that found no ready endpoint or every credential spent left its pool to decide again with the last refusal standing
+func (x *exchange) pass(ctx context.Context, read *bool) bool {
+	g := x.g
 	x.in = x.inbound()
 	x.dir = g.current()
 	dec, err := x.dir.Decide(ctx, x.in)
 	if err != nil {
 		x.hold.release()
+		if x.pool.ID != "" && !x.left[x.pool.ID] && ctx.Err() == nil && (errors.Is(err, requestcontrol.ErrNoReadyEndpoints) || errors.As(err, new(*requestcontrol.SpentError))) {
+			f := &v1.TraceFallback{Reason: err.Error(), PoolId: string(x.pool.ID)}
+			if x.last != nil {
+				x.left[x.pool.ID] = true
+				x.passed(f)
+				return true
+			}
+			x.w.kept = &kept{header: http.Header{}, fallback: f}
+		} else if x.last != nil {
+			x.give(x.last)
+			return false
+		}
 		x.fail(err)
-		return
+		return false
 	}
 	x.dec = dec
 	defer func() {
@@ -151,17 +233,18 @@ func (x *exchange) run(ctx context.Context) {
 			x.complete(ctx)
 		}
 	}()
-	if byHeader {
+	if !*read {
+		*read = true
 		if err := x.readRequest(); err != nil {
 			x.resp.Err = err
 			x.fail(err)
-			return
+			return false
 		}
 		if x.doc != nil {
 			if err := x.dir.AttachBody(ctx, dec, x.doc); err != nil {
 				x.resp.Err = err
 				x.fail(err)
-				return
+				return false
 			}
 		}
 	}
@@ -178,6 +261,7 @@ func (x *exchange) run(ctx context.Context) {
 	default:
 		x.passthrough(ctx, nil)
 	}
+	return false
 }
 
 // Reads the bounded body chunk by chunk and parses what routes on it once, the JSON object or the multipart form
@@ -320,6 +404,14 @@ func (x *exchange) finish() {
 		}
 	}
 	g.metrics.ObserveRequest(x.r.Context(), q)
+	if x.credential != nil && x.dec != nil {
+		_, model, _ := providerModel(x.dec.Pool.Model)
+		in, out, cached := x.resp.PromptTokens, x.resp.OutputTokens, x.resp.CachedTokens
+		if res := x.sink.res; res != nil {
+			in, out, cached = res.Usage.In, res.Usage.Out, res.Usage.Cached
+		}
+		g.creds.Record(x.credential, model, in, out, cached)
+	}
 	if x.traced {
 		x.t.Request = capped(x.body)
 		if !sameBytes(x.sent, x.body) {

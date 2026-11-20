@@ -39,6 +39,7 @@ var wantClass = map[string]string{
 	nebuv1connect.AuthServiceListCredentialsProcedure:          "inference",
 	nebuv1connect.AuthServicePutCredentialProcedure:            "inference",
 	nebuv1connect.AuthServiceDeleteCredentialProcedure:         "inference",
+	nebuv1connect.AuthServiceListCredentialUsageProcedure:      "inference",
 	nebuv1connect.AuthServiceStartSignInProcedure:              "inference",
 	nebuv1connect.AuthServiceFinishSignInProcedure:             "inference",
 	nebuv1connect.BotServiceListBotsProcedure:                  "read",

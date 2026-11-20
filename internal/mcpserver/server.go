@@ -319,7 +319,7 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.gateway.GetRoute(ctx, connect.NewRequest(&v1.GetRouteRequest{Name: in.Name}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "put_route", Description: "Creates or replaces a route splitting a model name over weighted pool targets, or sets policy, tools and objective over a route a slot or instance owns"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putRouteIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "put_route", Description: "Creates or replaces a route splitting a model name over weighted pool targets or trying them in order, or sets policy, tools, objective and balance over a route a slot or instance owns"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putRouteIn) (*mcp.CallToolResult, any, error) {
 		spec, err := n.routeSpec(ctx, in)
 		if err != nil {
 			return nil, nil, err

@@ -30,6 +30,14 @@ var (
 	ErrInvalidHeader = errors.New("invalid routing header")
 )
 
+// Answered 429 with the wait until the first resets, every credential the request may go under is spent
+type SpentError struct {
+	Message string
+	Retry   time.Duration
+}
+
+func (e *SpentError) Error() string { return e.Message }
+
 // Headers the gateway reads and writes on the way through
 const (
 	HeaderObjective     = "X-Gateway-Inference-Objective"

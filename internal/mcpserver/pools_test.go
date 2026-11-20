@@ -160,6 +160,14 @@ func TestPoolTools(t *testing.T) {
 		t.Fatalf("route spec %v", rt)
 	}
 	call(t, cs, "put_route", map[string]any{"name": "fresh"}, "names no rules and has none to keep")
+	call(t, cs, "put_route", map[string]any{"name": "chain", "balance": "ordered", "rules": []map[string]any{{"match": "chain", "targets": []map[string]any{{"pool_id": "static", "weight": 1, "when": "ready > 0"}}}}}, "")
+	chain := call(t, cs, "get_route", map[string]any{"name": "chain"}, "")["route"].(map[string]any)["spec"].(map[string]any)
+	if chain["balance"] != "ROUTE_BALANCE_ORDERED" || chain["rules"].([]any)[0].(map[string]any)["targets"].([]any)[0].(map[string]any)["when"] != "ready > 0" {
+		t.Fatalf("ordered route spec %v", chain)
+	}
+	call(t, cs, "put_route", map[string]any{"name": "chain", "balance": "sideways"}, "balance")
+	call(t, cs, "put_route", map[string]any{"name": "chain", "rules": []map[string]any{{"match": "chain", "targets": []map[string]any{{"pool_id": "static", "weight": 1, "when": "ready +"}}}}}, "when")
+	call(t, cs, "delete_route", map[string]any{"name": "chain"}, "")
 	call(t, cs, "put_route", map[string]any{"name": "neg", "rules": []map[string]any{{"targets": []map[string]any{{"pool_id": "static", "weight": 1}}}}, "policy": map[string]any{"requests_per_second": -2}}, "requests_per_second")
 	call(t, cs, "put_pool", map[string]any{"id": "ports", "model": "ext", "target_ports": []int{70000}}, "target_ports")
 	call(t, cs, "put_objective", map[string]any{"name": "loud", "priority": 5000}, "priority")
