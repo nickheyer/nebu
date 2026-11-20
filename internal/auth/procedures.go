@@ -28,14 +28,19 @@ var (
 
 // Every procedure the daemon serves with the rule that opens it, any other refused
 var procedures = map[string]rule{
-	nebuv1connect.AuthServiceListUsersProcedure:   needAdmin,
-	nebuv1connect.AuthServiceCreateUserProcedure:  needAdmin,
-	nebuv1connect.AuthServiceDeleteUserProcedure:  needAdmin,
-	nebuv1connect.AuthServiceSetPasswordProcedure: needInference,
-	nebuv1connect.AuthServiceSetRoleProcedure:     needAdmin,
-	nebuv1connect.AuthServiceListTokensProcedure:  needInference,
-	nebuv1connect.AuthServiceCreateTokenProcedure: needInference,
-	nebuv1connect.AuthServiceDeleteTokenProcedure: needInference,
+	nebuv1connect.AuthServiceListUsersProcedure:        needAdmin,
+	nebuv1connect.AuthServiceCreateUserProcedure:       needAdmin,
+	nebuv1connect.AuthServiceDeleteUserProcedure:       needAdmin,
+	nebuv1connect.AuthServiceSetPasswordProcedure:      needInference,
+	nebuv1connect.AuthServiceSetRoleProcedure:          needAdmin,
+	nebuv1connect.AuthServiceListTokensProcedure:       needInference,
+	nebuv1connect.AuthServiceCreateTokenProcedure:      needInference,
+	nebuv1connect.AuthServiceDeleteTokenProcedure:      needInference,
+	nebuv1connect.AuthServiceListCredentialsProcedure:  needInference,
+	nebuv1connect.AuthServicePutCredentialProcedure:    needInference,
+	nebuv1connect.AuthServiceDeleteCredentialProcedure: needInference,
+	nebuv1connect.AuthServiceStartSignInProcedure:      needInference,
+	nebuv1connect.AuthServiceFinishSignInProcedure:     needInference,
 
 	nebuv1connect.BotServiceListBotsProcedure:        needRead,
 	nebuv1connect.BotServiceGetBotProcedure:          needRead,

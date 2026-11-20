@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/nickheyer/nebu/internal/mesh/links"
 	"github.com/nickheyer/nebu/pkg/config"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 )
 
 const (
@@ -181,6 +183,7 @@ func (d *Daemon) start(ctx context.Context) error {
 	if err := d.Pools.Start(d.base); err != nil {
 		return err
 	}
+	d.adoptSelf(ctx)
 	for _, recover := range []func(context.Context) error{d.Tasks.Recover, d.Installs.RecoverBuilds, d.Instances.Recover, d.Slots.Recover, d.Formations.Recover} {
 		if err := recover(ctx); err != nil {
 			return err
@@ -198,6 +201,28 @@ func (d *Daemon) start(ctx context.Context) error {
 	}
 	d.Formations.Start()
 	return d.Bots.Recover(ctx)
+}
+
+// Records the daemon's own binary as the install of each relay runtime that has none
+func (d *Daemon) adoptSelf(ctx context.Context) {
+	exe, err := os.Executable()
+	if err != nil {
+		d.Log.Warn("the relay runtimes have no install, the daemon cannot name its own binary", "err", err)
+		return
+	}
+	for _, rt := range d.Installs.Runtimes.List() {
+		if _, ok := rt.(runtimes.Relay); !ok {
+			continue
+		}
+		if list, err := d.Installs.List(ctx, rt.ID()); err != nil || len(list) > 0 {
+			continue
+		}
+		if in, err := d.Installs.Adopt(ctx, rt.ID(), exe); err != nil {
+			d.Log.Warn("own binary not adopted", "runtime", rt.ID(), "err", err)
+		} else {
+			d.Log.Info("own binary adopted", "runtime", rt.ID(), "path", in.GetPath())
+		}
+	}
 }
 
 // Waits until every readiness check passes, naming the failing checks every few seconds

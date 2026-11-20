@@ -80,6 +80,12 @@ type Instances interface {
 	TokenizerFile(instanceID string) (string, error)
 }
 
+// What the gateway reads of the credentials callers keep for providers serving models
+type Credentials interface {
+	// The headers the owner's requests to a source carry beside the ones sent, ok false for a source serving no models
+	Headers(ctx context.Context, owner, sourceID string, sent http.Header) (map[string]string, bool, error)
+}
+
 // Connections to other members, for forwarded routes and the relay's slot moves
 type Peers interface {
 	// This node's id
@@ -145,6 +151,8 @@ type Deps struct {
 	Peers     Peers
 	Runtimes  Runtimes
 	Instances Instances
+	// The credentials provider sources are reached with, nil when no provider is served
+	Credentials Credentials
 	// The model store's adapters, nil when no store backs the gateway
 	Adapters  Adapters
 	Metrics   *metrics.Registry
@@ -179,6 +187,7 @@ type Gateway struct {
 	peers     Peers
 	runtimes  Runtimes
 	instances Instances
+	creds     Credentials
 	adapters  Adapters
 	metrics   *metrics.Registry
 	tracer    trace.Tracer
@@ -267,6 +276,7 @@ func New(deps Deps) (*Gateway, error) {
 		peers:      deps.Peers,
 		runtimes:   deps.Runtimes,
 		instances:  deps.Instances,
+		creds:      deps.Credentials,
 		adapters:   deps.Adapters,
 		metrics:    deps.Metrics,
 		tracer:     deps.Telemetry.Tracer("github.com/nickheyer/nebu/internal/gateway"),

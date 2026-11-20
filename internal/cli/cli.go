@@ -112,11 +112,13 @@ func commands() []command {
 			{name: "trace", summary: "show one request with its bodies", run: runGatewayTrace},
 		}},
 		{name: "chat", summary: "talk to a running model through the gateway", run: runChat},
+		{name: "relay", summary: "forward a provider's model to its endpoint, as the relay runtimes run it", run: runRelay},
 		meshCommands(),
 		formationCommands(),
 		botCommands(),
 		userCommands(),
 		tokenCommands(),
+		credentialCommands(),
 		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},
 		{name: "ps", summary: "list running instances", run: runPs},
 		{name: "adapters", summary: "adapters a running instance applies", run: runAdaptersList, sub: []command{

@@ -12,6 +12,7 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
+	import Providers from '#lib/pages/profile/Providers.svelte';
 	import Tokens from '#lib/pages/profile/Tokens.svelte';
 
 	const theme = useNeoThemeContext();
@@ -83,5 +84,6 @@
 	{/snippet}
 	{#snippet right()}
 		<Tokens />
+		<Providers />
 	{/snippet}
 </Columns>

@@ -221,7 +221,7 @@ func (g *Gateway) identify(r *http.Request) (identity, bool) {
 	for _, k := range g.keys() {
 		if token != "" && subtle.ConstantTimeCompare([]byte(k), []byte(token)) == 1 {
 			owner := keyOwner(k)
-			return identity{owner: owner, fairness: owner}, true
+			return identity{owner: owner, fairness: owner, key: true}, true
 		}
 	}
 	if r.Header.Get(EntryHeader) != "" {

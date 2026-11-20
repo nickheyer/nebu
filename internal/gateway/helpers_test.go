@@ -145,6 +145,8 @@ type setup struct {
 	chain []byte
 	// Stored adapters a request may name, none when nil
 	adapters Adapters
+	// The credentials provider sources are reached with, none when nil
+	creds Credentials
 }
 
 func newHarness(t *testing.T, opts ...func(*setup)) *harness {
@@ -193,7 +195,7 @@ func newHarness(t *testing.T, opts ...func(*setup)) *harness {
 	hreg := health.NewRegistry()
 	g, err := New(Deps{
 		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), Sampler: mgr.Sampler(), DB: d, Events: bus, Guard: s.guard,
-		Tools: tools.New(log, bus), Peers: s.peers, Runtimes: s.runtimes, Instances: inst, Adapters: s.adapters,
+		Tools: tools.New(log, bus), Peers: s.peers, Runtimes: s.runtimes, Instances: inst, Adapters: s.adapters, Credentials: s.creds,
 		Metrics: mreg, Telemetry: tp, Health: hreg, Logger: log,
 		Config: Config{
 			Keys: s.keys, Policy: s.policy, OutputTokens: 64, Flow: flow,

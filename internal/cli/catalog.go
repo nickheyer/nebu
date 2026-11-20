@@ -142,6 +142,10 @@ func runSources(ctx context.Context, e *env, args []string) error {
 			}
 			auth := "-"
 			switch {
+			case len(c.GetCredentials()) > 0 && c.GetTokenPresent():
+				auth = "credential kept"
+			case len(c.GetCredentials()) > 0:
+				auth = "no credential, see nebu credentials"
 			case c.GetTokenPresent():
 				auth = "token set"
 			case c.GetAuthRequired():

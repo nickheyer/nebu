@@ -247,6 +247,158 @@ func runTokensRemove(ctx context.Context, e *env, args []string) error {
 	return nil
 }
 
+func credentialCommands() command {
+	return command{name: "credentials", summary: "credentials kept for providers serving models", run: runCredentialsList, local: true, sub: []command{
+		{name: "list", summary: "list the credentials kept, never their secrets", run: runCredentialsList, local: true},
+		{name: "add", summary: "keep a key for a provider source", run: runCredentialsAdd, local: true},
+		{name: "update", summary: "rename, reorder, or replace the key of a credential", run: runCredentialsUpdate, local: true},
+		{name: "signin", summary: "sign in with a provider and keep its tokens", run: runCredentialsSignIn, local: true},
+		{name: "remove", summary: "remove a credential", run: runCredentialsRemove, local: true},
+	}}
+}
+
+func runCredentialsList(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials list")
+	signIn := accountFlags(e, fs)
+	if _, err := e.parse(fs, args, 0, 0, "credentials list "+tokenSignIn); err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	resp, err := e.cl.auth.ListCredentials(ctx, connect.NewRequest(&v1.ListCredentialsRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, c := range resp.Msg.GetCredentials() {
+			rows = append(rows, []string{c.GetId(), c.GetSourceId(), c.GetName(), enumShort(c.GetKind()), fmt.Sprint(c.GetPosition()), when(c.GetExpiresAt(), "2006-01-02 15:04"), when(c.GetUpdatedAt(), "2006-01-02 15:04")})
+		}
+		table(w, []string{"ID", "SOURCE", "NAME", "KIND", "POSITION", "EXPIRES", "UPDATED"}, rows)
+	})
+}
+
+// Defines the flags giving a key and returns a function reading it, prompting when neither flag gives one and prompt is set
+func keyFlags(e *env, fs *flag.FlagSet) func(prompt bool) (string, error) {
+	key := fs.String("key", "", "the key, prompted for when unset")
+	stdin := fs.Bool("key-stdin", false, "read the key from standard input")
+	return func(prompt bool) (string, error) {
+		if *key != "" || *stdin || prompt {
+			return e.secret(*key, *stdin, "Key: ")
+		}
+		return "", nil
+	}
+}
+
+func runCredentialsAdd(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials add")
+	name := fs.String("name", "", "label, the source's name when empty")
+	position := fs.Uint("position", 0, "order among the source's credentials from 1, last when unset")
+	readKey := keyFlags(e, fs)
+	signIn := accountFlags(e, fs)
+	positional, err := e.parse(fs, args, 1, 1, "credentials add <source> [--name N] [--position N] [--key K | --key-stdin] "+tokenSignIn)
+	if err != nil {
+		return err
+	}
+	key, err := readKey(true)
+	if err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	resp, err := e.cl.auth.PutCredential(ctx, connect.NewRequest(&v1.PutCredentialRequest{SourceId: positional[0], Name: *name, Secret: key, Position: uint32(*position)}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		c := resp.Msg.GetCredential()
+		fmt.Fprintf(w, "kept %s for %s as %s, position %d\n", c.GetName(), c.GetSourceId(), c.GetId(), c.GetPosition())
+	})
+}
+
+func runCredentialsUpdate(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials update")
+	name := fs.String("name", "", "new label, unchanged when empty")
+	position := fs.Uint("position", 0, "new order among the source's credentials from 1, unchanged when unset")
+	readKey := keyFlags(e, fs)
+	signIn := accountFlags(e, fs)
+	positional, err := e.parse(fs, args, 1, 1, "credentials update <id> [--name N] [--position N] [--key K | --key-stdin] "+tokenSignIn)
+	if err != nil {
+		return err
+	}
+	key, err := readKey(false)
+	if err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	resp, err := e.cl.auth.PutCredential(ctx, connect.NewRequest(&v1.PutCredentialRequest{Id: positional[0], Name: *name, Secret: key, Position: uint32(*position)}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		c := resp.Msg.GetCredential()
+		fmt.Fprintf(w, "updated %s %s for %s, position %d\n", c.GetName(), c.GetId(), c.GetSourceId(), c.GetPosition())
+	})
+}
+
+func runCredentialsSignIn(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials signin")
+	name := fs.String("name", "", "label, the source's name when empty")
+	signIn := accountFlags(e, fs)
+	positional, err := e.parse(fs, args, 1, 1, "credentials signin <source> [--name N] "+tokenSignIn)
+	if err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	started, err := e.cl.auth.StartSignIn(ctx, connect.NewRequest(&v1.StartSignInRequest{SourceId: positional[0], Name: *name}))
+	if err != nil {
+		return err
+	}
+	in := started.Msg.GetSignIn()
+	var callback string
+	if in.GetCode() != "" {
+		fmt.Fprintf(e.errw, "open %s and enter %s, before %s\n", in.GetUrl(), in.GetCode(), when(in.GetExpiresAt(), "15:04"))
+	} else {
+		fmt.Fprintf(e.errw, "open %s and approve, before %s\nthen paste the address the browser lands on, or the code the page shows: ", in.GetUrl(), when(in.GetExpiresAt(), "15:04"))
+		line, err := bufio.NewReader(e.in).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		callback = strings.TrimSpace(line)
+	}
+	resp, err := e.cl.auth.FinishSignIn(ctx, connect.NewRequest(&v1.FinishSignInRequest{Id: in.GetId(), Callback: callback}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		c := resp.Msg.GetCredential()
+		fmt.Fprintf(w, "signed in, kept %s for %s as %s\n", c.GetName(), c.GetSourceId(), c.GetId())
+	})
+}
+
+func runCredentialsRemove(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("credentials remove")
+	signIn := accountFlags(e, fs)
+	positional, err := e.parse(fs, args, 1, 1, "credentials remove <id> "+tokenSignIn)
+	if err != nil {
+		return err
+	}
+	if err := signIn(ctx); err != nil {
+		return err
+	}
+	if _, err := e.cl.auth.DeleteCredential(ctx, connect.NewRequest(&v1.DeleteCredentialRequest{Id: positional[0]})); err != nil {
+		return err
+	}
+	e.text("removed %s\n", positional[0])
+	return nil
+}
+
 // Takes a password from the flag, standard input, or a terminal prompt without echo
 func (e *env) password(flagValue string, fromStdin, confirm bool) (string, error) {
 	if flagValue != "" {
@@ -277,6 +429,25 @@ func (e *env) password(flagValue string, fromStdin, confirm bool) (string, error
 		}
 	}
 	return first, nil
+}
+
+// Takes a secret from the flag, standard input, or a terminal prompt without echo
+func (e *env) secret(flagValue string, fromStdin bool, label string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if fromStdin {
+		line, err := bufio.NewReader(e.in).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		return strings.TrimSpace(line), nil
+	}
+	f, ok := e.in.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return "", errors.New("no terminal to prompt on, pass --key or --key-stdin")
+	}
+	return e.prompt(f, label)
 }
 
 func (e *env) prompt(f *os.File, label string) (string, error) {

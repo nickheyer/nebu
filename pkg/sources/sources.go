@@ -400,6 +400,9 @@ func (b *broken) Capabilities(context.Context) *v1.SourceCapabilities {
 	caps := &v1.SourceCapabilities{}
 	if cat, ok := catalogs[b.spec.GetKind()]; ok {
 		caps.Name, caps.Description, caps.Fields, caps.Transports, caps.HiddenTags = cat.Name, cat.Description, cat.Fields(), cat.transportNames(), cat.Noise
+		if cat.SignIn != nil {
+			caps.Credentials = cat.SignIn.Kinds()
+		}
 	}
 	return caps
 }

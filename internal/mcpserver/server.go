@@ -97,7 +97,7 @@ func New(d Deps) *mcp.Server {
 	n := &nebu{
 		d:        d,
 		host:     services.NewHostService(d.Host, d.Doctor, nil, d.Store),
-		sources:  services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes),
+		sources:  services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes, nil, d.Guard),
 		runtimes: services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats),
 		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo, d.Runtimes),
 		instance: services.NewInstanceService(d.Instances),

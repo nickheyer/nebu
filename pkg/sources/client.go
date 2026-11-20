@@ -71,6 +71,10 @@ type Catalog struct {
 	Facets []*v1.Facet
 	// Default and maximum page sizes.
 	DefaultLimit, MaxLimit int
+	// The API a provider of models serves them over, unspecified for a catalog of weights
+	Speaks v1.ApiFlavor
+	// How a caller signs in to a provider of models, each caller with a credential of their own
+	SignIn *SignIn
 
 	API API
 }
@@ -264,6 +268,10 @@ func newClient(cat *Catalog, spec *v1.Source, cacheDir string) (*Client, error) 
 			return nil, err
 		}
 	}
+	// A provider of models is reached with the credential of whoever asks
+	if h := c.HTTP(); h != nil && cat.SignIn != nil {
+		h.SetAuthorizer(func(ctx context.Context) http.Header { return callerHeaders(ctx, c.ID()) })
+	}
 	return c, nil
 }
 
@@ -451,6 +459,12 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 	if b, ok := c.cat.API.(Browser); ok {
 		lists = b.Browses(c)
 	}
+	present := c.HasToken()
+	var credentials []v1.CredentialKind
+	if s := c.cat.SignIn; s != nil {
+		credentials, present = s.Kinds(), callerHeaders(ctx, c.ID()) != nil
+		lists = lists && present
+	}
 	return &v1.SourceCapabilities{
 		Browse:        !c.cat.NoBrowse && lists,
 		Search:        !c.cat.NoSearch && lists,
@@ -458,7 +472,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 		Card:          card && lists,
 		Revisions:     revisions,
 		AuthRequired:  c.cat.AuthRequired,
-		TokenPresent:  c.HasToken(),
+		TokenPresent:  present,
 		TokenEnv:      c.tokenField().GetEnv(),
 		Endpoint:      c.cfg["endpoint"],
 		Sorts:         c.sorts(),
@@ -474,6 +488,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 		Transports:    c.cat.transportNames(),
 		HiddenTags:    c.cat.Noise,
 		Columns:       c.cat.Columns,
+		Credentials:   credentials,
 	}
 }
 

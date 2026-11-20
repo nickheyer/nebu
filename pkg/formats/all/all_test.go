@@ -17,7 +17,7 @@ func TestRegistryHoldsEveryFormat(t *testing.T) {
 		}
 		ids[f.ID()] = true
 	}
-	for _, want := range []string{"gguf", "safetensors", "diffusers", "peft", "nemo", "nemo2", "diffusion"} {
+	for _, want := range []string{"gguf", "safetensors", "diffusers", "peft", "nemo", "nemo2", "diffusion", "openai", "anthropic"} {
 		if !ids[want] {
 			t.Fatalf("format %s missing from %v", want, ids)
 		}

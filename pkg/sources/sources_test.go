@@ -45,7 +45,7 @@ func TestBuildKeepsOrderAndSeedsEveryCatalog(t *testing.T) {
 	for _, s := range r.List() {
 		ids = append(ids, s.GetId())
 	}
-	if got := strings.Join(ids, ","); got != "huggingface,modelscope,ollama,civitai,dockerhub,kaggle,ngc,csghub,github" {
+	if got := strings.Join(ids, ","); got != "huggingface,modelscope,ollama,civitai,dockerhub,kaggle,ngc,csghub,github,anthropic,openai,xai,gemini,deepseek,mistral,groq,openrouter,codex" {
 		t.Fatalf("seed order %s", got)
 	}
 	first, _ := r.Get("")
@@ -68,7 +68,7 @@ func TestBuildKeepsOrderAndSeedsEveryCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first, _ := r.Get(""); first.Spec().GetId() != "disk" || len(r.List()) != 10 {
+	if first, _ := r.Get(""); first.Spec().GetId() != "disk" || len(r.List()) != 19 {
 		t.Fatalf("given order %v", r.List())
 	}
 	if _, err := r.Get("nope"); err == nil {
@@ -132,7 +132,7 @@ func TestProvidersDeclareFieldsPerTransport(t *testing.T) {
 	for _, p := range Providers() {
 		byKind[p.GetKind()] = p
 	}
-	if len(byKind) != 12 {
+	if len(byKind) != 22 {
 		t.Fatalf("providers %d", len(byKind))
 	}
 	names := func(p *v1.Provider) string { return strings.Join(fieldNames(p.GetFields()), ",") }
@@ -228,7 +228,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 	if err := m.Load(ctx, []*v1.Source{{Id: " disk ", Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": root}, Seeded: true}}); err != nil {
 		t.Fatal(err)
 	}
-	seeds := "huggingface,modelscope,ollama,civitai,dockerhub,kaggle,ngc,csghub,github"
+	seeds := "huggingface,modelscope,ollama,civitai,dockerhub,kaggle,ngc,csghub,github,anthropic,openai,xai,gemini,deepseek,mistral,groq,openrouter,codex"
 	if got := ids(m.List()); got != "disk,"+seeds {
 		t.Fatalf("order %s", got)
 	}
@@ -245,7 +245,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 	if err := m.Load(ctx, []*v1.Source{{Id: "disk", Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": t.TempDir()}}}); err != nil {
 		t.Fatal(err)
 	}
-	if disk, _ := m.Get("disk"); len(m.List()) != 10 || disk.GetConfig()["path"] != root {
+	if disk, _ := m.Get("disk"); len(m.List()) != 19 || disk.GetConfig()["path"] != root {
 		t.Fatalf("second load %v", m.List())
 	}
 	if err := m.Load(ctx, []*v1.Source{{Id: "bad", Kind: v1.SourceKind_SOURCE_KIND_LOCAL}}); err == nil || !strings.Contains(err.Error(), "bad") {
@@ -276,7 +276,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 			t.Fatalf("%v should fail with %v, got %v", bad, ErrSource, err)
 		}
 	}
-	if len(store.rows) != 11 {
+	if len(store.rows) != 20 {
 		t.Fatalf("failed creates must not write, have %d rows", len(store.rows))
 	}
 

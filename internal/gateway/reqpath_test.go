@@ -444,7 +444,7 @@ func TestChainFromConfig(t *testing.T) {
 			t.Fatalf("%s: err %v", name, err)
 		}
 	}
-	if got := strings.Join(h.g.registry().Types(), ","); got != "guardrail,mesh-entry,objective-resolver,retry-after,route-policy,served-endpoint,served-only,tokenize,tools-emulation,tools-planner,trace-id" {
+	if got := strings.Join(h.g.registry().Types(), ","); got != "guardrail,mesh-entry,objective-resolver,provider-credential,retry-after,route-policy,served-endpoint,served-only,tokenize,tools-emulation,tools-planner,trace-id" {
 		t.Fatalf("types %s", got)
 	}
 }

@@ -4,6 +4,7 @@ package nebu.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
+import "nebu/v1/auth.proto";
 import "nebu/v1/model.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -23,6 +24,18 @@ enum SourceKind {
   SOURCE_KIND_CSGHUB = 10;
   SOURCE_KIND_GITHUB = 11;
   SOURCE_KIND_GIT = 12;
+  SOURCE_KIND_ANTHROPIC = 13;
+  SOURCE_KIND_OPENAI = 14;
+  SOURCE_KIND_XAI = 15;
+  SOURCE_KIND_GEMINI = 16;
+  SOURCE_KIND_DEEPSEEK = 17;
+  SOURCE_KIND_MISTRAL = 18;
+  SOURCE_KIND_GROQ = 19;
+  SOURCE_KIND_OPENROUTER = 20;
+  // Any server speaking the OpenAI API, local or remote
+  SOURCE_KIND_OPENAI_COMPATIBLE = 21;
+  // The models a ChatGPT plan includes through OpenAI's Codex service, signed in to as Codex does
+  SOURCE_KIND_CODEX = 22;
 }
 
 // Value type of one source setting
@@ -178,6 +191,9 @@ message SourceCapabilities {
   repeated string hidden_tags = 21;
   // Search result columns in display order.
   repeated HitColumn columns = 23;
+  // The ways a caller signs in to a provider serving models, none for a catalog of weights.
+  // token_present then says whether the caller keeps a credential for the source.
+  repeated CredentialKind credentials = 24;
 }
 
 // Configured source and its capabilities.

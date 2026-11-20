@@ -44,12 +44,16 @@ func TestRuntimeNamesMatchScrapeTable(t *testing.T) {
 	cases := []struct {
 		rt      runtimes.Runtime
 		metrics bool
+		// Declares a health path alone, for the gateway's probe
+		health bool
 	}{
-		{runtimes.LlamaCpp{}, true},
-		{runtimes.VLLM{}, true},
-		{runtimes.SGLang{}, true},
-		{runtimes.NeMo{}, true},
-		{runtimes.SDCpp{}, false},
+		{runtimes.LlamaCpp{}, true, false},
+		{runtimes.VLLM{}, true, false},
+		{runtimes.SGLang{}, true, false},
+		{runtimes.NeMo{}, true, false},
+		{runtimes.SDCpp{}, false, false},
+		{runtimes.Relay{Speaks: v1.ApiFlavor_API_FLAVOR_OPENAI}, false, true},
+		{runtimes.Relay{Speaks: v1.ApiFlavor_API_FLAVOR_ANTHROPIC}, false, true},
 	}
 	if len(cases) != len(runtimes.All()) {
 		t.Fatalf("%d runtimes ship, %d checked", len(runtimes.All()), len(cases))
@@ -57,7 +61,7 @@ func TestRuntimeNamesMatchScrapeTable(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.rt.ID(), func(t *testing.T) {
 			want, ok := scrape.Capabilities(c.rt.ID())
-			if ok != c.metrics || (c.rt.Metrics() != nil) != c.metrics {
+			if ok != c.metrics || (c.rt.Metrics() != nil) != (c.metrics || c.health) || c.health && capabilitiesOf(c.rt.Metrics(), c.rt.ID()).Scraped() {
 				t.Fatalf("table entry %v, declared names %v, want metrics %v", ok, c.rt.Metrics(), c.metrics)
 			}
 			if got := capabilitiesOf(c.rt.Metrics(), c.rt.ID()); c.metrics && !reflect.DeepEqual(got, want) {

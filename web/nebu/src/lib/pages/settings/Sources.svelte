@@ -53,6 +53,7 @@
 	function statusOf(s: SourceStatus): string {
 		const c = s.capabilities;
 		if (s.error) return 'failing';
+		if (c?.credentials.length && !c.tokenPresent) return 'needs a credential';
 		if (c?.authRequired && !c.tokenPresent) return 'needs a token';
 		return 'ready';
 	}
@@ -64,6 +65,7 @@
 	// The reason behind a state, and whether a token is held when the source takes one
 	function statusTip(s: SourceStatus): string | undefined {
 		const c = s.capabilities;
+		if (c?.credentials.length) return s.error || (c.tokenPresent ? 'You keep a credential for it' : 'Add a credential under Profile, Providers');
 		return s.error || (c?.authRequired && !c.tokenPresent ? 'This source answers only with a token, set in its settings' : c?.tokenPresent ? 'A token is set' : undefined);
 	}
 

@@ -496,7 +496,7 @@ func (r *Registry) API(id string) v1.ApiFlavor {
 
 // Every runtime nebu ships
 func All() []Runtime {
-	return []Runtime{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}, SDCpp{}}
+	return append([]Runtime{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}, SDCpp{}}, relays()...)
 }
 
 // Matches the format and model kind. Standalone components cannot be served.

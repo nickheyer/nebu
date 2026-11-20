@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/scheduling/framework"
+	"github.com/nickheyer/nebu/pkg/sources"
 )
 
 // The headers that switch request modes, the system prompt one base64 encoded UTF-8
@@ -337,6 +339,33 @@ func (s *servedOnly) PostDecision(_ context.Context, _ *requestcontrol.Inbound, 
 		addrs[i] = ep.Address().String()
 	}
 	dec.Headers[requestcontrol.HeaderDestination] = strings.Join(addrs, ",")
+	return nil
+}
+
+// Signs a request to a provider's model with the caller's credential for its source, the client's own credentials already stripped
+type providerCredential struct{ g *Gateway }
+
+func (*providerCredential) TypedName() framework.TypedName {
+	return framework.TypedName{Type: "provider-credential", Name: "provider-credential"}
+}
+
+func (p *providerCredential) PostDecision(ctx context.Context, in *requestcontrol.Inbound, dec *requestcontrol.Decision) error {
+	sourceID, _, named := strings.Cut(dec.Pool.Model, ":")
+	if p.g.creds == nil || !named {
+		return nil
+	}
+	headers, provider, err := p.g.creds.Headers(ctx, exchangeOf(ctx).who.credentialOwner(), sourceID, in.Headers)
+	switch {
+	case !provider:
+		return nil
+	case errors.Is(err, sources.ErrNoCredential):
+		return &chat.Failure{Status: http.StatusForbidden, Code: chat.CodePermission, Message: err.Error()}
+	case err != nil:
+		return &chat.Failure{Status: http.StatusBadGateway, Code: chat.CodeUpstream, Message: err.Error()}
+	}
+	for k, v := range headers {
+		dec.Headers[k] = v
+	}
 	return nil
 }
 

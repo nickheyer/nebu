@@ -1,4 +1,4 @@
-h1:AdsSWiRIK/BSCwaxwWlE7Kt6120omyZXwOQo4QNZcSU=
+h1:yU6EszH4rTrMSYEqm/hX6RtazvnSVvLRTV5z4MBzABA=
 20260907055342_init.sql h1:lCpOos3kdDH1PA87ABrmyEXW0PuAXKFmyIER0/kZ+3E=
 20260917013548_route_profiles.sql h1:imiPc5UMI9dQoKDy46B6WTcKz/BiJAlUvZorFtgaR5E=
 20260917054526_slot_placement.sql h1:T8SbGI0v8FU5F/NU8n/mQ98vyf0g7tyrR06EqQnuC/4=
@@ -34,3 +34,4 @@ h1:AdsSWiRIK/BSCwaxwWlE7Kt6120omyZXwOQo4QNZcSU=
 20261110223448_trace_reasoning.sql h1:/CaXYVQXIW0BX3xYZPJ0o0IvsDGvpzWB5IOPGgkL/C4=
 20261112041426_slot_install.sql h1:Svlgi+rp5kWbYEfU3/TiqDlsmldnLO9HXqTeEeeIkms=
 20261112183000_template_reasoning.sql h1:E5ekUsqkHh16xz5Qof4GcZV7Xr3tskdzPFw3HgbkXTA=
+20261120071012_provider_credentials.sql h1:hpsjS9cWxQSAB29xFJ4242UvfyX+rgMyrW77fVWo5e0=

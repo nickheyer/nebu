@@ -489,6 +489,23 @@ CREATE TABLE api_tokens (
 CREATE UNIQUE INDEX api_tokens_prefix ON api_tokens (prefix);
 CREATE INDEX api_tokens_owner ON api_tokens (provider, subject);
 
+-- Credentials callers keep for providers serving models. The owner is the subject the caller's
+-- traces are kept under, daemon for the daemon token and auth.disabled. The kind is key or
+-- sign_in, the secret a key or a sign-in's tokens as JSON, and expires_at when those lapse.
+CREATE TABLE provider_credentials (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  expires_at TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX provider_credentials_owner ON provider_credentials (owner, source_id, position);
+
 -- Saved web chat conversations, owned by the account that made them. The turns
 -- and settings are one JSON document, the columns what lists show.
 CREATE TABLE conversations (

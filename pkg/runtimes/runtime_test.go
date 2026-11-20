@@ -23,11 +23,13 @@ func registry(t *testing.T) *Registry {
 
 func TestShippedRuntimesAreComplete(t *testing.T) {
 	r := registry(t)
-	if len(r.List()) != 5 {
+	if len(r.List()) != 7 {
 		t.Fatalf("runtimes %d", len(r.List()))
 	}
 	for _, rt := range r.List() {
-		if rt.Name() == "" || rt.Description() == "" || len(rt.Formats()) == 0 || len(rt.Methods()) == 0 || rt.Policy() == nil || len(rt.Triage()) == 0 || rt.Health().Path == "" {
+		// A relay places nothing and reads no log of an engine
+		_, relay := rt.(Relay)
+		if rt.Name() == "" || rt.Description() == "" || len(rt.Formats()) == 0 || len(rt.Methods()) == 0 || (rt.Policy() == nil) != relay || (len(rt.Triage()) == 0) != relay || rt.Health().Path == "" {
 			t.Fatalf("%s is missing something it describes", rt.ID())
 		}
 		if strings.Contains(strings.ToLower(rt.Description()), "launch_server") || strings.Contains(rt.Description(), "{{") {
@@ -46,7 +48,7 @@ func TestShippedRuntimesAreComplete(t *testing.T) {
 			t.Fatalf("describe %v", d)
 		}
 	}
-	if r.API("llamacpp") != v1.ApiFlavor_API_FLAVOR_OPENAI || r.API("nope") != v1.ApiFlavor_API_FLAVOR_OPENAI {
+	if r.API("llamacpp") != v1.ApiFlavor_API_FLAVOR_OPENAI || r.API("nope") != v1.ApiFlavor_API_FLAVOR_OPENAI || r.API("relay-anthropic") != v1.ApiFlavor_API_FLAVOR_ANTHROPIC {
 		t.Fatal("api")
 	}
 	if _, err := r.Get("nope"); err == nil {
@@ -156,6 +158,9 @@ func TestPlaceholderOnlyFillsEmptyControls(t *testing.T) {
 // Slider spans name real params and follow the model, a set value past a span staying as set
 func TestSliderSpansFollowTheModel(t *testing.T) {
 	for _, rt := range registry(t).List() {
+		if rt.Policy() == nil {
+			continue
+		}
 		set := map[string]string{}
 		if rt.ID() == "llamacpp" {
 			set["n_ctx"] = "999999"

@@ -151,9 +151,109 @@ message DeleteTokenRequest {
 // Confirms the revocation
 message DeleteTokenResponse {}
 
-// Local accounts and API tokens. Account calls are unavailable when auth.oidc
+// How a caller signs in to a provider serving models
+enum CredentialKind {
+  CREDENTIAL_KIND_UNSPECIFIED = 0;
+  // An API key the caller gives
+  CREDENTIAL_KIND_KEY = 1;
+  // Tokens a sign-in with the provider gave, refreshed by the daemon
+  CREDENTIAL_KIND_SIGN_IN = 2;
+}
+
+// A credential a caller keeps for one provider source. Gateway requests to the source's
+// models carry the caller's first by position. The secret never leaves the daemon.
+message ProviderCredential {
+  string id = 1;
+  string source_id = 2;
+  // Label the owner gave it
+  string name = 3;
+  CredentialKind kind = 4;
+  // Whether a secret is stored
+  bool secret_set = 5;
+  // When a sign-in's access lapses unless refreshed, unset for a key
+  google.protobuf.Timestamp expires_at = 6;
+  // Order among the owner's credentials for the source from 1, the lowest used first
+  uint32 position = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// Asks for the caller's own credentials, the ones whose name or source holds every word of the query
+message ListCredentialsRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
+
+// The caller's credentials by source and position
+message ListCredentialsResponse {
+  repeated ProviderCredential credentials = 1;
+  string next_cursor = 2;
+}
+
+// Stores a key for a provider source as the caller's, a new credential when id is empty
+message PutCredentialRequest {
+  string id = 1;
+  string source_id = 2;
+  string name = 3;
+  // The key. Empty keeps the stored one.
+  string secret = 4;
+  // Order among the caller's credentials for the source from 1. Zero keeps it, or places a new one last.
+  uint32 position = 5;
+}
+
+// The credential after the change
+message PutCredentialResponse {
+  ProviderCredential credential = 1;
+}
+
+// Removes one of the caller's credentials
+message DeleteCredentialRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Confirms the removal
+message DeleteCredentialResponse {}
+
+// A sign-in waiting for the person to approve it at the provider
+message ProviderSignIn {
+  string id = 1;
+  string source_id = 2;
+  // Where the person approves it
+  string url = 3;
+  // The code the person enters there, empty when the provider asks for none
+  string code = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// Starts a sign-in with a provider for the caller
+message StartSignInRequest {
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  // Label the credential gets
+  string name = 2;
+}
+
+// Where the person goes to approve it
+message StartSignInResponse {
+  ProviderSignIn sign_in = 1;
+}
+
+// Completes a sign-in the person approved, keeping its tokens as the caller's credential
+message FinishSignInRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  // The address the provider sent the browser back to after approval
+  string callback = 2 [(buf.validate.field).string.max_len = 8192];
+}
+
+// The credential the sign-in made
+message FinishSignInResponse {
+  ProviderCredential credential = 1;
+}
+
+// Local accounts, API tokens, and provider credentials. Account calls are unavailable when auth.oidc
 // is set or auth.disabled is true and need an admin, password changes apart. Token calls
 // need a signed-in account, local or single sign-on, and are unavailable when auth.disabled is true.
+// Credential calls act on the caller's own, the daemon token and auth.disabled sharing one set.
 service AuthService {
   // Lists accounts
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
@@ -171,4 +271,14 @@ service AuthService {
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
   // Revokes one of the caller's API tokens
   rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
+  // Lists the caller's provider credentials, never with their secrets
+  rpc ListCredentials(ListCredentialsRequest) returns (ListCredentialsResponse);
+  // Stores a key for a provider source as the caller's
+  rpc PutCredential(PutCredentialRequest) returns (PutCredentialResponse);
+  // Removes one of the caller's provider credentials
+  rpc DeleteCredential(DeleteCredentialRequest) returns (DeleteCredentialResponse);
+  // Starts a sign-in with a provider
+  rpc StartSignIn(StartSignInRequest) returns (StartSignInResponse);
+  // Completes an approved sign-in and keeps its tokens
+  rpc FinishSignIn(FinishSignInRequest) returns (FinishSignInResponse);
 }

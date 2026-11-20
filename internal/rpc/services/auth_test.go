@@ -46,7 +46,7 @@ func withBearer[T any](msg *T, token string) *connect.Request[T] {
 
 func TestAuthServiceRules(t *testing.T) {
 	users, tokens, sessions, guard := openAuth(t)
-	svc := NewAuthService(users, tokens, guard)
+	svc := NewAuthService(users, tokens, nil, guard)
 	ctx := context.Background()
 	daemon := func(msg *v1.CreateUserRequest) *connect.Request[v1.CreateUserRequest] {
 		return withBearer(msg, "daemon-token")
@@ -109,7 +109,7 @@ func TestAuthServiceRules(t *testing.T) {
 	if len(list.Msg.GetUsers()) != 1 {
 		t.Fatalf("list %v", list.Msg)
 	}
-	off := NewAuthService(nil, nil, auth.NewGuard("", nil, nil))
+	off := NewAuthService(nil, nil, nil, auth.NewGuard("", nil, nil))
 	if _, err := off.ListUsers(ctx, connect.NewRequest(&v1.ListUsersRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("accounts off %v", err)
 	}
@@ -120,7 +120,7 @@ func TestAuthServiceRules(t *testing.T) {
 
 func TestApiTokensBelongToTheCaller(t *testing.T) {
 	users, tokens, sessions, guard := openAuth(t)
-	svc := NewAuthService(users, tokens, guard)
+	svc := NewAuthService(users, tokens, nil, guard)
 	ctx := context.Background()
 	for _, u := range []struct {
 		name string

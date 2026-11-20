@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/pull"
@@ -262,18 +264,29 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Reque
 
 // Serves catalog lookups and source settings.
 type SourceService struct {
-	sources   *sources.Manager
-	inspector *inspect.Inspector
-	formats   *formats.Registry
-	runtimes  *runtimes.Registry
+	sources     *sources.Manager
+	inspector   *inspect.Inspector
+	formats     *formats.Registry
+	runtimes    *runtimes.Registry
+	credentials *auth.Credentials
+	guard       *auth.Guard
 }
 
 // Provider pages fetched for one page of results when providers cannot apply every filter.
 const searchRounds = 8
 
 // Creates the source service with format and runtime registries.
-func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry, reg *runtimes.Registry) *SourceService {
-	return &SourceService{sources: m, inspector: insp, formats: fmts, runtimes: reg}
+func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry, reg *runtimes.Registry, creds *auth.Credentials, guard *auth.Guard) *SourceService {
+	return &SourceService{sources: m, inspector: insp, formats: fmts, runtimes: reg, credentials: creds, guard: guard}
+}
+
+// Carries the caller's credentials to the provider sources the request reaches
+func (s *SourceService) signed(ctx context.Context, h http.Header) context.Context {
+	if s.credentials == nil {
+		return ctx
+	}
+	id, _ := s.guard.Identify(h)
+	return sources.WithAuthorizer(ctx, s.credentials.Authorizer(ctx, auth.CredentialOwner(id)))
 }
 
 // The format ids in priority order
@@ -301,6 +314,7 @@ func (s *SourceService) sharedFacets() []*v1.Facet {
 
 // Lists sources with shared facets and columns before provider-specific ones.
 func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1.ListSourcesRequest]) (*connect.Response[v1.ListSourcesResponse], error) {
+	ctx = s.signed(ctx, req.Header())
 	statuses := s.sources.Registry.Statuses(ctx)
 	for _, st := range statuses {
 		if st.GetCapabilities() != nil {
@@ -427,6 +441,7 @@ func (w wanted) admits(h *v1.SearchHit) bool {
 // are dropped, and further pages are fetched until the page holds the requested number of hits
 // or the sources run out.
 func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.SearchRequest]) (*connect.Response[v1.SearchResponse], error) {
+	ctx = s.signed(ctx, req.Header())
 	in := proto.Clone(req.Msg).(*v1.SearchRequest)
 	if in.Filters == nil {
 		in.Filters = map[string]string{}
@@ -505,7 +520,7 @@ func holdsAny(have, want []string) bool {
 }
 
 func (s *SourceService) Resolve(ctx context.Context, req *connect.Request[v1.ResolveRequest]) (*connect.Response[v1.ResolveResponse], error) {
-	_, model, err := s.inspector.Resolve(ctx, req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetRevision())
+	_, model, err := s.inspector.Resolve(s.signed(ctx, req.Header()), req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetRevision())
 	return reply(&v1.ResolveResponse{Model: model}, err)
 }
 

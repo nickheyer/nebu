@@ -11,6 +11,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/formats/diffusers"
 	"github.com/nickheyer/nebu/pkg/formats/diffusion"
+	"github.com/nickheyer/nebu/pkg/formats/relay"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
 )
@@ -169,6 +170,10 @@ func storedCandidate(m *v1.StoredModel) blueprint.Candidate {
 // Declared pipelines identify bundled parts by subfolder.
 func (i *Inspector) Parts(ctx context.Context, src sources.Source, model *v1.Model, g *formats.Group, d *v1.Descriptor) (*Plan, error) {
 	plan := &Plan{Family: blueprint.Of(d), Descriptor: d}
+	// A provider's model is the provider's whole, its reference naming no part
+	if d.GetMetadata()[relay.KeyEndpoint] != "" {
+		plan.Family = nil
+	}
 	if plan.Family == nil {
 		return plan, nil
 	}

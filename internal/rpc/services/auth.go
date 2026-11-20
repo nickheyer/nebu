@@ -18,16 +18,17 @@ var (
 	errTokensOff   = connect.NewError(connect.CodeUnimplemented, errors.New("API tokens are off, auth.disabled is set"))
 )
 
-// Manages local accounts and the API tokens signed-in users make, the auth package deciding who may do what
+// Manages local accounts, the API tokens signed-in users make and the credentials callers keep, the auth package deciding who may do what
 type AuthService struct {
-	users  *auth.Users
-	tokens *auth.Tokens
-	guard  *auth.Guard
+	users       *auth.Users
+	tokens      *auth.Tokens
+	credentials *auth.Credentials
+	guard       *auth.Guard
 }
 
-// Nil users means accounts are off, nil tokens means auth is off
-func NewAuthService(users *auth.Users, tokens *auth.Tokens, guard *auth.Guard) *AuthService {
-	return &AuthService{users: users, tokens: tokens, guard: guard}
+// Nil users means accounts are off, nil tokens means auth is off, and credentials are kept either way
+func NewAuthService(users *auth.Users, tokens *auth.Tokens, credentials *auth.Credentials, guard *auth.Guard) *AuthService {
+	return &AuthService{users: users, tokens: tokens, credentials: credentials, guard: guard}
 }
 
 func (s *AuthService) ListUsers(ctx context.Context, req *connect.Request[v1.ListUsersRequest]) (*connect.Response[v1.ListUsersResponse], error) {
@@ -101,6 +102,38 @@ func (s *AuthService) DeleteToken(ctx context.Context, req *connect.Request[v1.D
 	}
 	return authReply(&v1.DeleteTokenResponse{}, s.tokens.Delete(ctx, s.caller(req.Header()), req.Msg.GetId()))
 }
+
+func (s *AuthService) ListCredentials(ctx context.Context, req *connect.Request[v1.ListCredentialsRequest]) (*connect.Response[v1.ListCredentialsResponse], error) {
+	list, err := s.credentials.List(ctx, s.owner(req.Header()))
+	if err != nil {
+		return authReply(&v1.ListCredentialsResponse{}, err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(c *v1.ProviderCredential) []string { return []string{c.GetName(), c.GetSourceId()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return authReply(&v1.ListCredentialsResponse{Credentials: list, NextCursor: next}, err)
+}
+
+func (s *AuthService) PutCredential(ctx context.Context, req *connect.Request[v1.PutCredentialRequest]) (*connect.Response[v1.PutCredentialResponse], error) {
+	c, err := s.credentials.Put(ctx, s.owner(req.Header()), req.Msg)
+	return authReply(&v1.PutCredentialResponse{Credential: c}, err)
+}
+
+func (s *AuthService) DeleteCredential(ctx context.Context, req *connect.Request[v1.DeleteCredentialRequest]) (*connect.Response[v1.DeleteCredentialResponse], error) {
+	return authReply(&v1.DeleteCredentialResponse{}, s.credentials.Delete(ctx, s.owner(req.Header()), req.Msg.GetId()))
+}
+
+func (s *AuthService) StartSignIn(ctx context.Context, req *connect.Request[v1.StartSignInRequest]) (*connect.Response[v1.StartSignInResponse], error) {
+	in, err := s.credentials.StartSignIn(ctx, s.owner(req.Header()), req.Msg.GetSourceId(), req.Msg.GetName())
+	return authReply(&v1.StartSignInResponse{SignIn: in}, err)
+}
+
+func (s *AuthService) FinishSignIn(ctx context.Context, req *connect.Request[v1.FinishSignInRequest]) (*connect.Response[v1.FinishSignInResponse], error) {
+	c, err := s.credentials.FinishSignIn(ctx, s.owner(req.Header()), req.Msg.GetId(), req.Msg.GetCallback())
+	return authReply(&v1.FinishSignInResponse{Credential: c}, err)
+}
+
+// The owner the caller's provider credentials are kept under
+func (s *AuthService) owner(h http.Header) string { return auth.CredentialOwner(s.caller(h)) }
 
 // Who is behind the request, the zero identity when nothing valid was sent
 func (s *AuthService) caller(h http.Header) auth.Identity {

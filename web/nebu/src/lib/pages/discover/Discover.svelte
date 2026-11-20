@@ -107,7 +107,7 @@
 	]);
 	const activeFilters = $derived(applied.length);
 	const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}\n${m.repo}`)));
-	const warning = $derived([source?.error ?? '', caps?.authRequired && !caps.tokenPresent ? 'token missing' : '', ...warnings].filter(Boolean));
+	const warning = $derived([source?.error ?? '', caps?.authRequired && !caps.tokenPresent ? (caps.credentials.length ? 'no credential' : 'token missing') : '', ...warnings].filter(Boolean));
 
 	const list = new ListQuery<SearchHit, Params>(
 		async (p, cursor, limit, signal) => {
@@ -282,7 +282,9 @@
 	</Toolbar>
 {/snippet}
 
-{#snippet settingsAction()}<RowAction label="Settings" href="/settings/sources" />{/snippet}
+{#snippet settingsAction()}
+	{#if caps?.credentials.length}<RowAction label="Profile" href="/profile" />{:else}<RowAction label="Settings" href="/settings/sources" />{/if}
+{/snippet}
 
 <PageHeader tabs={modelsTabs} active="discover" />
 

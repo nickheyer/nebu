@@ -1,0 +1,31 @@
+package sources
+
+import (
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"golang.org/x/oauth2"
+)
+
+// OpenAI's models, a key as a bearer token: https://developers.openai.com/api/reference/resources/models/methods/list.
+// Or a ChatGPT plan through Sign in with ChatGPT for open-source apps, a client registered on first sign-in and the
+// loopback address the browser lands on copied back: https://developers.openai.com/siwc/token-sharing-open-source/sign-in,
+// refreshed as https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions says. Plan usage takes the
+// Responses API alone, stored false and streamed: https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations
+var openai = modelCatalog(v1.SourceKind_SOURCE_KIND_OPENAI, "openai", "OpenAI", "https://api.openai.com/v1", v1.ApiFlavor_API_FLAVOR_OPENAI, &SignIn{
+	Header: "Authorization",
+	Scheme: "Bearer",
+	Key:    true,
+	OAuth: &OAuth{
+		Config: oauth2.Config{
+			ClientID:    "dynamic_agent_client",
+			Endpoint:    oauth2.Endpoint{AuthURL: "https://auth.openai.com/api/accounts/authorize", TokenURL: "https://auth.openai.com/api/accounts/oauth/token", AuthStyle: oauth2.AuthStyleInParams},
+			RedirectURL: "http://127.0.0.1:1455/auth/callback",
+			Scopes:      []string{"openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct"},
+		},
+		Authorize: map[string]string{"agent_name_hint": "nebu", "ext_agent_host_id": "{host}", "resource": "https://api.openai.com/v1", "nonce": "{nonce}"},
+		Token:     map[string]string{"resource": "https://api.openai.com/v1"},
+		Issues:    true,
+		Requires:  "chatgpt.tokens.use.direct",
+	},
+})
+
+func init() { register(openai) }

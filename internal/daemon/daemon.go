@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -122,6 +123,8 @@ type Daemon struct {
 	Users *auth.Users
 	// API tokens users make, nil when auth is off
 	Tokens *auth.Tokens
+	// Credentials callers keep for providers serving models
+	Credentials *auth.Credentials
 	// Checks every API and gateway request's credential
 	Guard *auth.Guard
 	// Single sign-on, nil when auth.oidc is unset
@@ -301,6 +304,7 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 		return nil, err
 	}
 	log.Info("node identity", "node", nodeID)
+	d.Credentials = auth.NewCredentials(d.DB, srcs, log, hostID(nodeID))
 	// The mesh opens after the pools, so its dialer is reached through the daemon at call time
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return d.Mesh.DialEndpoint(ctx, network, addr)
@@ -370,6 +374,14 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 		return nil, fmt.Errorf("settings: %w", err)
 	}
 	return d, nil
+}
+
+// The opaque id a provider sign-in names this host by, a version 4 UUID drawn from the node id
+func hostID(nodeID string) string {
+	sum := sha256.Sum256([]byte("provider sign-in host " + nodeID))
+	b := sum[:16]
+	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
+	return fmt.Sprintf("urn:uuid:%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // Probes the host again after a runtime exits, the doctor's searches left to its own runs
@@ -494,24 +506,25 @@ func (d *Daemon) openGateway(rts *runtimes.Registry, bus *events.Bus) error {
 		}
 	}
 	d.Gateway, err = gateway.New(gateway.Deps{
-		Pools:     d.Pools,
-		Resolver:  d.Pools,
-		Manager:   d.Pools,
-		Store:     d.Pools.Store(),
-		Sampler:   d.Pools.Sampler(),
-		DB:        d.DB,
-		Events:    bus,
-		Guard:     d.Guard,
-		Tools:     d.Tools,
-		Peers:     d.Formations,
-		Dial:      d.Mesh.DialEndpoint,
-		Runtimes:  runtimeReader{rts},
-		Instances: d.Instances,
-		Adapters:  storeAdapters{d.Store},
-		Metrics:   d.Metrics,
-		Telemetry: d.Telemetry,
-		Health:    d.Health,
-		Logger:    d.Log,
+		Pools:       d.Pools,
+		Resolver:    d.Pools,
+		Manager:     d.Pools,
+		Store:       d.Pools.Store(),
+		Sampler:     d.Pools.Sampler(),
+		DB:          d.DB,
+		Events:      bus,
+		Guard:       d.Guard,
+		Tools:       d.Tools,
+		Peers:       d.Formations,
+		Dial:        d.Mesh.DialEndpoint,
+		Runtimes:    runtimeReader{rts},
+		Instances:   d.Instances,
+		Credentials: d.Credentials,
+		Adapters:    storeAdapters{d.Store},
+		Metrics:     d.Metrics,
+		Telemetry:   d.Telemetry,
+		Health:      d.Health,
+		Logger:      d.Log,
 		Config: gateway.Config{
 			Keys:         gw.GetApiKeys(),
 			Origins:      gw.GetCorsOrigins(),
@@ -579,6 +592,7 @@ func (d *Daemon) openHandlers(fmts *formats.Registry, rts *runtimes.Registry, re
 		Sessions:      d.Sessions,
 		Users:         d.Users,
 		Tokens:        d.Tokens,
+		Credentials:   d.Credentials,
 		SSO:           d.SSO,
 		Recent:        recent,
 		Log:           d.Log,

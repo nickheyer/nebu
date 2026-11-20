@@ -20,6 +20,7 @@ const DefaultChain = `plugins:
 - type: served-only
 - type: tools-emulation
   after: [served-only]
+- type: provider-credential
 - type: served-endpoint
 - type: trace-id
 - type: retry-after
@@ -29,16 +30,17 @@ const DefaultChain = `plugins:
 func (g *Gateway) registry() *requestcontrol.Registry {
 	reg := requestcontrol.NewRegistry()
 	fixed := map[string]func() framework.Plugin{
-		"mesh-entry":         func() framework.Plugin { return &meshEntry{} },
-		"objective-resolver": func() framework.Plugin { return &objectiveResolver{g: g} },
-		"route-policy":       func() framework.Plugin { return &routePolicy{g: g} },
-		"tools-planner":      func() framework.Plugin { return &toolsPlanner{g: g} },
-		"tokenize":           func() framework.Plugin { return &tokenize{g: g} },
-		"served-only":        func() framework.Plugin { return &servedOnly{g: g} },
-		"tools-emulation":    func() framework.Plugin { return &toolsEmulation{g: g} },
-		"served-endpoint":    func() framework.Plugin { return &servedEndpoint{} },
-		"trace-id":           func() framework.Plugin { return &traceID{} },
-		"retry-after":        func() framework.Plugin { return &retryAfter{clock: g.clock} },
+		"mesh-entry":          func() framework.Plugin { return &meshEntry{} },
+		"objective-resolver":  func() framework.Plugin { return &objectiveResolver{g: g} },
+		"route-policy":        func() framework.Plugin { return &routePolicy{g: g} },
+		"tools-planner":       func() framework.Plugin { return &toolsPlanner{g: g} },
+		"tokenize":            func() framework.Plugin { return &tokenize{g: g} },
+		"served-only":         func() framework.Plugin { return &servedOnly{g: g} },
+		"provider-credential": func() framework.Plugin { return &providerCredential{g: g} },
+		"tools-emulation":     func() framework.Plugin { return &toolsEmulation{g: g} },
+		"served-endpoint":     func() framework.Plugin { return &servedEndpoint{} },
+		"trace-id":            func() framework.Plugin { return &traceID{} },
+		"retry-after":         func() framework.Plugin { return &retryAfter{clock: g.clock} },
 	}
 	for typ, build := range fixed {
 		reg.Register(typ, func(name string, params map[string]any) (framework.Plugin, error) {

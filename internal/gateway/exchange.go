@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/pkg/bodyparse"
 	"github.com/nickheyer/nebu/pkg/datalayer"
@@ -24,6 +25,16 @@ type identity struct {
 	admin bool
 	// Whether a mesh member forwarded the request under its session
 	peer bool
+	// Whether a gateway key opened the request, naming no account
+	key bool
+}
+
+// The owner provider credentials are kept under, the shared one for a gateway key, an in process caller and auth.disabled
+func (id identity) credentialOwner() string {
+	if id.key || id.owner == "" {
+		return auth.ProviderDaemon
+	}
+	return id.owner
 }
 
 // One request's way through the gateway, shared by the handler and the plugins it reaches through the context

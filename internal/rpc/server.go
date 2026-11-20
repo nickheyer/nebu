@@ -79,6 +79,8 @@ type Deps struct {
 	Users *auth.Users
 	// API tokens users make, nil when auth is off
 	Tokens *auth.Tokens
+	// Credentials callers keep for providers serving models, kept whether auth is on or off
+	Credentials *auth.Credentials
 	// Single sign-on, nil when auth.oidc is unset
 	SSO *sso.Service
 	// Recent daemon logs streamed to the Host page
@@ -116,7 +118,7 @@ func NewHandler(d Deps) (http.Handler, error) {
 	}
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor, d.Recent, d.Store), opts))
 	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings, d.Notifier), opts))
-	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes), opts))
+	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes, d.Credentials, d.Guard), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
@@ -128,7 +130,7 @@ func NewHandler(d Deps) (http.Handler, error) {
 	mux.Handle(nebuv1connect.NewPoolImportServiceHandler(services.NewPoolImportService(d.Mesh, d.Events), opts))
 	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
 	mux.Handle(nebuv1connect.NewBotServiceHandler(services.NewBotService(d.Bots), opts))
-	mux.Handle(nebuv1connect.NewAuthServiceHandler(services.NewAuthService(d.Users, d.Tokens, d.Guard), opts))
+	mux.Handle(nebuv1connect.NewAuthServiceHandler(services.NewAuthService(d.Users, d.Tokens, d.Credentials, d.Guard), opts))
 	mux.Handle(nebuv1connect.NewChatServiceHandler(services.NewChatService(d.Chats, d.Guard), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,

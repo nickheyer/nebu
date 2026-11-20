@@ -40,7 +40,7 @@ func wrap(err error) error {
 		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored),
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
-		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot), errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownToken),
+		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot), errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownToken), errors.Is(err, auth.ErrUnknownCredential),
 		errors.Is(err, chats.ErrUnknownConversation), errors.Is(err, mesh.ErrUnknownNode), errors.Is(err, formations.ErrUnknownFormation),
 		errors.Is(err, pools.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
@@ -50,12 +50,12 @@ func wrap(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, pools.ErrInvalid):
 		return connect.NewError(connect.CodeInvalidArgument, err)
-	case errors.Is(err, bots.ErrNotRunning), errors.Is(err, auth.ErrLastUser), errors.Is(err, mesh.ErrNoMesh):
+	case errors.Is(err, bots.ErrNotRunning), errors.Is(err, auth.ErrLastUser), errors.Is(err, mesh.ErrNoMesh), errors.Is(err, sources.ErrNoCredential):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, mesh.ErrMesh), errors.Is(err, formations.ErrFormation):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, runtimes.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
-		errors.Is(err, settings.ErrSetting), errors.Is(err, bots.ErrBot), errors.Is(err, auth.ErrUser), errors.Is(err, auth.ErrToken), errors.Is(err, chats.ErrChat):
+		errors.Is(err, settings.ErrSetting), errors.Is(err, bots.ErrBot), errors.Is(err, auth.ErrUser), errors.Is(err, auth.ErrToken), errors.Is(err, auth.ErrProviderCredential), errors.Is(err, chats.ErrChat):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, auth.ErrCredentials):
 		return connect.NewError(connect.CodePermissionDenied, err)

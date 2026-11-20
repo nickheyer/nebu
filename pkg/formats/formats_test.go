@@ -238,7 +238,7 @@ func TestSafetensorsWideShardCountIsOneGroup(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	c := registry(t)
 	list := c.Describe()
-	if len(list) != 7 || list[0].GetId() != "gguf" || list[1].GetId() != "diffusers" || list[4].GetId() != "peft" || list[5].GetId() != "safetensors" || list[6].GetId() != "diffusion" || list[0].GetBlurb() == "" {
+	if len(list) != 9 || list[0].GetId() != "gguf" || list[1].GetId() != "diffusers" || list[4].GetId() != "peft" || list[5].GetId() != "safetensors" || list[6].GetId() != "diffusion" || list[7].GetId() != "anthropic" || list[8].GetId() != "openai" || list[0].GetBlurb() == "" {
 		t.Fatalf("formats in priority order with words: %v", list)
 	}
 	if c.Get("nope") != nil {
