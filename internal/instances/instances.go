@@ -217,7 +217,7 @@ func (m *Manager) Plan(ctx context.Context, req *v1.RunRequest) (*v1.MemoryPlan,
 		return nil, err
 	}
 	if p.plan == nil {
-		return &v1.MemoryPlan{Verdict: v1.FitVerdict_FIT_VERDICT_FITS, Detail: "runtime has no estimate policy"}, nil
+		return inspect.RemotePlan(true), nil
 	}
 	return p.plan, nil
 }
@@ -340,7 +340,7 @@ func (m *Manager) create(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 // A one line account of the plan a run was scheduled with
 func planDetail(p *prepared) string {
 	if p.plan == nil {
-		return "the runtime has no estimate policy"
+		return inspect.Unplanned
 	}
 	return text.Enum(p.plan.GetVerdict()) + ": " + p.plan.GetDetail()
 }

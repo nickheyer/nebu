@@ -380,6 +380,11 @@ func (p *providerCredential) PostDecision(ctx context.Context, in *requestcontro
 	case cred == nil:
 		return nil
 	}
+	// A request its provider just refused under a credential is not sent again under it. It is chosen again only for want
+	// of another the caller keeps free, which is the next request's to find changed.
+	if x.cooled[cred.GetId()] {
+		return &requestcontrol.SpentError{Message: fmt.Sprintf("%s refused the request under %s, the only credential free for it", p.g.creds.SourceName(cred), cred.GetName())}
+	}
 	x.credential, x.t.Credential, x.signed = cred, cred.GetName(), dec
 	for k, v := range headers {
 		dec.Headers[k] = v

@@ -351,7 +351,7 @@ func meshNeed(landings []*meshLanding, hasBlob func(string) bool) (total, need u
 func (p *Puller) roomFor(landings []*meshLanding, fromNet []*landing) error {
 	_, need := meshNeed(landings, p.Store.HasBlob)
 	_, netNeed := p.sizes(fromNet)
-	return p.roomBytes(need + netNeed)
+	return p.roomBytes(need+netNeed, p.MinFree.Load())
 }
 
 // Lands groups from members and the internet with shared progress

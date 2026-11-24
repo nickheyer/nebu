@@ -2,6 +2,7 @@ package pull
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -144,5 +145,34 @@ func TestFilePullsLandFromAMember(t *testing.T) {
 	}
 	if len(m.GetArtifacts()) != 2 || m.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT || m.GetRuntimes() == 0 || store.DescriptorDigest(m.GetDescriptor_()) == "" {
 		t.Fatalf("the second file completes the group: %v", m)
+	}
+}
+
+// The free space the store keeps is kept from weights. A provider's model lands as a reference a few bytes long, so a
+// disk below that floor still takes it, while weights are refused in words naming the floor
+func TestProviderReferenceLandsBelowTheFreeFloor(t *testing.T) {
+	ctx := context.Background()
+	weights := "tiny-Q4_K_M.gguf"
+	site := newMirror(t, "org/model", map[string][]byte{weights: fixture(40)})
+	p := testPuller(t, ctx, []*v1.Source{
+		{Id: "mirror", Kind: v1.SourceKind_SOURCE_KIND_MIRROR, Config: map[string]string{"endpoint": site.srv.URL}},
+		{Id: "lab", Kind: v1.SourceKind_SOURCE_KIND_OPENAI_COMPATIBLE, Config: map[string]string{"endpoint": "http://127.0.0.1:1/v1"}},
+	})
+	// More than any disk has free
+	p.MinFree.Store(1 << 62)
+	if _, err := p.Pull(ctx, &v1.PullRequest{SourceId: "mirror", Repo: "org/model"}); !errors.Is(err, store.ErrNoRoom) || !strings.Contains(err.Error(), "kept free") {
+		t.Fatalf("weights below the floor: %v", err)
+	}
+	task, err := p.Pull(ctx, &v1.PullRequest{SourceId: "lab", Repo: "gpt-6.1-terra"})
+	done, logs := finish(t, ctx, p, task, err)
+	if done.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		t.Fatalf("a provider's reference below the floor: %s\n%s", done.GetError(), strings.Join(logs, "\n"))
+	}
+	m, err := p.Store.ReadManifest("lab", "gpt-6.1-terra", "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.GetFormatId() != "openai" || m.GetDescriptor_().GetMetadata()["relay.model"] != "gpt-6.1-terra" || m.GetDescriptor_().GetMetadata()["relay.endpoint"] != "http://127.0.0.1:1/v1" {
+		t.Fatalf("stored reference %v", m)
 	}
 }

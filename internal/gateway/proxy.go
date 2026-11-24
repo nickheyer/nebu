@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -196,7 +197,12 @@ func (x *exchange) attempt(ctx context.Context, out *upstream, eps []datalayer.E
 			x.fellBack(ep, resp.Status, written)
 			continue
 		case refused(resp.StatusCode):
-			x.keepBack(ctx, ep, resp.Status, written, credentialRefused(providerStatus(resp)) && x.credential != nil)
+			// A relay's 502 for its provider's rejection is recorded as what the provider answered
+			why, provider := resp.Status, providerStatus(resp)
+			if provider != resp.StatusCode {
+				why = fmt.Sprintf("%d %s from the provider", provider, http.StatusText(provider))
+			}
+			x.keepBack(ctx, ep, why, written, credentialRefused(provider) && x.credential != nil)
 		}
 		resp.Header.Del(ProviderStatusHeader)
 		return resp, ep, nil
@@ -251,7 +257,9 @@ func (x *exchange) sendTo(ctx context.Context, ep datalayer.Endpoint, out *upstr
 	}
 	if x.credential != nil {
 		_, model, _ := providerModel(x.dec.Pool.Model)
-		x.g.creds.Answered(x.credential, model, providerStatus(resp), resp.Header, chat.RetryAfterOf(resp.Header, x.g.clock.Now()))
+		status := providerStatus(resp)
+		x.rejected = status == http.StatusUnauthorized
+		x.g.creds.Answered(x.credential, model, status, resp.Header, chat.RetryAfterOf(resp.Header, x.g.clock.Now()))
 	}
 	return resp, true, nil
 }

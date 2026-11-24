@@ -348,8 +348,9 @@ func TestBrowserHeadersStayAtTheGateway(t *testing.T) {
 	}
 }
 
-// A key its provider rejected is passed over for the caller's next, and a caller's only key is tried again by the next
-// request rather than waited out, so one rejection is not an outage
+// A key its provider rejected is passed over for the caller's next. A caller's only key is rejected to the caller once, as
+// theirs to mend, in the provider's words and naming the key, the request not sent again under it, and is tried again by
+// the next request rather than waited out, so one rejection is not an outage
 func TestRejectedKeyIsPassedOverAndAnOnlyKeyTriedAgain(t *testing.T) {
 	creds := keptCreds(t, map[string][]string{"lab": {"a1", "a2"}, "lab2": {"b1"}})
 	h := newHarness(t, func(s *setup) { s.creds = creds })
@@ -371,8 +372,15 @@ func TestRejectedKeyIsPassedOverAndAnOnlyKeyTriedAgain(t *testing.T) {
 	if r := ask("two-keys"); r.status != http.StatusOK || !slices.Equal(a.sent(), []string{"a1", "a2", "a2"}) {
 		t.Fatalf("the rejected key is passed over at once: %d, sent %v", r.status, a.sent())
 	}
-	if r := ask("one-key"); r.status != http.StatusBadGateway || r.header.Get(ProviderStatusHeader) != "" {
-		t.Fatalf("an only key rejected: %d %v", r.status, r.header)
+	r := ask("one-key")
+	if r.status != http.StatusForbidden || r.header.Get(ProviderStatusHeader) != "" || !strings.Contains(string(r.body), `OpenAI compatible rejected the credential \"b1\"`) || !strings.Contains(string(r.body), "invalid api key") || !strings.Contains(string(r.body), "permission_error") {
+		t.Fatalf("an only key rejected: %d %v %s", r.status, r.header, r.body)
+	}
+	if got := b.sent(); !slices.Equal(got, []string{"b1"}) {
+		t.Fatalf("a request refused under an only key was sent under it again: %v", got)
+	}
+	if tr := traceOf(t, h, r.header.Get(TraceHeader)); tr.GetStatus() != http.StatusForbidden || tr.GetCredential() != "b1" || !strings.Contains(tr.GetError(), "rejected the credential") {
+		t.Fatalf("trace status %d credential %q error %q", tr.GetStatus(), tr.GetCredential(), tr.GetError())
 	}
 	// The provider takes the key again, as after a rejection that was its own fault
 	b.mu.Lock()

@@ -29,6 +29,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/scheduling/framework"
+	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/telemetry"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
@@ -92,6 +93,11 @@ type Credentials interface {
 	// How the source's provider takes stream_options: whether a stream names its usage only when asked through it, and
 	// whether a body naming it at all is refused, with the server the source reaches, which what is learned of it is kept by
 	StreamOptions(sourceID string) (asks, refuses bool, server string)
+	// What requests under the credential are held to when its provider serves it over the Responses API alone, nil for
+	// one served every path of the provider's API
+	Responses(cred *v1.ProviderCredential) *sources.Responses
+	// The name the credential's source goes by in messages
+	SourceName(cred *v1.ProviderCredential) string
 }
 
 // Connections to other members, for forwarded routes and the relay's slot moves

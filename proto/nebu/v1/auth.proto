@@ -335,6 +335,9 @@ message ProviderSignIn {
   // The code the person enters there, empty when the provider asks for none
   string code = 4;
   google.protobuf.Timestamp expires_at = 5;
+  // The address the provider sends the browser to once approved, on the person's own machine where nothing answers, so the
+  // page fails to load and the whole address is copied back from the address bar. Empty when the provider shows a code instead.
+  string redirect = 6;
 }
 
 // Starts a sign-in with a provider for the caller

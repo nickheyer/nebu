@@ -107,7 +107,7 @@ func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
 func (i *Inspector) planners(list []runtimes.Runtime, formatID string, kind v1.ModelKind, named bool) []runtimes.Runtime {
 	var accepting, installed []runtimes.Runtime
 	for _, rt := range list {
-		if !runtimes.Accepts(rt, formatID, kind) || rt.Policy() == nil {
+		if !runtimes.Accepts(rt, formatID, kind) {
 			continue
 		}
 		accepting = append(accepting, rt)
@@ -276,6 +276,23 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 		return nil, err
 	}
 	return i.Builder.Build(raw)
+}
+
+// The detail of the plan of a runtime that loads nothing onto this host
+const Unplanned = "the model runs where its provider serves it, nothing loads onto this host"
+
+// The plan of a runtime that loads nothing onto this host, as the relay of a provider's model: it places nothing and fits
+func RemotePlan(free bool) *v1.MemoryPlan {
+	return &v1.MemoryPlan{Verdict: v1.FitVerdict_FIT_VERDICT_FITS, Detail: Unplanned, Remote: true, AgainstFree: free}
+}
+
+// The context a provider reports for its model, zero when it reports none
+func servedContext(d *v1.Descriptor) uint32 {
+	limit := formats.ParamsOf(d.GetParams()).ContextTrain
+	if limit < 1 || limit > math.MaxUint32 {
+		return 0
+	}
+	return uint32(limit)
 }
 
 // Builds planning input from resolved overrides, memory, and calibration
@@ -499,6 +516,11 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		resp.Descriptors = append(resp.Descriptors, d)
 		// Prefer installed runtimes that support the format.
 		for _, rt := range i.planners(list, d.GetFormatId(), d.GetKind(), named) {
+			// A provider's model loads nothing here, so it has one row saying so, at the context its provider reports
+			if rt.Policy() == nil {
+				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.ID(), Context: servedContext(d), Plan: RemotePlan(false), Free: RemotePlan(true)})
+				continue
+			}
 			// Show the largest fitting context before the requested context grid.
 			rows := []uint32{}
 			if rt.Policy().ContextParam != "" && len(req.GetContexts()) == 0 {
@@ -584,6 +606,10 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	rt, err := i.Runtimes.Get(runtimeID)
 	if err != nil {
 		return nil, err
+	}
+	// A runtime that loads nothing onto this host, as the relay of a provider's model, has no memory to plan and fits any host
+	if rt.Policy() == nil {
+		return &v1.EstimateResponse{Plan: RemotePlan(req.GetFree()), Descriptor_: d}, nil
 	}
 	// Request params override slot params over the runtime's defaults, an exact request leaving the slot's out
 	slotParams := c.Params

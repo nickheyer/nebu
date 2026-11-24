@@ -48,6 +48,8 @@ export function paramLabel(n: bigint | number | undefined): string {
 
 export function contextLabel(n: number): string {
 	if (n < 1024) return num(n);
+	// A window counted in thousands, as a provider names its own, reads in thousands, and any other in 1024s
+	if (n % 1000 === 0) return n % 1_000_000 === 0 ? `${n / 1_000_000}M` : `${n / 1000}K`;
 	const k = n / 1024;
 	return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
 }

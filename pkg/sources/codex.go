@@ -30,13 +30,15 @@ const (
 // https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs (CHATGPT_CODEX_BASE_URL), with the
 // workspace header of https://github.com/openai/codex/blob/main/codex-rs/http-client/src/openai_headers.rs, the
 // originator of https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/default_client.rs, and refreshes sent
-// as JSON as https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/manager.rs sends them
+// as JSON as https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/manager.rs sends them. The endpoint serves
+// /responses alone, and Codex sends it every request streamed, stored false and with instructions, so a request bringing
+// none goes with a plain one rather than without
 var codex = func() *Catalog {
 	cat := modelCatalog(v1.SourceKind_SOURCE_KIND_CODEX, "codex", "Codex", "https://chatgpt.com/backend-api/codex", v1.ApiFlavor_API_FLAVOR_OPENAI, &SignIn{
 		Header: "Authorization",
 		Scheme: "Bearer",
 		Fixed:  map[string]string{"originator": "codex_cli_rs"},
-		OAuth:  &OAuth{Config: *codexOAuth, JSON: true, Device: codexDevice, Claims: codexClaims},
+		OAuth:  &OAuth{Config: *codexOAuth, JSON: true, Device: codexDevice, Claims: codexClaims, Responses: &Responses{Instructions: "You are a helpful assistant."}},
 	})
 	cat.Description = "Models a ChatGPT plan includes through OpenAI's Codex service, signed in to as Codex does, served over the Responses API"
 	return cat

@@ -52,6 +52,9 @@ type Traits struct {
 	Strict bool
 	// Serves /v1/responses itself, so such a request passes through Native with its stored state
 	Responses bool
+	// Serves /v1/responses and nothing else, and answers there as a stream alone, so every other request is rendered for
+	// it and a whole answer is gathered from its stream
+	ResponsesOnly bool
 	// Answers several choices in one call, so a request with n above one needs no call per choice
 	Choices bool
 	// The path a Count request renders to, empty when the runtime has no tokenizer endpoint

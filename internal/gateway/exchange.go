@@ -109,6 +109,8 @@ type exchange struct {
 	credential *v1.ProviderCredential
 	// The decision the credential signed, a body attached to it later not signing it again
 	signed *requestcontrol.Decision
+	// Whether the provider rejected the credential itself in the answer last received
+	rejected bool
 	// Whether the gateway asked the provider for the usage of a stream whose client did not, the chunk naming it kept from the client
 	asked bool
 	// The last refusal the request was decided again after, given to the client when nothing remains

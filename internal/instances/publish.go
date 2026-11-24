@@ -253,7 +253,7 @@ func (m *Manager) chatTemplate(in *instance) *v1.ChatTemplate {
 	if tp.GetError() != "" || chattemplate.Probed(tp) {
 		return tp
 	}
-	if m.Store == nil || m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
+	if m.Store == nil || m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP || m.remote(rec.GetRuntimeId()) {
 		return nil
 	}
 	probed := chattemplate.Describe(m.launchTemplate(rec))

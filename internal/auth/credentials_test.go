@@ -272,6 +272,14 @@ func TestSignInByRedirect(t *testing.T) {
 	if u.Host != "auth.openai.com" || q.Get("client_id") != "dynamic_agent_client" || q.Get("code_challenge_method") != "S256" || q.Get("ext_agent_host_id") != c.host || q.Get("nonce") == "" || q.Get("agent_name_hint") != "nebu" || in.GetCode() != "" {
 		t.Fatalf("authorize address %s", in.GetUrl())
 	}
+	// The dialog is told where the browser lands, an address on the person's own machine that fails to load
+	if in.GetRedirect() != "http://127.0.0.1:1455/auth/callback" {
+		t.Fatalf("the sign-in names its landing address as %q", in.GetRedirect())
+	}
+	// A code pasted alone, cut out of that address, is refused in words saying what to copy, the sign-in still pending
+	if _, err := c.FinishSignIn(ctx, "ann", in.GetId(), "plan-code"); !errors.Is(err, ErrProviderCredential) || !strings.Contains(err.Error(), "http://127.0.0.1:1455/auth/callback") || !strings.Contains(err.Error(), "address bar") {
+		t.Fatalf("a part of the address is refused, got %v", err)
+	}
 	if _, err := c.FinishSignIn(ctx, "ann", in.GetId(), "http://127.0.0.1:1455/auth/callback?code=plan-code&state=other&client_id=oaiapp_issued"); !errors.Is(err, ErrProviderCredential) {
 		t.Fatalf("another sign-in's state is refused, got %v", err)
 	}
@@ -303,8 +311,8 @@ func TestSignInByRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u, _ := url.Parse(in.GetUrl()); u.Host != "openrouter.ai" || u.Query().Get("code_challenge") == "" {
-		t.Fatalf("authorize address %s", in.GetUrl())
+	if u, _ := url.Parse(in.GetUrl()); u.Host != "openrouter.ai" || u.Query().Get("code_challenge") == "" || in.GetRedirect() != "" {
+		t.Fatalf("authorize address %s, landing address %q for a provider showing a code", in.GetUrl(), in.GetRedirect())
 	}
 	cred, err = c.FinishSignIn(ctx, "ann", in.GetId(), "or-code")
 	if err != nil {
@@ -315,5 +323,30 @@ func TestSignInByRedirect(t *testing.T) {
 	}
 	if _, h, _ := c.Headers(ctx, "ann", "openrouter", "", nil); h["Authorization"] != "Bearer sk-or-issued" {
 		t.Fatalf("headers %v", h)
+	}
+}
+
+// A sign-in a provider serves over the Responses API alone says so with what its requests are held to, while a key for the
+// same provider, and a credential of a provider serving every path, hold a request to nothing
+func TestSignInsServedOverResponsesAlone(t *testing.T) {
+	c := openCredentials(t)
+	signIn, key := v1.CredentialKind_CREDENTIAL_KIND_SIGN_IN, v1.CredentialKind_CREDENTIAL_KIND_KEY
+	plan := c.Responses(&v1.ProviderCredential{SourceId: "openai", Kind: signIn})
+	if plan == nil || plan.Namespace == "" {
+		t.Fatalf("a ChatGPT plan sign-in is held to %+v, want the Responses API alone with tools in a namespace", plan)
+	}
+	if codex := c.Responses(&v1.ProviderCredential{SourceId: "codex", Kind: signIn}); codex == nil || codex.Instructions == "" || codex.Namespace != "" {
+		t.Fatalf("a Codex sign-in is held to %+v, want the Responses API alone with instructions on every request", codex)
+	}
+	for _, cred := range []*v1.ProviderCredential{{SourceId: "openai", Kind: key}, {SourceId: "anthropic", Kind: key}, {SourceId: "openrouter", Kind: key}, {SourceId: "gone", Kind: signIn}} {
+		if got := c.Responses(cred); got != nil {
+			t.Fatalf("a %v for %s is held to %+v", cred.GetKind(), cred.GetSourceId(), got)
+		}
+	}
+	if name := c.SourceName(&v1.ProviderCredential{SourceId: "openai"}); name != "OpenAI" {
+		t.Fatalf("source name %q", name)
+	}
+	if name := c.SourceName(&v1.ProviderCredential{SourceId: "gone"}); name != "gone" {
+		t.Fatalf("a removed source's name %q", name)
 	}
 }

@@ -8,8 +8,9 @@ import { contextLabel, paramLabel } from '#lib/pages/models/models.js';
 
 // A weight group of a repository at a revision
 export type ContextRef = { sourceId: string; repo: string; revision: string; group: string };
-// Where the weights fit in words, the largest context they reach there, and the whole of it as a sentence
-export type ContextFit = { lamp: Lamp; where: string; context: string; tip: string };
+// Where the weights fit in words, the largest context they reach there, and the whole of it as a sentence, a provider's
+// model fitting nowhere here since it runs at its provider
+export type ContextFit = { lamp: Lamp; where: string; context: string; tip: string; remote?: boolean };
 // What is known of one weight group, nothing while its plan is on the way
 export type ContextState = { fit?: ContextFit; what: string; error?: string; warnings: string[] };
 
@@ -25,6 +26,11 @@ function rank(v: FitVerdict | undefined): number {
 
 // The largest context one weight group reaches on this host over every runtime, by the memory it takes
 export function contextFit(rows: FitRow[]): ContextFit | undefined {
+	const served = rows.find((r) => r.plan?.remote);
+	if (served) {
+		const context = served.context > 0 ? contextLabel(served.context) : '';
+		return { lamp: 'success', where: 'Provider', context, tip: ['Runs at its provider, nothing loads on this host', context ? `${context} context` : ''].filter(Boolean).join(', '), remote: true };
+	}
 	const plans = rows.filter((r) => r.plan).map((r) => ({ context: r.context || Number(r.plan?.params['n_ctx'] ?? 0), verdict: r.plan?.verdict }));
 	if (plans.length === 0) return undefined;
 	const top = Math.max(...plans.map((p) => rank(p.verdict)));

@@ -66,6 +66,19 @@ type OAuth struct {
 	Claims func(tok *oauth2.Token) map[string]string
 	// Trades the redirect's code for a key, for a sign-in that ends in a key rather than tokens
 	Keyed func(ctx context.Context, client *http.Client, code, verifier string) (string, error)
+	// What requests under the tokens are held to when the provider serves a sign-in over the Responses API alone, nil for
+	// one serving a sign-in every path of its API as it serves a key
+	Responses *Responses
+}
+
+// What a provider serving a sign-in over the Responses API alone takes there. Every request under such a sign-in goes to
+// /responses streamed and stored nowhere, system turns as instructions, and without the sampling and limit fields these
+// providers refuse, whatever API the client spoke and whether or not it asked for a stream.
+type Responses struct {
+	// The namespace function tools go grouped under, empty for a provider taking them at the top level
+	Namespace string
+	// The instructions a request bringing none goes with, empty for a provider taking a request without any
+	Instructions string
 }
 
 // A device sign-in waiting for the person

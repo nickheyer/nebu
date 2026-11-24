@@ -159,6 +159,28 @@ func (c *Credentials) StreamOptions(sourceID string) (asks, refuses bool, server
 	return cat.StreamUsage, cat.NoStreamOptions, src.Spec().GetConfig()["endpoint"]
 }
 
+// What requests under the credential are held to when its provider serves a sign-in over the Responses API alone, nil for
+// a key and for a sign-in its provider serves every path of its API
+func (c *Credentials) Responses(cred *v1.ProviderCredential) *sources.Responses {
+	if cred.GetKind() != v1.CredentialKind_CREDENTIAL_KIND_SIGN_IN {
+		return nil
+	}
+	_, cat, err := c.provider(cred.GetSourceId())
+	if err != nil || cat == nil || cat.SignIn.OAuth == nil {
+		return nil
+	}
+	return cat.SignIn.OAuth.Responses
+}
+
+// The name a credential's source goes by in messages, its id when the source is gone
+func (c *Credentials) SourceName(cred *v1.ProviderCredential) string {
+	src, cat, err := c.provider(cred.GetSourceId())
+	if err != nil || cat == nil {
+		return cred.GetSourceId()
+	}
+	return sourceName(src, cat)
+}
+
 // The name a source goes by in messages
 func sourceName(src sources.Source, cat *sources.Catalog) string {
 	if name := src.Spec().GetName(); name != "" {
@@ -514,7 +536,7 @@ func (c *Credentials) StartSignIn(ctx context.Context, owner, sourceID, name, ag
 		for k, v := range params {
 			opts = append(opts, oauth2.SetAuthURLParam(k, strings.NewReplacer("{host}", c.host, "{nonce}", p.nonce).Replace(v)))
 		}
-		out.Url = config.AuthCodeURL(p.state, opts...)
+		out.Url, out.Redirect = config.AuthCodeURL(p.state, opts...), config.RedirectURL
 	}
 	out.Id, out.ExpiresAt = db.NewID(), timestamppb.New(p.expires)
 	c.mu.Lock()
@@ -558,11 +580,11 @@ func (c *Credentials) FinishSignIn(ctx context.Context, owner, id, callback stri
 		case err != nil:
 			return nil, err
 		case state == "" && o.Config.RedirectURL != "":
-			return nil, fmt.Errorf("%w: the address carries no state, copy the whole address the browser landed on", ErrProviderCredential)
+			return nil, fmt.Errorf("%w: that is not the whole address, after approving the browser lands on one beginning %s that fails to load, copy all of it from the address bar", ErrProviderCredential, o.Config.RedirectURL)
 		case state != "" && state != p.state:
 			return nil, fmt.Errorf("%w: the address belongs to another sign-in", ErrProviderCredential)
 		case o.Issues && issued == "" && p.client == "":
-			return nil, fmt.Errorf("%w: the address names no client, copy the whole address the browser landed on", ErrProviderCredential)
+			return nil, fmt.Errorf("%w: the address names no client, copy the whole of the address beginning %s from the address bar", ErrProviderCredential, o.Config.RedirectURL)
 		case p.client != "" && issued != "" && issued != p.client:
 			return nil, fmt.Errorf("%w: the address names another client than the one this sign-in was issued, start the sign-in again", ErrProviderCredential)
 		}

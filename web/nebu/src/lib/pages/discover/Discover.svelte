@@ -39,6 +39,7 @@
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import ColumnsIcon from 'phosphor-svelte/lib/ColumnsIcon';
 	import FunnelIcon from 'phosphor-svelte/lib/FunnelIcon';
+	import KeyIcon from 'phosphor-svelte/lib/KeyIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
 	import SortAscendingIcon from 'phosphor-svelte/lib/SortAscendingIcon';
@@ -107,7 +108,10 @@
 	]);
 	const activeFilters = $derived(applied.length);
 	const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}\n${m.repo}`)));
-	const warning = $derived([source?.error ?? '', caps?.authRequired && !caps.tokenPresent ? (caps.credentials.length ? 'no credential' : 'token missing') : '', ...warnings].filter(Boolean));
+	// A provider lists its models to a credential of the person's own, so without one there is nothing to search yet
+	const unsigned = $derived(caps !== undefined && caps.credentials.length > 0 && !caps.tokenPresent);
+	const sourceName = $derived(source?.source?.name || sourceId);
+	const warning = $derived([source?.error ?? '', caps?.authRequired && !caps.tokenPresent && !unsigned ? 'token missing' : '', ...warnings].filter(Boolean));
 
 	const list = new ListQuery<SearchHit, Params>(
 		async (p, cursor, limit, signal) => {
@@ -146,7 +150,7 @@
 	});
 
 	$effect(() => {
-		if (!known) return;
+		if (!known || unsigned) return;
 		const picked = Object.fromEntries(Object.entries(filters).filter(([, v]) => v.length).map(([k, v]) => [k, v.join(',')]));
 		void list.load({ sourceId, query, sort: sort ?? '', ascending, filters: picked, author });
 	});
@@ -310,6 +314,8 @@
 		<Empty icon={PlugsIcon} text="Sources failed to list" hint={catalog.error} action="Retry" onclick={() => catalog.refresh()} />
 	{:else if catalog.loaded && sources.length === 0}
 		<Empty icon={PlugsIcon} text="No sources" action="Add a source" href="/settings/sources" primary />
+	{:else if unsigned}
+		<Empty icon={KeyIcon} text={`No credential for ${sourceName}`} hint={`${sourceName} lists and serves its models under a credential of your own. Add a key or sign in, and its models show here.`} action="Add a credential" href="/profile" primary />
 	{:else if !list.settled}
 		<Skeleton rows={10} dot={false} primary="40ch" secondary={false} facts={shown.length || 4} action={false} menu={false} />
 	{:else if list.error}

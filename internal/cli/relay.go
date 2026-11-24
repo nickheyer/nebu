@@ -105,16 +105,21 @@ func (s *relayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	status, err := s.forward(w, r)
+	status, provider, err := s.forward(w, r)
 	attrs := []any{"method", r.Method, "path", r.URL.Path, "status", status, "took", time.Since(start).Round(time.Millisecond)}
+	// What the provider itself answered, when the relay answered the gateway another status in its place
+	if provider != 0 && provider != status {
+		attrs = append(attrs, "provider_status", provider)
+	}
 	if err != nil {
 		attrs = append(attrs, "err", err)
 	}
 	s.log.Info("relayed", attrs...)
 }
 
-// Sends the request on and streams the answer back as it arrives, an upstream 401 answered as 502
-func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, error) {
+// Sends the request on and streams the answer back as it arrives, an upstream 401 answered as 502, answering the status
+// written and the one the provider gave, zero when it was never reached
+func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, int, error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, relayMaxBody+1))
 	if err != nil {
 		return s.fail(w, http.StatusBadRequest, err)
@@ -158,15 +163,15 @@ func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, erro
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return status, werr
+				return status, resp.StatusCode, werr
 			}
 			flush.Flush()
 		}
 		if errors.Is(err, io.EOF) {
-			return status, nil
+			return status, resp.StatusCode, nil
 		}
 		if err != nil {
-			return status, err
+			return status, resp.StatusCode, err
 		}
 	}
 }
@@ -188,10 +193,10 @@ func (s *relayServer) renamed(body []byte) []byte {
 	return out
 }
 
-// Answers a failure the relay itself met in the shape providers answer theirs
-func (s *relayServer) fail(w http.ResponseWriter, status int, err error) (int, error) {
+// Answers a failure the relay itself met in the shape providers answer theirs, the provider not having answered
+func (s *relayServer) fail(w http.ResponseWriter, status int, err error) (int, int, error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"type": "relay_error", "message": "relay: " + err.Error()}})
-	return status, err
+	return status, 0, err
 }

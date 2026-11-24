@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -26,6 +27,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/scheduling/framework"
+	"github.com/nickheyer/nebu/pkg/sources"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -200,7 +202,7 @@ func (x *exchange) reset(before *v1.Trace) {
 	x.plan.close()
 	x.uncount()
 	x.in, x.dec, x.pool, x.credential, x.served, x.resp, x.sent = nil, nil, datalayer.Pool{}, nil, nil, framework.Response{}, nil
-	x.plan, x.changed, x.emulate, x.prompts, x.runtime, x.upstream = nil, false, false, nil, nil, v1.ApiFlavor_API_FLAVOR_UNSPECIFIED
+	x.plan, x.changed, x.emulate, x.prompts, x.runtime, x.upstream, x.rejected = nil, false, false, nil, nil, v1.ApiFlavor_API_FLAVOR_UNSPECIFIED, false
 }
 
 // Decides where the request goes and serves it, keeping back a refusal another decision may meet, and answers whether a decision
@@ -415,7 +417,7 @@ func (x *exchange) finish() {
 		// A chat or a prompt streamed to its end over the API stream_options belongs to, with no usage named
 		generated := x.t.GetKind() == v1.TraceKind_TRACE_KIND_CHAT || x.t.GetKind() == v1.TraceKind_TRACE_KIND_GENERATE
 		if in == 0 && out == 0 && generated && x.t.GetStream() && x.t.GetError() == "" && x.t.GetStatus() == http.StatusOK && x.r.Context().Err() == nil &&
-			x.upstream == v1.ApiFlavor_API_FLAVOR_OPENAI && x.r.URL.Path != chat.OpenAIResponses {
+			x.upstream == v1.ApiFlavor_API_FLAVOR_OPENAI && x.r.URL.Path != chat.OpenAIResponses && x.responsesOnly() == nil {
 			x.usageMissing()
 		}
 	}
@@ -447,13 +449,42 @@ func (x *exchange) received(ctx context.Context, resp *http.Response, ep datalay
 	return x.dir.ResponseReceived(ctx, x.dec, &x.resp, x.w.Header())
 }
 
-// The upstream protocol's codec, without native Responses or a tokenizer endpoint when the pool speaks gRPC
+// The upstream protocol's codec: the one for the Responses API alone when the provider serves the decision's credential
+// nothing else, and one without native Responses or a tokenizer endpoint when the pool speaks gRPC
 func (x *exchange) runtimeCodec() chat.Runtime {
 	rt := chat.RuntimeOf(x.upstream)
+	if rules := x.responsesOnly(); rules != nil {
+		rt = chat.ResponsesOnly(chat.ResponsesRules{Namespace: rules.Namespace, Instructions: rules.Instructions})
+	}
 	if x.pool.AppProtocol == datalayer.AppProtocolGRPC {
 		return grpcCodec{rt}
 	}
 	return rt
+}
+
+// What the decision's credential holds requests to when its provider serves it over the Responses API alone, nil for a
+// pool no provider serves and a credential served every path
+func (x *exchange) responsesOnly() *sources.Responses {
+	if x.credential == nil || x.upstream != v1.ApiFlavor_API_FLAVOR_OPENAI {
+		return nil
+	}
+	return x.g.creds.Responses(x.credential)
+}
+
+// Whether the runtime answers a request as a stream, as the client asked or because it answers no other way
+func (x *exchange) streams(req *chat.Request) bool {
+	return req.Stream || x.runtime.Traits().ResponsesOnly
+}
+
+// A runtime's refusal in its own words. A provider's rejection of the credential the request went under is said as that
+// and as the caller's to mend, a 403 as a caller keeping no credential gets, rather than as a fault of the upstream that
+// a client would try again.
+func (x *exchange) refusalOf(rt chat.Runtime, resp *http.Response, raw []byte) *chat.Failure {
+	if !x.rejected || x.credential == nil {
+		return chat.Refusal(rt, resp.StatusCode, resp.Header, raw)
+	}
+	said := cmp.Or(rt.ErrorMessage(raw), http.StatusText(http.StatusUnauthorized))
+	return &chat.Failure{Status: http.StatusForbidden, Code: chat.CodePermission, Message: fmt.Sprintf("%s rejected the credential %q this request went under (%s), check it or sign in again under Profile, Providers", x.g.creds.SourceName(x.credential), x.credential.GetName(), said)}
 }
 
 // An OpenAI codec for pools reached over gRPC, whose transcoders serve chat, completions and embeddings alone
@@ -474,6 +505,11 @@ func (x *exchange) chat(ctx context.Context) {
 	tokens := x.tokensMode()
 	creq, err := x.chatRequest()
 	native := same && !relay && !tokens && (x.r.URL.Path != chat.OpenAIResponses || traits.Responses)
+	// A provider serving the Responses API alone takes no other request as it is, and of those only one asking for the
+	// stream it answers with, a whole answer being gathered from that stream
+	if traits.ResponsesOnly && (x.r.URL.Path != chat.OpenAIResponses || err == nil && !creq.Stream) {
+		native = false
+	}
 	if err != nil {
 		if !native {
 			x.fail(err)
@@ -641,7 +677,7 @@ func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 		resp.Body.Close()
 		x.sink.refused(raw)
 		x.resp.Err = fmt.Errorf("upstream answered %d", resp.StatusCode)
-		x.refuse(upstreamFailure(x.model, chat.Refusal(x.runtimeCodec(), resp.StatusCode, resp.Header, raw)))
+		x.refuse(upstreamFailure(x.model, x.refusalOf(x.runtimeCodec(), resp, raw)))
 		return
 	}
 	var rt chat.Runtime
@@ -1043,7 +1079,7 @@ func (x *exchange) call(ctx context.Context, req *chat.Request, path string, bod
 		return nil, resp.StatusCode, err
 	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, resp.StatusCode, chat.Refusal(x.runtime, resp.StatusCode, resp.Header, raw)
+		return nil, resp.StatusCode, x.refusalOf(x.runtime, resp, raw)
 	}
 	res, err := x.runtime.ParseResult(req, raw)
 	return res, resp.StatusCode, err

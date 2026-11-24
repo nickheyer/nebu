@@ -569,6 +569,7 @@ func Describe(rt Runtime) *v1.Runtime {
 		Api:          rt.API(),
 		Requirements: rt.Requirements(),
 		Params:       rt.Params(),
+		Remote:       rt.Policy() == nil,
 	}
 	for _, m := range rt.Methods() {
 		out.Methods = append(out.Methods, &v1.InstallMethod{Id: m.ID, Description: m.Description, Kind: m.Kind, Binaries: m.Binaries, Releases: m.Releases, RecipeId: m.RecipeID})

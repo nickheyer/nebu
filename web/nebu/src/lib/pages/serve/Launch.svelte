@@ -17,6 +17,7 @@
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { ModelSort, type StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
+	import { catalog } from '#lib/state/catalog.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import Collapse from '#lib/ui/Collapse.svelte';
 	import Dialog from '#lib/ui/Dialog.svelte';
@@ -142,6 +143,14 @@
 	const usable = $derived(compatible.filter((r) => installs.some((i) => i.runtimeId === r.runtime?.id)));
 	const runtime = $derived(usable.find((r) => r.runtime?.id === runtimeId));
 	const runtimeParams = $derived(runtime?.runtime?.params ?? []);
+	// A provider's model runs at the provider, its relay loading nothing here: no memory to plan, no parameters, no mesh to spread over
+	const remote = $derived(runtime?.runtime?.remote === true);
+	// The source the model came from, which for a provider's model is who serves it and whose credential its requests carry
+	const provider = $derived(model ? catalog.sources.find((s) => s.source?.id === model.sourceId) : undefined);
+	const providerName = $derived(provider?.source?.name || model?.sourceId || '');
+	// Whether the person launching keeps a credential for the provider, unknown until the sources are listed
+	const credentialed = $derived(provider?.capabilities ? provider.capabilities.tokenPresent : undefined);
+	const servedContext = $derived(Number(model?.descriptor?.params['n_ctx_train'] ?? 0));
 
 	const nodeDevices = $derived.by((): Option<string>[] => {
 		const out: Option<string>[] = [];
@@ -209,7 +218,7 @@
 			slotId: slot?.id ?? '',
 			// A slot takes the form's settings whole, the ones cleared here cleared on the slot too
 			exact: slot !== undefined,
-			span,
+			span: remote ? [] : span,
 			shape,
 			profile,
 			free,
@@ -273,6 +282,7 @@
 
 	onMount(async () => {
 		if (init.model) void loadKey(init.model);
+		void catalog.load();
 		try {
 			runtimes = (await rpc.runtimes.listRuntimes({})).runtimes;
 		} catch (err) {
@@ -379,9 +389,20 @@
 		});
 	});
 
-	// Plans again a moment after the model, the runtime, a parameter or a memory choice changes
+	// Plans again a moment after the model, the runtime, a parameter or a memory choice changes, a provider's model having nothing to plan
 	$effect(() => {
 		if (!modelId || runtime === undefined) return;
+		if (remote && !(planOnly && inMesh)) {
+			planAbort?.abort();
+			untrack(() => {
+				plan = undefined;
+				formationPlan = undefined;
+				paramStates = [];
+				planError = '';
+				planWarning = '';
+			});
+			return;
+		}
 		void [free, span, shape, profile, slot?.id, runtimeId, installId, JSON.stringify(params)];
 		const timer = setTimeout(() => void estimate(), 250);
 		return () => clearTimeout(timer);
@@ -466,7 +487,7 @@
 				});
 				followTask(res.task);
 				leave(res.instance ? `/serve/${encodeURIComponent(res.instance.id)}` : '/serve');
-			} else if (inMesh && span.length) {
+			} else if (inMesh && span.length && !remote) {
 				const res = await rpc.mesh.runFormation({ run: req });
 				followTask(res.task);
 				leave(res.formation ? `/mesh/formations/${encodeURIComponent(res.formation.id)}` : '/mesh/formations');
@@ -510,6 +531,21 @@
 				<Switch bind:checked={free} label="Count only free memory" compact />
 			</div>
 			{#if planWarning}<p class="warning-text secondary">{planWarning}</p>{/if}
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet served()}
+	<div class="memory">
+		<div class="verdict">
+			<span class="reading"><Dot lamp="success" /><span>Served by {providerName}</span>{#if servedContext > 0}<span class="muted">{contextLabel(servedContext)} context</span>{/if}</span>
+			<span class="fill"></span>
+			<span class="secondary">Nothing loads on this host</span>
+		</div>
+		{#if credentialed === false}
+			<p class="warning-text secondary">You keep no credential for {providerName}, so your own requests to this model are refused until you add one in <a href="/profile">Profile</a>.</p>
+		{:else}
+			<p class="secondary">Each request goes to {providerName} under the credential of whoever sent it.</p>
 		{/if}
 	</div>
 {/snippet}
@@ -565,15 +601,17 @@
 				{/if}
 				<RuntimeFields runtimes={usable} bind:runtimeId bind:installId />
 			</FieldRow>
-			{@render memory()}
+			{#if remote && !(planOnly && inMesh)}{@render served()}{:else}{@render memory()}{/if}
 			{#if inMesh && planOnly}{@render mesh()}{/if}
 			<div class="more">
-				<Collapse label="Parameters" heading indent={false}>
-					<Stack gap={24}>
-						<ParamsForm params={runtimeParams} bind:values={params} supplied={plan?.params} states={paramStates} />
-						<Text bind:value={args} label="Extra arguments" max={512} mono />
-					</Stack>
-				</Collapse>
+				{#if !remote}
+					<Collapse label="Parameters" heading indent={false}>
+						<Stack gap={24}>
+							<ParamsForm params={runtimeParams} bind:values={params} supplied={plan?.params} states={paramStates} />
+							<Text bind:value={args} label="Extra arguments" max={512} mono />
+						</Stack>
+					</Collapse>
+				{/if}
 				{#if swap}
 					<Collapse label="Rollout" heading indent={false}>
 						<Stack gap={12}>
@@ -598,14 +636,14 @@
 							<FieldRow wide>
 								<Duration bind:value={idleUnload} base="s" max={86_400} label="Unload when idle for" emptyZero />
 							</FieldRow>
-							{#if live.host?.facts['criu']}
+							{#if live.host?.facts['criu'] && !remote}
 								<Switch bind:checked={snapshot} label="Snapshot after load" info="Later launches restore it instead of loading again" />
 							{/if}
 							<PolicyFields bind:policy bind:profile={routeProfile} />
 						</Stack>
 					</Collapse>
 				{/if}
-				{#if inMesh && !planOnly}
+				{#if inMesh && !planOnly && !remote}
 					<Collapse label="Mesh" heading indent={false}>{@render mesh()}</Collapse>
 				{/if}
 				{#if !planOnly}

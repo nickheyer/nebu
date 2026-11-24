@@ -322,7 +322,7 @@
 	{/snippet}
 </Dialog>
 
-<Dialog bind:open={signOpen} title={again ? `Sign in again, ${again.name}` : 'Sign in'} confirm={pending?.code ? undefined : pending ? 'Finish' : 'Continue'} {busy} needs={!sourceId ? 'Pick a source' : pending && !pending.code && !landed.trim() ? 'Paste the address' : ''} onconfirm={signIn} onclose={closeSignIn}>
+<Dialog bind:open={signOpen} title={again ? `Sign in again, ${again.name}` : 'Sign in'} confirm={pending?.code ? undefined : pending ? 'Finish' : 'Continue'} {busy} needs={!sourceId ? 'Pick a source' : pending && !pending.code && !landed.trim() ? (pending.redirect ? 'Paste the address' : 'Paste the code') : ''} onconfirm={signIn} onclose={closeSignIn}>
 	{#if pending?.code}
 		<p class="secondary">Open the page, enter the code, and approve</p>
 		<a href={pending.url} target="_blank" rel="noreferrer">{pending.url}</a>
@@ -330,10 +330,15 @@
 			<Screen padding={8}><span class="value">{pending.code}</span></Screen>
 			<CopyButton text={pending.code} />
 		</div>
-	{:else if pending}
-		<p class="secondary">Open the page and approve, then paste the address it lands on, or the code it shows</p>
+	{:else if pending?.redirect}
+		<!-- The provider sends the browser to an address on the person's own machine, where nothing answers -->
+		<p class="secondary">Open the page and approve. Your browser then lands on an address beginning <span class="mono">{pending.redirect}</span> and says the page cannot be reached, which is expected. Copy that whole address from the address bar and paste it here.</p>
 		<a href={pending.url} target="_blank" rel="noreferrer">Open sign-in page</a>
-		<Text bind:value={landed} label="Address or code" required />
+		<Text bind:value={landed} label="Address the browser landed on" placeholder={`${pending.redirect}?code=…`} required />
+	{:else if pending}
+		<p class="secondary">Open the page and approve, then paste the code it shows</p>
+		<a href={pending.url} target="_blank" rel="noreferrer">Open sign-in page</a>
+		<Text bind:value={landed} label="Code" required />
 	{:else if again}
 		<p class="secondary">Signs in to {sourceName(sourceId)} again with the same account and replaces this sign-in's tokens, its budgets and place kept</p>
 	{:else}

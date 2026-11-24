@@ -15,7 +15,7 @@ import (
 
 // Opens the runtime's answer to one rendered round, the first round relayed or tried down the decision's endpoints
 func (x *exchange) openRound(ctx context.Context, req *chat.Request, path string, body []byte, round int) (*http.Response, error) {
-	out := &upstream{method: http.MethodPost, path: path, body: body, stream: req.Stream, header: x.runtimeHeaders()}
+	out := &upstream{method: http.MethodPost, path: path, body: body, stream: x.streams(req), header: x.runtimeHeaders()}
 	if round > 0 {
 		resp, _, err := x.attempt(ctx, out, []datalayer.Endpoint{x.served})
 		return resp, err
@@ -27,7 +27,8 @@ func (x *exchange) openRound(ctx context.Context, req *chat.Request, path string
 		resp, ep, err = x.relay(ctx, out, pre)
 	} else {
 		resp, ep, err = x.attempt(ctx, out, x.dec.Endpoints)
-		if err == nil && req.Stream && !req.NoStreamOptions && x.upstream == v1.ApiFlavor_API_FLAVOR_OPENAI && x.streamOptionsDoubted(resp.StatusCode) {
+		// A body for the Responses API alone names no stream_options, so nothing it is answered says how the provider takes them
+		if err == nil && req.Stream && !req.NoStreamOptions && x.upstream == v1.ApiFlavor_API_FLAVOR_OPENAI && !x.runtime.Traits().ResponsesOnly && x.streamOptionsDoubted(resp.StatusCode) {
 			// The round goes once more rendered without the option
 			io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
 			resp.Body.Close()
@@ -237,9 +238,9 @@ func (x *exchange) round(resp *http.Response, req *chat.Request, emit func(chat.
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		x.sink.refused(raw)
-		return nil, chat.Refusal(x.runtime, resp.StatusCode, resp.Header, raw)
+		return nil, x.refusalOf(x.runtime, resp, raw)
 	}
-	if req.Stream {
+	if x.streams(req) {
 		var final *chat.Result
 		var thinking strings.Builder
 		err := x.runtime.ParseStream(resp.Body, func(ev chat.Event) error {

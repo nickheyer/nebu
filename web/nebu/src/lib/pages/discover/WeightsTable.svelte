@@ -33,7 +33,8 @@
 		</div>
 		{#each groups as g (g.name)}
 			{@const name = g.name || g.formatId}
-			{@const what = contexts.get({ sourceId, repo, revision, group: g.name })?.what}
+			{@const known = contexts.get({ sourceId, repo, revision, group: g.name })}
+			{@const what = known?.what}
 			<div class="row">
 				<span class="icon"><CubeIcon size={18} /></span>
 				<span class="name">
@@ -41,7 +42,8 @@
 					{#if what}<span class="what">{what}</span>{/if}
 				</span>
 				<span class="context"><span class="cap">Fits in</span><ContextPill {contexts} of={{ sourceId, repo, revision, group: g.name }} /></span>
-				<span class="size">{bytes(g.bytes)}</span>
+				<!-- A provider's model is a reference a few bytes long, which is no size of the model -->
+				<span class="size">{known?.fit?.remote ? '' : bytes(g.bytes)}</span>
 				<span class="act">
 					{#if stored.has(g.name)}
 						<RowAction label="Launch" href={launchHref({ sourceId, repo, group: g.name })} play />

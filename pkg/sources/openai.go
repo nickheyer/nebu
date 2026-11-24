@@ -10,7 +10,9 @@ import (
 // loopback address the browser lands on copied back: https://developers.openai.com/siwc/token-sharing-open-source/sign-in,
 // refreshed and revoked as https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions says, with the
 // keys, issuer and revocation endpoint of https://auth.openai.com/.well-known/openid-configuration. Plan usage takes the
-// Responses API alone, stored false and streamed: https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations
+// Responses API alone, stored false and streamed, system turns as instructions, function tools grouped in a namespace, and
+// no max_output_tokens, temperature or top_p: https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations.
+// Any other path answers 401 rejected_by_access_enforcement, so the gateway renders every chat under a sign-in for it.
 var openai = modelCatalog(v1.SourceKind_SOURCE_KIND_OPENAI, "openai", "OpenAI", "https://api.openai.com/v1", v1.ApiFlavor_API_FLAVOR_OPENAI, &SignIn{
 	Header: "Authorization",
 	Scheme: "Bearer",
@@ -30,6 +32,7 @@ var openai = modelCatalog(v1.SourceKind_SOURCE_KIND_OPENAI, "openai", "OpenAI", 
 		JWKS:      "https://auth.openai.com/.well-known/jwks.json",
 		Issuer:    "https://auth.openai.com",
 		Revoke:    "https://auth.openai.com/api/accounts/oauth/revoke",
+		Responses: &Responses{Namespace: "functions"},
 	},
 })
 

@@ -580,11 +580,21 @@ func (m *Manager) replan(ctx context.Context, logf func(string, ...any), in *ins
 	in.update(func(r *v1.Instance) { r.Plan = plan })
 }
 
+// Whether a runtime loads nothing of the model onto this host, as the relay of a provider's model
+func (m *Manager) remote(runtimeID string) bool {
+	rt, err := m.Runtimes.Get(runtimeID)
+	return err == nil && rt.Policy() == nil
+}
+
 // Reads the chat template the launch runs, or for a diffusion runtime the generation modes it serves
 func (m *Manager) readTemplate(ctx context.Context, logf func(string, ...any), in *instance) (*v1.ChatTemplate, error) {
 	rec := in.snapshot()
 	if m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
 		return nil, m.readModes(ctx, logf, in)
+	}
+	// A provider renders the prompts of its own model, so the relay of one has no template to read
+	if m.remote(rec.GetRuntimeId()) {
+		return nil, nil
 	}
 	tpl := chattemplate.Describe(m.launchTemplate(rec))
 	switch {

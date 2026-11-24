@@ -34,6 +34,8 @@ type fakeCreds struct {
 	asked []string
 	// How the provider is said to take stream_options
 	asks, refuses bool
+	// What the provider holds requests under the keys to when it serves them over the Responses API alone
+	responses *sources.Responses
 }
 
 func (f *fakeCreds) Headers(_ context.Context, owner, sourceID, _ string, sent http.Header) (*v1.ProviderCredential, map[string]string, error) {
@@ -59,6 +61,10 @@ func (*fakeCreds) Answered(*v1.ProviderCredential, string, int, http.Header, tim
 func (*fakeCreds) Record(*v1.ProviderCredential, string, int, int, int) {}
 
 func (f *fakeCreds) StreamOptions(string) (bool, bool, string) { return f.asks, f.refuses, "" }
+
+func (f *fakeCreds) Responses(*v1.ProviderCredential) *sources.Responses { return f.responses }
+
+func (*fakeCreds) SourceName(cred *v1.ProviderCredential) string { return cred.GetSourceId() }
 
 // The caller's key reaches the upstream in place of the client's own token, and a caller with none is refused before dispatch
 func TestProviderCredentialSignsTheRequest(t *testing.T) {

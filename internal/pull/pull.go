@@ -84,14 +84,19 @@ func (p *Puller) sizes(landings []*landing) (total, need uint64) {
 	return total, need
 }
 
-// Checks disk space, including space recoverable through eviction.
+// Checks disk space, including space recoverable through eviction. The space kept free is kept from weights: a provider's
+// model lands as a reference of a few bytes, which a disk below that floor still takes.
 func (p *Puller) room(landings []*landing) error {
 	_, need := p.sizes(landings)
-	return p.roomBytes(need)
+	floor := p.MinFree.Load()
+	if !slices.ContainsFunc(landings, func(l *landing) bool { return sources.ProviderOf(l.src.Spec().GetKind()) == nil }) {
+		floor = 0
+	}
+	return p.roomBytes(need, floor)
 }
 
-// Checks disk space for a number of bytes, including space recoverable through eviction
-func (p *Puller) roomBytes(need uint64) error {
+// Checks disk space for a number of bytes with a floor left free after them, including space recoverable through eviction
+func (p *Puller) roomBytes(need, floor uint64) error {
 	st, err := host.Stat(p.Store.Root())
 	if err != nil {
 		return fmt.Errorf("room in %s: %w", p.Store.Root(), err)
@@ -101,8 +106,11 @@ func (p *Puller) roomBytes(need uint64) error {
 		return fmt.Errorf("room in %s: %w", p.Store.Root(), err)
 	}
 	free := st.GetFreeBytes() + freeable
-	if need+p.MinFree.Load() <= free {
+	if need+floor <= free {
 		return nil
+	}
+	if floor > 0 {
+		return fmt.Errorf("%w: needs %s with %s kept free, %s free on %s", store.ErrNoRoom, estimate.Human(need), estimate.Human(floor), estimate.Human(st.GetFreeBytes()), st.GetPath())
 	}
 	return fmt.Errorf("%w: needs %s, %s free on %s", store.ErrNoRoom, estimate.Human(need), estimate.Human(st.GetFreeBytes()), st.GetPath())
 }

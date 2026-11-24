@@ -113,6 +113,8 @@ message MemoryPlan {
   double cache_ratio = 13;
   // Host memory the run fills as it serves, beyond its weights, cache and overhead, counted in its host pools
   uint64 reserve_bytes = 14;
+  // The model runs where its provider serves it, so the plan places nothing on this host and fits any
+  bool remote = 15;
 }
 
 // Learned correction for one runtime and architecture

@@ -122,7 +122,7 @@ func rank(v v1.FitVerdict) int {
 // Plans the request across the mesh
 func Plan(req Request, m *Mesh) (*v1.FormationPlan, error) {
 	if req.Runtime == nil || req.Runtime.Policy() == nil {
-		return nil, fmt.Errorf("%w: the runtime has no estimate policy", ErrPlan)
+		return nil, fmt.Errorf("%w: the runtime loads nothing onto a host, as the relay of a provider's model, so there is nothing to place across a mesh", ErrPlan)
 	}
 	if req.Descriptor == nil {
 		return nil, fmt.Errorf("%w: no descriptor", ErrPlan)

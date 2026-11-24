@@ -1,4 +1,5 @@
 // The gateway's HTTP surface the chat page talks to, chat completions in three dialects, images, videos and models
+import { rpc } from '#lib/api/transport.js';
 
 export type Dialect = 'openai' | 'anthropic' | 'ollama';
 
@@ -42,20 +43,59 @@ export type ModelEntry = { id: string; ready: boolean; capabilities: string[]; i
 export class GatewayError extends Error {
 	constructor(
 		public status: number,
-		message: string
+		message: string,
+		// The trace of the request, when it was found by another way than the answer's own header
+		public trace = ''
 	) {
 		super(message);
 	}
 }
 
-export async function failure(res: Response): Promise<GatewayError> {
+// The names of the statuses a proxy answers with, which an HTTP/2 answer carries no reason phrase for
+const statusNames: Record<number, string> = {
+	413: 'Content Too Large',
+	500: 'Internal Server Error',
+	502: 'Bad Gateway',
+	503: 'Service Unavailable',
+	504: 'Gateway Timeout',
+	520: 'Unknown Error',
+	521: 'Web Server Is Down',
+	522: 'Connection Timed Out',
+	523: 'Origin Is Unreachable',
+	524: 'A Timeout Occurred'
+};
+
+// What the gateway recorded of the request it gave an id, asked a few times while its trace is still being finished
+async function recorded(requestId: string): Promise<{ id: string; error: string } | undefined> {
+	for (let attempt = 0; attempt < 4; attempt++) {
+		if (attempt > 0) await new Promise((done) => setTimeout(done, 200));
+		try {
+			const res = await rpc.gateway.listTraces({ query: requestId, limit: 1 });
+			const trace = res.traces.find((t) => t.requestId === requestId);
+			if (trace?.finishedAt) return { id: trace.id, error: trace.error };
+		} catch {
+			return undefined;
+		}
+	}
+	return undefined;
+}
+
+// Why an answer failed, in the gateway's own words. A proxy in front of nebu answers some failures with a page of its
+// own, as Cloudflare does every 502 and 504, the gateway's words and its trace header lost with them. That page is never
+// shown: the request's id finds what nebu recorded of it, and failing that the status says who answered.
+export async function failure(res: Response, requestId = ''): Promise<GatewayError> {
 	const text = await res.text();
 	try {
 		const body = JSON.parse(text) as { error?: { message?: string } | string };
 		const msg = typeof body.error === 'string' ? body.error : body.error?.message;
 		return new GatewayError(res.status, msg || text || res.statusText);
 	} catch {
-		return new GatewayError(res.status, text || res.statusText);
+		const markup = /^\s*</.test(text) || (res.headers.get('Content-Type') ?? '').includes('html');
+		if (!markup) return new GatewayError(res.status, text.trim() || res.statusText || `status ${res.status}`);
+		const status = `${res.status} ${res.statusText || statusNames[res.status] || ''}`.trim();
+		const own = requestId ? await recorded(requestId) : undefined;
+		if (own?.error) return new GatewayError(res.status, own.error, own.id);
+		return new GatewayError(res.status, `${status}, answered by a proxy in front of nebu with a page of its own in place of nebu's answer`, own?.id ?? '');
 	}
 }
 
@@ -204,10 +244,16 @@ function num(v: unknown): number {
 // Runs one chat round against the gateway, yielding text, tool calls, usage and the stop reason as they arrive
 export async function* chat(p: ChatParams, messages: ChatMessage[], approve: boolean, signal: AbortSignal): AsyncGenerator<StreamEvent> {
 	const { path, body: payload } = body(p, messages);
-	const res = await fetch(path, { method: 'POST', headers: headers(p, approve), body: JSON.stringify(payload), signal, credentials: 'same-origin' });
+	// The id the gateway keeps the request under, which finds its trace when the answer comes back without the trace header
+	const requestId = crypto.randomUUID().replaceAll('-', '');
+	const res = await fetch(path, { method: 'POST', headers: { ...headers(p, approve), 'X-Request-Id': requestId }, body: JSON.stringify(payload), signal, credentials: 'same-origin' });
 	const trace = res.headers.get('X-Nebu-Trace');
 	if (trace) yield { type: 'trace', id: trace };
-	if (!res.ok) throw await failure(res);
+	if (!res.ok) {
+		const err = await failure(res, requestId);
+		if (!trace && err.trace) yield { type: 'trace', id: err.trace };
+		throw err;
+	}
 	if (!p.stream) {
 		const doc = (await res.json()) as Json;
 		yield* whole(p.dialect, doc);

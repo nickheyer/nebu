@@ -339,3 +339,36 @@ func TestEstimatePlansAStoredGroupWithoutItsSource(t *testing.T) {
 		t.Fatal("a group the store lacks planned without its source")
 	}
 }
+
+// A provider's model loads nothing onto this host, so its relay has no memory to plan: the estimate a launch asks for
+// answers that it fits rather than failing for want of a plan
+func TestEstimateOfAProvidersModelFits(t *testing.T) {
+	i := inspector(t)
+	d := &v1.Descriptor{FormatId: "openai", Group: "openai", Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Metadata: map[string]string{descriptor.RevisionKey: descriptor.Revision, "relay.endpoint": "https://api.openai.com/v1", "relay.api": "openai", "relay.model": "gpt-6.1-terra"}}
+	i.Stored = func() ([]*v1.StoredModel, error) {
+		return []*v1.StoredModel{{SourceId: "openai", Repo: "gpt-6.1-terra", Group: "openai", FormatId: "openai", Descriptor_: d}}, nil
+	}
+	for _, free := range []bool{true, false} {
+		est, err := i.Estimate(context.Background(), &v1.EstimateRequest{SourceId: "openai", Repo: "gpt-6.1-terra", Group: "openai", RuntimeId: "relay-openai", Free: free})
+		if err != nil {
+			t.Fatalf("the estimate of a provider's model failed: %v", err)
+		}
+		plan := est.GetPlan()
+		if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || !plan.GetRemote() || plan.GetDetail() != Unplanned || len(plan.GetPools()) != 0 || plan.GetWeightsBytes() != 0 || plan.GetAgainstFree() != free {
+			t.Fatalf("plan %v", plan)
+		}
+		if est.GetDescriptor_().GetMetadata()["relay.model"] != "gpt-6.1-terra" || est.GetWarning() != "" || len(est.GetMissing()) != 0 {
+			t.Fatalf("estimate %v", est)
+		}
+	}
+	rt, err := i.Runtimes.Get("relay-openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runtimes.Describe(rt).GetRemote() {
+		t.Fatal("the relay is not described as remote, so a launch would draw memory for it")
+	}
+	if local, _ := i.Runtimes.Get("llamacpp"); runtimes.Describe(local).GetRemote() {
+		t.Fatal("llama.cpp is described as remote")
+	}
+}

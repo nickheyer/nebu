@@ -186,6 +186,8 @@ message Runtime {
   ModelKind kind = 9;
   // Bit assigned to this runtime in catalog and stored-model runtime masks.
   uint32 bit = 10;
+  // Serves a model that runs elsewhere, as a provider's does, loading nothing onto this host, so a launch has no memory to plan
+  bool remote = 11;
 }
 
 // Lists formats

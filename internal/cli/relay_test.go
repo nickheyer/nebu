@@ -89,4 +89,8 @@ func TestRelayAnswersAProviderRefusalAsBadGateway(t *testing.T) {
 	if strings.Contains(logs.String(), "stale-key") {
 		t.Fatalf("a header value reached the log: %s", logs)
 	}
+	// The log says what the provider itself answered beside the status the gateway was given in its place
+	if !strings.Contains(logs.String(), "status=502") || !strings.Contains(logs.String(), "provider_status=401") {
+		t.Fatalf("the provider's own status is missing from the log: %s", logs)
+	}
 }
