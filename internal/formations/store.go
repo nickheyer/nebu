@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/tasks"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -167,7 +168,9 @@ func (m *Manager) PullTo(ctx context.Context, nodeID string, req *v1.PullRequest
 		labels["files"] = strconv.Itoa(len(paths))
 		title = fmt.Sprintf("pull %s %d files onto %s", req.GetRepo(), len(paths), rec.GetName())
 	}
+	// The pull outlives the request, so whose credentials sign it goes with its task
+	owner := auth.SignedFor(ctx)
 	return m.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
-		return m.ensure(ctx, h, h.Progress, rec.GetId(), req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRevision(), req.GetPaths(), req.GetSlot())
+		return m.ensure(m.Credentials.Sign(ctx, owner), h, h.Progress, rec.GetId(), req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRevision(), req.GetPaths(), req.GetSlot())
 	}), nil
 }

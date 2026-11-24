@@ -295,7 +295,7 @@ func runCredentialsList(ctx context.Context, e *env, args []string) error {
 func runCredentialsBudgets(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("credentials budgets")
 	var set, drop multi
-	fs.Var(&set, "budget", "a budget as name=N,unit=U,limit=L,period=P and any of seconds, start, zone, window, reserve, cached, model, repeatable, replacing one of the same name")
+	fs.Var(&set, "budget", "a budget as name=N,unit=U,limit=L,period=P and any of seconds, start, zone, window, reserve, cached, model, repeatable, replacing one of the same name; a rolling period spans 300 to 8640000 seconds, and unit percent-used counts the percent of window used in place of a period")
 	fs.Var(&drop, "drop", "the name of a budget to remove, repeatable")
 	signIn := accountFlags(e, fs)
 	positional, err := e.parse(fs, args, 1, 1, "credentials budgets <id> [--budget SPEC]... [--drop NAME]... "+tokenSignIn)
@@ -526,15 +526,16 @@ func runCredentialsUpdate(ctx context.Context, e *env, args []string) error {
 func runCredentialsSignIn(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("credentials signin")
 	name := fs.String("name", "", "label, the source's name when empty")
+	again := fs.String("again", "", "the id of a sign-in with the source to authorize again in place with the same account, a new credential when empty")
 	signIn := accountFlags(e, fs)
-	positional, err := e.parse(fs, args, 1, 1, "credentials signin <source> [--name N] "+tokenSignIn)
+	positional, err := e.parse(fs, args, 1, 1, "credentials signin <source> [--name N] [--again ID] "+tokenSignIn)
 	if err != nil {
 		return err
 	}
 	if err := signIn(ctx); err != nil {
 		return err
 	}
-	started, err := e.cl.auth.StartSignIn(ctx, connect.NewRequest(&v1.StartSignInRequest{SourceId: positional[0], Name: *name}))
+	started, err := e.cl.auth.StartSignIn(ctx, connect.NewRequest(&v1.StartSignInRequest{SourceId: positional[0], Name: *name, CredentialId: *again}))
 	if err != nil {
 		return err
 	}
@@ -570,8 +571,12 @@ func runCredentialsRemove(ctx context.Context, e *env, args []string) error {
 	if err := signIn(ctx); err != nil {
 		return err
 	}
-	if _, err := e.cl.auth.DeleteCredential(ctx, connect.NewRequest(&v1.DeleteCredentialRequest{Id: positional[0]})); err != nil {
+	resp, err := e.cl.auth.DeleteCredential(ctx, connect.NewRequest(&v1.DeleteCredentialRequest{Id: positional[0]}))
+	if err != nil {
 		return err
+	}
+	if resp.Msg.GetRevocationUnconfirmed() {
+		fmt.Fprintln(e.errw, "the provider has yet to confirm ending the sign-in's session, the daemon keeps asking; disconnect nebu at the provider to end it now")
 	}
 	e.text("removed %s\n", positional[0])
 	return nil

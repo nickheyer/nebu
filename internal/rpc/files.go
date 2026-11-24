@@ -32,9 +32,10 @@ const (
 	grantBodyMax = 16 << 10
 )
 
-// One file a download link opens
+// One file a download link opens, under the provider credentials of whoever asked for the link
 type grant struct {
 	key     string
+	owner   string
 	expires time.Time
 }
 
@@ -44,9 +45,11 @@ type grant struct {
 type files struct {
 	inspector *inspect.Inspector
 	auth      *auth.Guard
-	log       *slog.Logger
-	mu        sync.Mutex
-	grants    map[string]grant
+	// Signs what the file is read through with the caller's provider credentials, nil signing nothing
+	credentials *auth.Credentials
+	log         *slog.Logger
+	mu          sync.Mutex
+	grants      map[string]grant
 }
 
 func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,20 +63,25 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	ctx := r.Context()
 	if code := q.Get("grant"); code != "" {
-		if !f.redeem(code, grantKey(q)) {
+		owner, ok := f.redeem(code, grantKey(q))
+		if !ok {
 			http.Error(w, "the download link expired or names another file, ask for a new one", http.StatusUnauthorized)
 			return
 		}
+		ctx = f.credentials.Sign(ctx, owner)
 	} else if !f.allowed(w, r) {
 		return
+	} else {
+		ctx = f.credentials.SignCaller(ctx, f.auth, r.Header)
 	}
 	source, repo, revision, file := q.Get("source"), q.Get("repo"), q.Get("revision"), q.Get("path")
 	if source == "" || repo == "" || file == "" {
 		http.Error(w, "source, repo, and path are required", http.StatusBadRequest)
 		return
 	}
-	src, model, err := f.inspector.Resolve(r.Context(), source, repo, revision)
+	src, model, err := f.inspector.Resolve(ctx, source, repo, revision)
 	if err != nil {
 		f.fail(w, err)
 		return
@@ -90,7 +98,7 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Close the source blob when the response ends.
-	blob, err := src.Open(r.Context(), model, artifact)
+	blob, err := src.Open(ctx, model, artifact)
 	if err != nil {
 		f.fail(w, err)
 		return
@@ -161,19 +169,19 @@ func (f *files) issue(w http.ResponseWriter, r *http.Request) {
 			delete(f.grants, c)
 		}
 	}
-	f.grants[code] = grant{key: grantKey(q), expires: now.Add(grantTTL)}
+	f.grants[code] = grant{key: grantKey(q), owner: f.auth.CredentialOwner(r.Header), expires: now.Add(grantTTL)}
 	f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]string{"url": filesPath + "?" + q.Encode()})
 }
 
-// Whether a link is live and names the file asked for
-func (f *files) redeem(code, key string) bool {
+// The owner a live link naming the file asked for was made for, false for any other
+func (f *files) redeem(code, key string) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	g, ok := f.grants[code]
-	return ok && g.key == key && time.Now().Before(g.expires)
+	return g.owner, ok && g.key == key && time.Now().Before(g.expires)
 }
 
 // Preserves source error status codes, defaulting to 502.

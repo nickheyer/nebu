@@ -320,7 +320,7 @@ func (x *exchange) inbound() *requestcontrol.Inbound {
 	if x.doc != nil {
 		body = x.doc
 	}
-	return &requestcontrol.Inbound{ID: x.id, Method: x.r.Method, Path: x.r.URL.Path, Headers: h, Identity: x.who.fairness, Body: body, ReceivedAt: x.start, Route: x.routeName(), MaxInFlight: int(x.policy.GetMaxInFlight())}
+	return &requestcontrol.Inbound{ID: x.id, Method: x.r.Method, Path: x.r.URL.Path, Headers: h, Identity: x.who.fairness, Body: body, ReceivedAt: x.start, Route: x.routeName(), MaxInFlight: int(x.policy.GetMaxInFlight()), Metered: &x.metered}
 }
 
 // Whether the parsed body names a model
@@ -404,13 +404,20 @@ func (x *exchange) finish() {
 		}
 	}
 	g.metrics.ObserveRequest(x.r.Context(), q)
-	if x.credential != nil && x.dec != nil {
+	// A token count makes no generation under a credential, so none of it is recorded as the credential's usage
+	if x.credential != nil && x.dec != nil && x.t.GetKind() != v1.TraceKind_TRACE_KIND_COUNT {
 		_, model, _ := providerModel(x.dec.Pool.Model)
 		in, out, cached := x.resp.PromptTokens, x.resp.OutputTokens, x.resp.CachedTokens
 		if res := x.sink.res; res != nil {
 			in, out, cached = res.Usage.In, res.Usage.Out, res.Usage.Cached
 		}
 		g.creds.Record(x.credential, model, in, out, cached)
+		// A chat or a prompt streamed to its end over the API stream_options belongs to, with no usage named
+		generated := x.t.GetKind() == v1.TraceKind_TRACE_KIND_CHAT || x.t.GetKind() == v1.TraceKind_TRACE_KIND_GENERATE
+		if in == 0 && out == 0 && generated && x.t.GetStream() && x.t.GetError() == "" && x.t.GetStatus() == http.StatusOK && x.r.Context().Err() == nil &&
+			x.upstream == v1.ApiFlavor_API_FLAVOR_OPENAI && x.r.URL.Path != chat.OpenAIResponses {
+			x.usageMissing()
+		}
 	}
 	if x.traced {
 		x.t.Request = capped(x.body)
@@ -579,6 +586,21 @@ func (g *Gateway) fetchImage(ctx context.Context, url string) ([]byte, string, e
 // Proxies the body as the stages left it, the target model written in, parsing the answer for the trace
 func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 	body, doc := x.body, x.document()
+	x.asked = false
+	if doc != nil && x.streamOptionsRefused() {
+		// What the client set of an option the provider takes no body with is left out, the stream naming its usage as the provider does
+		if _, set := doc.Field("stream_options"); set {
+			if without, err := withoutField(doc, "stream_options"); err == nil {
+				doc = without
+			}
+		}
+	}
+	plain := doc
+	if doc != nil && x.usageUnasked(creq) {
+		if with, err := withUsage(doc); err == nil {
+			doc, x.asked = with, true
+		}
+	}
 	if doc != nil {
 		body = doc.Bytes()
 	}
@@ -593,6 +615,17 @@ func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 		out.body = nil
 	}
 	resp, ep, err := x.attempt(ctx, out, x.dec.Endpoints)
+	if err == nil && x.asked && x.streamOptionsDoubted(resp.StatusCode) {
+		// The request goes once more as the client wrote it
+		io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+		resp.Body.Close()
+		x.fellBack(ep, resp.Status+" with stream_options added", true)
+		x.asked, out.body, out.doc = false, plain.Bytes(), plain
+		x.sent = out.body
+		if resp, ep, err = x.attempt(ctx, out, x.dec.Endpoints); err == nil && resp.StatusCode < http.StatusBadRequest {
+			x.streamOptionsRefusedBy()
+		}
+	}
 	if err != nil {
 		x.refuse(upstreamFailure(x.model, err))
 		x.resp.Err = err
@@ -616,6 +649,137 @@ func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 		rt = x.runtimeCodec()
 	}
 	x.relayAnswer(ctx, resp, rt, creq)
+}
+
+// What a provider source's answers taught of how it takes stream_options
+type streamOptions uint8
+
+const (
+	// Nothing yet, what its catalog says standing
+	optionsUnknown streamOptions = iota
+	// It answered a body naming the option
+	optionsTaken
+	// It refused a body naming the option and answered the same one without it
+	optionsRefused
+	// Its catalog does not say it names a stream's usage only when asked, yet a stream of its named none, so it is asked
+	optionsAsked
+)
+
+// What is kept across restarts of each
+var optionsKept = map[streamOptions]string{optionsRefused: "refused", optionsAsked: "asked"}
+
+// How long a refusal of stream_options learned from a source's answers stands across restarts before the source is asked
+// once more, a server that came to take the option found out by then. That a source is asked stands for good, asking one
+// that came to name usage unasked costing nothing.
+const optionsKeep = 7 * 24 * time.Hour
+
+// What is known of how the credential's source takes stream_options and the key it is kept by, with what its catalog
+// says: whether a stream names its usage only when asked, and whether a body naming the option is refused
+func (x *exchange) streamOptions() (state streamOptions, key string, asks, refuses bool) {
+	asks, refuses, server := x.g.creds.StreamOptions(x.credential.GetSourceId())
+	key = x.credential.GetSourceId() + "\x00" + server
+	if known, ok := x.g.streamOpts.Load(key); ok {
+		return known.(streamOptions), key, asks, refuses
+	}
+	// What was learned before a restart stands a while, sparing a strict server the request it would refuse again and a
+	// provider naming usage only when asked the stream that would go unrecorded
+	if data, kept := x.g.learned.Get(optionsCacheKey(key), 0); kept {
+		switch string(data) {
+		case optionsKept[optionsAsked]:
+			state = optionsAsked
+		case optionsKept[optionsRefused]:
+			if _, fresh := x.g.learned.Get(optionsCacheKey(key), optionsKeep); fresh {
+				state = optionsRefused
+			}
+		}
+	}
+	known, _ := x.g.streamOpts.LoadOrStore(key, state)
+	return known.(streamOptions), key, asks, refuses
+}
+
+func optionsCacheKey(key string) string { return "gateway/stream-options/" + key }
+
+// Sets what a source's answers taught of stream_options, kept across restarts where that spares the source a request
+func (x *exchange) learn(key string, state streamOptions) {
+	x.g.streamOpts.Store(key, state)
+	if name, kept := optionsKept[state]; kept {
+		if err := x.g.learned.Put(optionsCacheKey(key), []byte(name)); err != nil {
+			x.g.log.Warn("what a provider's answers taught of stream_options not kept past a restart", "source", x.credential.GetSourceId(), "err", err)
+		}
+	}
+}
+
+// Whether a stream goes to a provider that names its usage only when asked while its client did not ask, which
+// would leave nothing to record against the caller's credential
+func (x *exchange) usageUnasked(creq *chat.Request) bool {
+	if x.credential == nil || creq == nil || !creq.Stream || creq.IncludeUsage || x.upstream != v1.ApiFlavor_API_FLAVOR_OPENAI || x.r.URL.Path == chat.OpenAIResponses {
+		return false
+	}
+	if x.streamOptionsRefused() {
+		return false
+	}
+	// A provider not said to name usage only when asked is asked like the rest once a stream of its named none
+	state, _, asks, _ := x.streamOptions()
+	return asks || state == optionsAsked || state == optionsTaken
+}
+
+// Whether the decision's provider takes no body naming stream_options: one that refused it and then answered the same
+// request without it, or one whose catalog says so and whose streams have named their usage unasked as it says
+func (x *exchange) streamOptionsRefused() bool {
+	if x.credential == nil {
+		return false
+	}
+	state, _, _, refuses := x.streamOptions()
+	switch state {
+	case optionsRefused:
+		return true
+	case optionsTaken, optionsAsked:
+		return false
+	}
+	return refuses
+}
+
+// Notes that a provider answered a body naming stream_options, and answers whether one it called malformed should go once
+// more without the option: a server holding to a stricter schema than OpenAI's refuses it, which is found out once a source
+func (x *exchange) streamOptionsDoubted(status int) bool {
+	if x.credential == nil {
+		return false
+	}
+	state, key, _, _ := x.streamOptions()
+	open := state == optionsUnknown || state == optionsAsked
+	if status < http.StatusBadRequest {
+		// For the run alone: what is kept of a provider asked since a stream of its named no usage stays that it is asked
+		if open {
+			x.g.streamOpts.Store(key, optionsTaken)
+		}
+		return false
+	}
+	return open && (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity)
+}
+
+// Remembers that the decision's provider answered once stream_options was left out, so no body for it names the option
+// again, across restarts as well
+func (x *exchange) streamOptionsRefusedBy() {
+	if state, key, _, _ := x.streamOptions(); state != optionsRefused {
+		x.learn(key, optionsRefused)
+		x.g.log.Warn("provider refuses stream_options, left out of what it is sent from now on", "source", x.credential.GetSourceId())
+	}
+}
+
+// Notes a stream that ended well under a credential and named no usage, which leaves nothing to count against the
+// credential's budgets. A provider that was not asked for it, its catalog not saying it must be or saying it names usage
+// unasked, is asked through stream_options from then on, and one that was asked or refuses to be is said once, nothing
+// more being there to ask.
+func (x *exchange) usageMissing() {
+	state, key, asks, _ := x.streamOptions()
+	if state == optionsUnknown && (!asks || x.streamOptionsRefused()) {
+		x.learn(key, optionsAsked)
+		x.g.log.Warn("provider named no usage for a stream it was not asked for it on, asked through stream_options from now on", "source", x.credential.GetSourceId())
+		return
+	}
+	if _, said := x.g.usageWarned.LoadOrStore(key, true); !said {
+		x.g.log.Warn("provider names no usage for its streams, which count toward no token budget of the credentials they go under", "source", x.credential.GetSourceId(), "stream_options_refused", state == optionsRefused)
+	}
 }
 
 // Copies an answer to the client chunk by chunk through the director, flushing streams with keepalives
@@ -642,7 +806,12 @@ func (x *exchange) relayAnswer(ctx context.Context, resp *http.Response, rt chat
 	// First hook or upstream failure, answered as the status when held or the stream's last event, refused when a hook's
 	var cause, refused error
 	seq := newSequence(x.r.URL.Path == chat.OpenAIResponses)
-	write := func(b []byte) bool {
+	// The usage the gateway asked for on the client's behalf is read here and goes no further
+	var drop *usageDrop
+	if sse, _ := streamed(resp.Header.Get("Content-Type")); sse && x.asked && resp.StatusCode < http.StatusMultipleChoices {
+		drop = &usageDrop{}
+	}
+	send := func(b []byte) bool {
 		if held && len(b) == 0 {
 			return true
 		}
@@ -657,6 +826,16 @@ func (x *exchange) relayAnswer(ctx context.Context, resp *http.Response, rt chat
 			return false
 		}
 		seq.see(b)
+		return true
+	}
+	write := func(b []byte) bool {
+		out := b
+		if drop != nil {
+			out = drop.pass(b)
+		}
+		if (drop == nil || len(out) > 0) && !send(out) {
+			return false
+		}
 		parse.feed(b)
 		return true
 	}
@@ -687,6 +866,9 @@ func (x *exchange) relayAnswer(ctx context.Context, resp *http.Response, rt chat
 		x.resp.Err, failure, cause, refused = err, err.Error(), err, err
 	case err == nil && open && len(tail) > 0:
 		write(tail)
+	}
+	if drop != nil && open && len(drop.held) > 0 {
+		send(drop.held)
 	}
 	switch {
 	case held && cause != nil:
@@ -770,16 +952,20 @@ func hasImages(req *chat.Request) bool {
 	return false
 }
 
-// Counts the prompt's tokens with the runtime's tokenizer, or with a one token generation when it has none
+// Counts the prompt's tokens with the runtime's tokenizer, or with a one token generation when it has none, a provider's
+// by estimate in its place
 func (x *exchange) count(ctx context.Context, creq *chat.Request) {
-	n, err := x.countTokens(ctx, creq)
+	n, generated, err := x.countTokens(ctx, creq)
 	if err != nil {
 		x.resp.Err = err
 		x.refuse(upstreamFailure(x.model, err))
 		return
 	}
 	x.t.PromptTokens = uint32(n)
-	x.resp.PromptTokens = n
+	// A tokenizer reads the prompt for nothing a quota or a meter counts, a generation has the model read it
+	if generated {
+		x.resp.PromptTokens = n
+	}
 	out := x.client.Answer(x.w, creq, x.model)
 	defer out.Close()
 	if err := out.Write(chat.Event{Kind: chat.Stopped, Res: &chat.Result{Model: x.model, Usage: chat.Usage{In: n}}}); err != nil {
@@ -787,18 +973,28 @@ func (x *exchange) count(ctx context.Context, creq *chat.Request) {
 	}
 }
 
-// The prompt token count the runtime reports, by tokenizer when it counts everything sent and by generation otherwise
-func (x *exchange) countTokens(ctx context.Context, creq *chat.Request) (int, error) {
+// The prompt token count and whether a generation made it: by the runtime's tokenizer when it counts everything sent and by
+// a generation otherwise. A provider would bill that generation under the caller's credential, so a count its tokenizer
+// does not answer is the gateway's own estimate there.
+func (x *exchange) countTokens(ctx context.Context, creq *chat.Request) (int, bool, error) {
 	traits := x.runtime.Traits()
-	if traits.TokenizePath != "" && (traits.CountsImages || !hasImages(creq)) {
+	// A provider is reached through a relay forwarding its version path alone, so a tokenizer outside that path is not asked for
+	there := x.credential == nil || strings.HasPrefix(traits.TokenizePath, "/v1/")
+	if traits.TokenizePath != "" && there && (traits.CountsImages || !hasImages(creq)) {
 		n, status, err := x.countWith(ctx, creq)
 		if err == nil || status != http.StatusNotFound && status != http.StatusMethodNotAllowed && status != http.StatusNotImplemented {
-			return n, err
+			return n, false, err
 		}
+	}
+	if x.credential != nil {
+		// Estimated here and said so in the answer's headers, at no cost to the caller's credential
+		x.w.Header().Set(CountHeader, "estimate")
+		return chat.EstimateTokens(creq), false, nil
 	}
 	gen := *creq
 	gen.Kind, gen.MaxTokens, gen.Stream, gen.N = chat.Chat, 1, false, 0
-	return x.countGenerated(ctx, &gen)
+	n, err := x.countGenerated(ctx, &gen)
+	return n, true, err
 }
 
 // Asks the runtime's tokenizer, answering the count or the status it refused with

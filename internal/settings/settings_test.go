@@ -160,7 +160,6 @@ func TestSecretsReadBack(t *testing.T) {
 			t.Fatalf("%s headers %v", name, a)
 		}
 	}
-	full := m.Get().GetToolServers()
 	if applied.GetToolServers()[0].GetBraveKey() != "brave-secret" {
 		t.Fatalf("the tool registry is handed the real key %v", applied)
 	}
@@ -171,7 +170,7 @@ func TestSecretsReadBack(t *testing.T) {
 	if _, err := m.Update(ctx, back); err != nil {
 		t.Fatal(err)
 	}
-	full = m.Get().GetToolServers()
+	full := m.Get().GetToolServers()
 	if full[0].GetBraveKey() != "brave-secret" || full[1].GetEnv()["API_KEY"] != "env-secret" || full[1].GetEnv()["MODE"] != "slow" ||
 		full[2].GetHeaders()["Authorization"] != "Bearer header-secret" || full[2].GetHeaders()["X-Extra"] != "plain" {
 		t.Fatalf("kept %v", full)

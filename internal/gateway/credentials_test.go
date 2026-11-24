@@ -32,6 +32,8 @@ type fakeCreds struct {
 	mu   sync.Mutex
 	// Owners asked for, in order
 	asked []string
+	// How the provider is said to take stream_options
+	asks, refuses bool
 }
 
 func (f *fakeCreds) Headers(_ context.Context, owner, sourceID, _ string, sent http.Header) (*v1.ProviderCredential, map[string]string, error) {
@@ -52,9 +54,11 @@ func (f *fakeCreds) Headers(_ context.Context, owner, sourceID, _ string, sent h
 	return &v1.ProviderCredential{Id: owner, SourceId: sourceID, Name: owner}, out, nil
 }
 
-func (*fakeCreds) Answered(*v1.ProviderCredential, int, http.Header, time.Duration) {}
+func (*fakeCreds) Answered(*v1.ProviderCredential, string, int, http.Header, time.Duration) {}
 
 func (*fakeCreds) Record(*v1.ProviderCredential, string, int, int, int) {}
+
+func (f *fakeCreds) StreamOptions(string) (bool, bool, string) { return f.asks, f.refuses, "" }
 
 // The caller's key reaches the upstream in place of the client's own token, and a caller with none is refused before dispatch
 func TestProviderCredentialSignsTheRequest(t *testing.T) {

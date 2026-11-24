@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/bodyparse"
@@ -66,6 +67,8 @@ type Inbound struct {
 	// The route the request counts under and its in flight cap, waited for in flow control, zero uncapped
 	Route       string
 	MaxInFlight int
+	// Shared by every decision of one request, so the fairness quota judges and counts it once however often it is decided, nil metering every decision
+	Metered *atomic.Bool
 }
 
 // Where a request goes and with what body

@@ -229,6 +229,12 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 	if d.DB.Baselined != "" {
 		log.Warn("database revisions no longer matched the migration directory", "baseline", d.DB.Baselined)
 	}
+	if d.DB.Backup != "" {
+		log.Info("database copied aside before its pending migrations ran", "copy", d.DB.Backup)
+	}
+	if d.DB.Exposed != "" {
+		log.Warn("the database holds credentials and is readable beyond its owner, its mode could not be set to 0600", "err", d.DB.Exposed)
+	}
 	for _, line := range d.DB.Drift {
 		log.Warn("schema drift, the database and schema.sql disagree, run make migrate-reset", "change", line)
 	}
@@ -453,6 +459,7 @@ func (d *Daemon) openMesh(ctx context.Context, rts *runtimes.Registry, calibrati
 		Installs:     d.Installs,
 		Store:        d.Store,
 		Puller:       d.Puller,
+		Credentials:  d.Credentials,
 		Perf:         table,
 		Calibration:  calibration,
 		Events:       bus,
@@ -506,6 +513,7 @@ func (d *Daemon) openGateway(rts *runtimes.Registry, bus *events.Bus) error {
 		}
 	}
 	d.Gateway, err = gateway.New(gateway.Deps{
+		Cache:       d.Inspector.Cache,
 		Pools:       d.Pools,
 		Resolver:    d.Pools,
 		Manager:     d.Pools,
@@ -602,7 +610,7 @@ func (d *Daemon) openHandlers(fmts *formats.Registry, rts *runtimes.Registry, re
 		CacheDir:      d.Formations.CacheDir,
 		Tools:         d.Tools,
 	}
-	deps.MCP = mcpserver.Handler(mcpserver.Deps{Host: d.Host, Doctor: d.Doctor, Sources: d.Sources, Inspector: d.Inspector, Formats: fmts, Runtimes: rts, Store: d.Store, Puller: d.Puller, Tasks: d.Tasks, Installs: d.Installs, Instances: d.Instances, Slots: d.Slots, Pools: d.Pools, Gateway: d.Gateway, Mesh: d.Mesh, Formations: d.Formations, Perf: d.Perf, Guard: d.Guard, Tools: d.Tools, Events: bus, Version: Version, Log: d.Log})
+	deps.MCP = mcpserver.Handler(mcpserver.Deps{Host: d.Host, Doctor: d.Doctor, Sources: d.Sources, Inspector: d.Inspector, Formats: fmts, Runtimes: rts, Store: d.Store, Puller: d.Puller, Tasks: d.Tasks, Installs: d.Installs, Instances: d.Instances, Slots: d.Slots, Pools: d.Pools, Gateway: d.Gateway, Mesh: d.Mesh, Formations: d.Formations, Perf: d.Perf, Guard: d.Guard, Credentials: d.Credentials, Tools: d.Tools, Events: bus, Version: Version, Log: d.Log})
 	var err error
 	if d.handler, err = rpc.NewHandler(deps); err != nil {
 		return err

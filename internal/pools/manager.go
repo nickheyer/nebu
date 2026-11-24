@@ -97,8 +97,9 @@ type Manager struct {
 	view  atomic.Pointer[view]
 	ports atomic.Pointer[map[datalayer.EndpointID]endpointPorts]
 	waker atomic.Pointer[wakerBox]
-	// Target conditions compiled once, by expression
-	whens sync.Map
+	// Target conditions compiled once, by expression, and the ones whose fault or cost was said already
+	whens      sync.Map
+	whenFaults sync.Map
 }
 
 // Everything the manager tracks, read and written under its mutex

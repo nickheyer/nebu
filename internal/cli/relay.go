@@ -11,8 +11,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nickheyer/nebu/internal/gateway"
 )
 
 const (
@@ -28,7 +31,15 @@ var relayHop = map[string]bool{
 	"Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true, "Content-Length": true, "Host": true,
 }
 
-// Serves one provider's model, forwarding each request to its endpoint with the model renamed and the gateway's headers as sent
+// Request headers a provider never gets beside those: the page a browser sent the request from and the gateway's trace context
+var relayInside = map[string]bool{"Origin": true, "Referer": true, "Traceparent": true, "Tracestate": true}
+
+// Whether a request header stays this side of the relay, the gateway's and the mesh's own and a browser's among them
+func relayHolds(name string) bool {
+	return relayHop[name] || relayInside[name] || strings.HasPrefix(name, "Sec-") || strings.HasPrefix(name, "X-Gateway-") || strings.HasPrefix(name, "X-Nebu-")
+}
+
+// Serves one provider's model, forwarding each request to its endpoint with the model renamed and the gateway's headers but those that stay inside
 func runRelay(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("relay")
 	listen := fs.String("listen", "127.0.0.1:0", "address to serve on")
@@ -120,7 +131,7 @@ func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, erro
 		return s.fail(w, http.StatusBadGateway, err)
 	}
 	for k, v := range r.Header {
-		if !relayHop[k] {
+		if !relayHolds(k) {
 			out.Header[k] = v
 		}
 	}
@@ -135,9 +146,10 @@ func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, erro
 		}
 	}
 	status := resp.StatusCode
-	// The provider refused the credential, which the client must not read as its own nebu token refused
+	// The provider refused the credential, which the client must not read as its own nebu token refused, so the gateway alone is told
 	if status == http.StatusUnauthorized {
 		status = http.StatusBadGateway
+		w.Header().Set(gateway.ProviderStatusHeader, strconv.Itoa(resp.StatusCode))
 	}
 	w.WriteHeader(status)
 	flush := http.NewResponseController(w)

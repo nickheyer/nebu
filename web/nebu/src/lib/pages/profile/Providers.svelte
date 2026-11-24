@@ -93,8 +93,9 @@
 
 	async function remove(c: ProviderCredential) {
 		try {
-			await rpc.auth.deleteCredential({ id: c.id });
-			toast.success(`Removed ${c.name}`);
+			const res = await rpc.auth.deleteCredential({ id: c.id });
+			if (res.revocationUnconfirmed) toast.warning(`Removed ${c.name}`, `${sourceName(c.sourceId)} has yet to confirm ending its session. nebu keeps asking, disconnect nebu there to end it now`);
+			else toast.success(`Removed ${c.name}`);
 			await changed();
 		} catch (err) {
 			toast.error('Remove failed', reason(err));
@@ -106,9 +107,12 @@
 	// The address the browser landed on after approving, copied back for a sign-in by redirect
 	let landed = $state('');
 	let waiting: AbortController | undefined;
+	// The sign-in being authorized again in place, undefined for a new one
+	let again = $state<ProviderCredential | undefined>(undefined);
 
-	function openSignIn() {
-		sourceId = signed[0]?.value ?? '';
+	function openSignIn(c?: ProviderCredential) {
+		again = c;
+		sourceId = c?.sourceId ?? signed[0]?.value ?? '';
 		name = '';
 		error = '';
 		landed = '';
@@ -122,7 +126,7 @@
 		busy = true;
 		error = '';
 		try {
-			const res = await rpc.auth.startSignIn({ sourceId, name: name.trim() });
+			const res = await rpc.auth.startSignIn({ sourceId, name: name.trim(), credentialId: again?.id ?? '' });
 			pending = res.signIn;
 			if (pending?.code) await finish('');
 		} catch (err) {
@@ -158,7 +162,8 @@
 
 	async function move(c: ProviderCredential, by: number) {
 		try {
-			await rpc.auth.putCredential({ id: c.id, position: c.position + by });
+			// Its place among its source's credentials, which stored positions may leave gaps in
+			await rpc.auth.putCredential({ id: c.id, position: siblings(c).findIndex((o) => o.id === c.id) + 1 + by });
 			await credentials.load({});
 		} catch (err) {
 			toast.error('Reorder failed', reason(err));
@@ -170,7 +175,7 @@
 		{ value: BudgetUnit.INPUT_TOKENS, label: 'Input tokens' },
 		{ value: BudgetUnit.OUTPUT_TOKENS, label: 'Output tokens' },
 		{ value: BudgetUnit.REQUESTS, label: 'Requests' },
-		{ value: BudgetUnit.PERCENT_LEFT, label: 'Percent left' }
+		{ value: BudgetUnit.PERCENT_USED, label: 'Percent used' }
 	];
 	const periods = [
 		{ value: BudgetPeriod.ROLLING, label: 'Rolling' },
@@ -199,6 +204,9 @@
 	function addBudget() {
 		budgets = [...budgets, create(CredentialBudgetSchema, { name: `budget ${budgets.length + 1}`, unit: BudgetUnit.TOKENS, period: BudgetPeriod.DAY, limit: 1_000_000 })];
 	}
+
+	// Whether a rolling budget spans less than the five minutes usage is counted in or more than the hundred days it is kept
+	const rollsOutside = (b: CredentialBudget) => b.unit !== BudgetUnit.PERCENT_USED && b.period === BudgetPeriod.ROLLING && (b.seconds < 300 || b.seconds > 8_640_000);
 
 	async function saveBudgets() {
 		busy = true;
@@ -235,7 +243,7 @@
 
 <Card title="Providers" flush>
 	{#snippet tools()}
-		{#if signed.length}<NeoButton elevation={2} onclick={openSignIn}>{#snippet icon()}<SignInIcon size={16} />{/snippet}Sign in</NeoButton>{/if}
+		{#if signed.length}<NeoButton elevation={2} onclick={() => openSignIn()}>{#snippet icon()}<SignInIcon size={16} />{/snippet}Sign in</NeoButton>{/if}
 		{#if keyed.length}<NeoButton class="primary" elevation={2} onclick={() => openKey()}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Key</NeoButton>{/if}
 	{/snippet}
 	{#if !credentials.settled}
@@ -253,7 +261,7 @@
 					secondaryWidth="16ch"
 					facts={[c.expiresAt ? { value: ago(c.expiresAt, clockTick.now), tip: `access lapses ${when(c.expiresAt)}, refreshed before` } : { value: '', tip: `updated ${when(c.updatedAt)}` }]}
 					menu={[
-						...(c.kind === CredentialKind.KEY ? [{ label: 'Replace key', onclick: () => openKey(c) }] : []),
+						...(c.kind === CredentialKind.KEY ? [{ label: 'Replace key', onclick: () => openKey(c) }] : [{ label: 'Sign in again', onclick: () => openSignIn(c) }]),
 						{ label: 'Budgets', onclick: () => openBudgets(c) },
 						...(siblings(c)[0]?.id !== c.id ? [{ label: 'Move up', onclick: () => move(c, -1) }] : []),
 						...(siblings(c).at(-1)?.id !== c.id ? [{ label: 'Move down', onclick: () => move(c, 1) }] : []),
@@ -279,22 +287,22 @@
 	{/snippet}
 </Dialog>
 
-<Dialog bind:open={budgetsOpen} title={`Budgets of ${budgeting?.name ?? ''}`} confirm="Save" {busy} needs={budgets.some((b) => !b.name.trim()) ? 'Name every budget' : budgets.some((b) => !(b.limit > 0)) ? 'Give every budget a limit' : ''} onconfirm={saveBudgets} onclose={() => (budgeting = undefined)}>
+<Dialog bind:open={budgetsOpen} title={`Budgets of ${budgeting?.name ?? ''}`} confirm="Save" {busy} needs={budgets.some((b) => !b.name.trim()) ? 'Name every budget' : budgets.some((b) => !(b.limit > 0)) ? 'Give every budget a limit' : budgets.some(rollsOutside) ? 'A rolling budget spans 5 minutes to 100 days' : ''} onconfirm={saveBudgets} onclose={() => (budgeting = undefined)}>
 	{#each budgets as b, i (i)}
 		<div class="budget">
 			<FieldRow>
 				<Text bind:value={b.name} label="Name" max={64} required />
-				<NumberField bind:value={b.limit} label={b.unit === BudgetUnit.PERCENT_LEFT ? 'Limit, percent' : 'Limit'} min={0} fraction />
+				<NumberField bind:value={b.limit} label={b.unit === BudgetUnit.PERCENT_USED ? 'Limit, percent used' : 'Limit'} info={b.unit === BudgetUnit.PERCENT_USED ? 'Spent once this much of the reported window is used' : undefined} min={0} fraction />
 			</FieldRow>
 			<FieldRow>
 				<Select bind:value={b.unit} options={units} label="Unit" />
-				{#if b.unit !== BudgetUnit.PERCENT_LEFT}<Select bind:value={b.period} options={periods} label="Period" />{/if}
+				{#if b.unit !== BudgetUnit.PERCENT_USED}<Select bind:value={b.period} options={periods} label="Period" />{/if}
 			</FieldRow>
 			<Chips bind:value={b.models} label="Models" placeholder="gpt-4*" unset="every model" />
-			{#if b.unit === BudgetUnit.PERCENT_LEFT || b.period === BudgetPeriod.REPORTED}
+			{#if b.unit === BudgetUnit.PERCENT_USED || b.period === BudgetPeriod.REPORTED}
 				<Text bind:value={b.window} label="Reported window" placeholder="tokens" max={64} required />
 			{:else if b.period === BudgetPeriod.ROLLING}
-				<Duration bind:value={b.seconds} base="s" label="Over" />
+				<Duration bind:value={b.seconds} base="s" label="Over" info="5 minutes to 100 days" />
 			{:else if starts[b.period]}
 				<FieldRow>
 					<NumberField bind:value={b.start} label={starts[b.period]?.label} min={0} max={starts[b.period]?.max} />
@@ -314,7 +322,7 @@
 	{/snippet}
 </Dialog>
 
-<Dialog bind:open={signOpen} title="Sign in" confirm={pending?.code ? undefined : pending ? 'Finish' : 'Continue'} {busy} needs={!sourceId ? 'Pick a source' : pending && !pending.code && !landed.trim() ? 'Paste the address' : ''} onconfirm={signIn} onclose={closeSignIn}>
+<Dialog bind:open={signOpen} title={again ? `Sign in again, ${again.name}` : 'Sign in'} confirm={pending?.code ? undefined : pending ? 'Finish' : 'Continue'} {busy} needs={!sourceId ? 'Pick a source' : pending && !pending.code && !landed.trim() ? 'Paste the address' : ''} onconfirm={signIn} onclose={closeSignIn}>
 	{#if pending?.code}
 		<p class="secondary">Open the page, enter the code, and approve</p>
 		<a href={pending.url} target="_blank" rel="noreferrer">{pending.url}</a>
@@ -326,6 +334,8 @@
 		<p class="secondary">Open the page and approve, then paste the address it lands on, or the code it shows</p>
 		<a href={pending.url} target="_blank" rel="noreferrer">Open sign-in page</a>
 		<Text bind:value={landed} label="Address or code" required />
+	{:else if again}
+		<p class="secondary">Signs in to {sourceName(sourceId)} again with the same account and replaces this sign-in's tokens, its budgets and place kept</p>
 	{:else}
 		<Select bind:value={sourceId} options={signed} label="Source" required />
 		<Text bind:value={name} label="Name" max={64} placeholder={sourceName(sourceId)} />

@@ -64,7 +64,7 @@ func (c *FlowController) Admit(ctx context.Context, item *Item) (Permit, error) 
 		return nil, err
 	}
 	item.EnqueuedAt = time.Now()
-	if err := c.meter.admit(item.Flow.FairnessID, item.EnqueuedAt); err != nil {
+	if err := c.meter.admit(item.Flow.FairnessID, item.EnqueuedAt); err != nil && !item.metered() {
 		c.observe(item, 0, OutcomeQuota)
 		return nil, err
 	}
@@ -215,16 +215,6 @@ func (c *FlowController) Close() {
 type limits struct {
 	mu       sync.Mutex
 	inflight map[string]int
-}
-
-// Whether the item's route has its limit in flight
-func (l *limits) full(item *Item) bool {
-	if item.RouteLimit <= 0 {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.inflight[item.Route] >= item.RouteLimit
 }
 
 // Takes a route slot for the item, false when its route is at its limit
@@ -430,10 +420,12 @@ func (p *poolQueue) abandon(w *waiter) bool {
 	return false
 }
 
-// Counts the item in flight and meters its request
+// Counts the item in flight and meters its request, once however often the request is admitted
 func (p *poolQueue) grantLocked(item *Item, charged int, now time.Time) *permit {
 	p.inflight++
-	p.meter.count(item.Flow.FairnessID, now)
+	if item.Metered == nil || item.Metered.CompareAndSwap(false, true) {
+		p.meter.count(item.Flow.FairnessID, now)
+	}
 	return &permit{pool: p, item: item, charged: charged, waited: now.Sub(item.EnqueuedAt)}
 }
 

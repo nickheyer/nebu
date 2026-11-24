@@ -10,6 +10,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/pkg/datalayer"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Opens the runtime's answer to one rendered round, the first round relayed or tried down the decision's endpoints
@@ -26,6 +27,20 @@ func (x *exchange) openRound(ctx context.Context, req *chat.Request, path string
 		resp, ep, err = x.relay(ctx, out, pre)
 	} else {
 		resp, ep, err = x.attempt(ctx, out, x.dec.Endpoints)
+		if err == nil && req.Stream && !req.NoStreamOptions && x.upstream == v1.ApiFlavor_API_FLAVOR_OPENAI && x.streamOptionsDoubted(resp.StatusCode) {
+			// The round goes once more rendered without the option
+			io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+			resp.Body.Close()
+			x.fellBack(ep, resp.Status+" with stream_options", true)
+			req.NoStreamOptions = true
+			if out.path, out.body, err = x.runtime.Render(req); err != nil {
+				return nil, err
+			}
+			x.sent = out.body
+			if resp, ep, err = x.attempt(ctx, out, x.dec.Endpoints); err == nil && resp.StatusCode < http.StatusBadRequest {
+				x.streamOptionsRefusedBy()
+			}
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -60,6 +75,7 @@ func (x *exchange) rounds(ctx context.Context, req *chat.Request) {
 		prev = &last
 	}
 	var allSaid strings.Builder
+	req.NoStreamOptions = x.streamOptionsRefused()
 	for round := 0; ; round++ {
 		path, body, err := x.runtime.Render(req)
 		if err != nil {

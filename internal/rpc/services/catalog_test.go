@@ -62,7 +62,7 @@ func newCatalog(t *testing.T, srcs ...sources.Source) *SourceService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewSourceService(&sources.Manager{Registry: sources.NewRegistry(srcs...)}, nil, fmts, rts, nil, nil)
+	return NewSourceService(&sources.Manager{Registry: sources.NewRegistry(srcs...)}, nil, fmts, rts)
 }
 
 func repos(resp *v1.SearchResponse) string {

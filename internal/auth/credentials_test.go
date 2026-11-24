@@ -2,11 +2,16 @@ package auth
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -37,13 +42,32 @@ func idToken(workspace string) string {
 }
 
 // The providers' sign-in services: Codex's device flow with form exchange and JSON refresh, OpenAI's documented
-// redirect flow issuing a client, and OpenRouter's code for a key
+// redirect flow issuing a client and signing its ID token, and OpenRouter's code for a key
 func authServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var polls, refreshes atomic.Int32
+	var nonce atomic.Value
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An ID token as OpenAI signs one, for the issued client and the nonce the browser's authorize request carried
+	signed := func() string {
+		claims, _ := json.Marshal(map[string]any{"iss": "https://auth.openai.com", "aud": "oaiapp_issued", "sub": "user-1", "exp": time.Now().Add(time.Hour).Unix(), "nonce": nonce.Load()})
+		body := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"k1","typ":"JWT"}`)) + "." + base64.RawURLEncoding.EncodeToString(claims)
+		sum := sha256.Sum256([]byte(body))
+		sig, _ := rsa.SignPKCS1v15(nil, key, crypto.SHA256, sum[:])
+		return body + "." + base64.RawURLEncoding.EncodeToString(sig)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/accounts/authorize":
+			q := r.URL.Query()
+			nonce.Store(q.Get("nonce"))
+			http.Redirect(w, r, q.Get("redirect_uri")+"?code=plan-code&state="+url.QueryEscape(q.Get("state"))+"&client_id=oaiapp_issued", http.StatusFound)
+		case "/.well-known/jwks.json":
+			json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "alg": "RS256", "use": "sig", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}}})
 		case "/api/accounts/deviceauth/usercode":
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)
@@ -94,7 +118,7 @@ func authServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 				}
 				access = "plan-access-2"
 			}
-			json.NewEncoder(w).Encode(map[string]any{"access_token": access, "refresh_token": "plan-refresh", "token_type": "Bearer", "expires_in": 3600, "scope": "openid offline_access resource.invoke chatgpt.tokens.use.direct"})
+			json.NewEncoder(w).Encode(map[string]any{"access_token": access, "refresh_token": "plan-refresh", "id_token": signed(), "token_type": "Bearer", "expires_in": 3600, "scope": "openid offline_access resource.invoke chatgpt.tokens.use.direct"})
 		case "/api/v1/auth/keys":
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)
@@ -176,10 +200,10 @@ func TestCredentialsBelongToTheirOwner(t *testing.T) {
 	if err != nil || len(list) != 2 {
 		t.Fatalf("list %v %v", list, err)
 	}
-	if err := c.Delete(ctx, "bob", first.GetId()); !errors.Is(err, ErrUnknownCredential) {
+	if _, err := c.Delete(ctx, "bob", first.GetId()); !errors.Is(err, ErrUnknownCredential) {
 		t.Fatalf("another owner cannot remove it, got %v", err)
 	}
-	if err := c.Delete(ctx, "ann", first.GetId()); err != nil {
+	if _, err := c.Delete(ctx, "ann", first.GetId()); err != nil {
 		t.Fatal(err)
 	}
 	if CredentialOwner(Identity{}) != ProviderDaemon || CredentialOwner(Identity{Provider: ProviderDaemon}) != ProviderDaemon || CredentialOwner(Identity{Provider: "local", Subject: "u1"}) != "u1" {
@@ -193,10 +217,10 @@ func TestSignInKeepsAndRefreshesTokens(t *testing.T) {
 	base, _ := url.Parse(srv.URL)
 	c := openCredentials(t)
 	c.client = &http.Client{Transport: toServer{base}}
-	if _, err := c.StartSignIn(ctx, "ann", "deepseek", ""); !errors.Is(err, ErrProviderCredential) {
+	if _, err := c.StartSignIn(ctx, "ann", "deepseek", "", ""); !errors.Is(err, ErrProviderCredential) {
 		t.Fatalf("a key provider takes no sign-in, got %v", err)
 	}
-	in, err := c.StartSignIn(ctx, "ann", "codex", "")
+	in, err := c.StartSignIn(ctx, "ann", "codex", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +263,7 @@ func TestSignInByRedirect(t *testing.T) {
 	base, _ := url.Parse(srv.URL)
 	c := openCredentials(t)
 	c.client = &http.Client{Transport: toServer{base}}
-	in, err := c.StartSignIn(ctx, "ann", "openai", "plan")
+	in, err := c.StartSignIn(ctx, "ann", "openai", "plan", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +275,14 @@ func TestSignInByRedirect(t *testing.T) {
 	if _, err := c.FinishSignIn(ctx, "ann", in.GetId(), "http://127.0.0.1:1455/auth/callback?code=plan-code&state=other&client_id=oaiapp_issued"); !errors.Is(err, ErrProviderCredential) {
 		t.Fatalf("another sign-in's state is refused, got %v", err)
 	}
-	cred, err := c.FinishSignIn(ctx, "ann", in.GetId(), "http://127.0.0.1:1455/auth/callback?code=plan-code&state="+q.Get("state")+"&client_id=oaiapp_issued")
+	// The browser approves at the authorize address and lands on the callback
+	browser := &http.Client{Transport: c.client.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := browser.Get(in.GetUrl())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	cred, err := c.FinishSignIn(ctx, "ann", in.GetId(), resp.Header.Get("Location"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +299,7 @@ func TestSignInByRedirect(t *testing.T) {
 	}
 
 	c.now = time.Now
-	in, err = c.StartSignIn(ctx, "ann", "openrouter", "")
+	in, err = c.StartSignIn(ctx, "ann", "openrouter", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

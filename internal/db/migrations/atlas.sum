@@ -1,4 +1,4 @@
-h1:8FFytoffLSlGJqIoOAstzHARH0Zmm+nUzwJIjyHvHiA=
+h1:rlOOt0gL2uznBdXj9lmlpA4vy76qwc+zIy1yAwmrM8w=
 20260907055342_init.sql h1:lCpOos3kdDH1PA87ABrmyEXW0PuAXKFmyIER0/kZ+3E=
 20260917013548_route_profiles.sql h1:imiPc5UMI9dQoKDy46B6WTcKz/BiJAlUvZorFtgaR5E=
 20260917054526_slot_placement.sql h1:T8SbGI0v8FU5F/NU8n/mQ98vyf0g7tyrR06EqQnuC/4=
@@ -36,3 +36,4 @@ h1:8FFytoffLSlGJqIoOAstzHARH0Zmm+nUzwJIjyHvHiA=
 20261112183000_template_reasoning.sql h1:E5ekUsqkHh16xz5Qof4GcZV7Xr3tskdzPFw3HgbkXTA=
 20261120071012_provider_credentials.sql h1:hpsjS9cWxQSAB29xFJ4242UvfyX+rgMyrW77fVWo5e0=
 20261120080432_credential_usage.sql h1:wj7iIrxgxQ8ix3ha8OsIoUJXiOxKzp0C1Tsbn0dQ1Gk=
+20261124045123_credential_owners_units_revocations.sql h1:9sNjMSKE8a6W0Qq6D2JXAglMS/jsDj9+grBcDU/lpJ8=

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"errors"
@@ -85,6 +86,32 @@ func (g *Guard) Identify(h http.Header) (Identity, bool) {
 	return Identity{}, false
 }
 
+// The procedures a member calls on behalf of a caller of its own, naming the owner whose provider credentials the work goes
+// under: a pull it sends on. No other call of a member's reaches an owner it names.
+var forwardsOwner = map[string]bool{nebuv1connect.MeshServicePullSeatProcedure: true}
+
+// The owner a call's provider credentials are kept under: as CredentialOwner has it, but for a member calling a procedure
+// it forwards an owner on, which goes under the owner it names
+func (g *Guard) CallOwner(procedure string, h http.Header) string {
+	if _, peer := g.PeerOf(h); peer && forwardsOwner[procedure] {
+		return cmp.Or(h.Get(CredentialOwnerHeader), ProviderDaemon)
+	}
+	return g.CredentialOwner(h)
+}
+
+// The owner a request's provider credentials are kept under: its account's, the shared one for a member, the daemon token
+// and auth.disabled, and none for a request no credential opens
+func (g *Guard) CredentialOwner(h http.Header) string {
+	if _, peer := g.PeerOf(h); peer {
+		return ProviderDaemon
+	}
+	id, ok := g.Identify(h)
+	if !ok && g.Enabled() {
+		return ""
+	}
+	return CredentialOwner(id)
+}
+
 // Refuses a call the procedure's rule does not open, unauthenticated without a credential and denied without the scope
 func (g *Guard) Check(procedure string, h http.Header) error {
 	rule, ok := procedures[procedure]
@@ -136,6 +163,30 @@ func (i interceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) con
 			conn = eventFilter{StreamingHandlerConn: conn, guard: i.g, header: conn.RequestHeader()}
 		}
 		return next(ctx, conn)
+	}
+}
+
+// Signs every call a handler serves with its caller's provider credentials, so each provider source a handler reaches answers for the caller
+func (c *Credentials) Interceptor(g *Guard) connect.Interceptor { return signing{c, g} }
+
+type signing struct {
+	c *Credentials
+	g *Guard
+}
+
+func (s signing) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		return next(s.c.signAs(ctx, sync.OnceValue(func() string { return s.g.CallOwner(req.Spec().Procedure, req.Header()) })), req)
+	}
+}
+
+func (s signing) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+func (s signing) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
+		return next(s.c.signAs(ctx, sync.OnceValue(func() string { return s.g.CallOwner(conn.Spec().Procedure, conn.RequestHeader()) })), conn)
 	}
 }
 

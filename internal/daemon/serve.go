@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/auth"
+	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/mesh/links"
 	"github.com/nickheyer/nebu/pkg/config"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -203,7 +204,9 @@ func (d *Daemon) start(ctx context.Context) error {
 	return d.Bots.Recover(ctx)
 }
 
-// Records the daemon's own binary as the install of each relay runtime that has none
+// Records the daemon's own binary as the install of each relay runtime that has none, and moves the install it made
+// of itself before onto the binary it runs from now, its id kept so what names it launches the running binary. A relay
+// install a person adopted of another binary stays on that binary.
 func (d *Daemon) adoptSelf(ctx context.Context) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -214,10 +217,36 @@ func (d *Daemon) adoptSelf(ctx context.Context) {
 		if _, ok := rt.(runtimes.Relay); !ok {
 			continue
 		}
-		if list, err := d.Installs.List(ctx, rt.ID()); err != nil || len(list) > 0 {
+		list, err := d.Installs.List(ctx, rt.ID())
+		if err != nil {
 			continue
 		}
-		if in, err := d.Installs.Adopt(ctx, rt.ID(), exe); err != nil {
+		for _, in := range list {
+			marked := in.GetOrigin() == installs.OriginSelf
+			if marked && in.GetPath() == exe {
+				continue
+			}
+			// An install made before the daemon's own were marked is taken for its own when it names the binary running or one
+			// no longer there, which no one runs a relay from on purpose. Any other was adopted and is left where it points.
+			_, gone := os.Stat(in.GetPath())
+			if !marked && (in.GetKind() != v1.InstallKind_INSTALL_KIND_ADOPTED || in.GetPath() != exe && gone == nil) {
+				d.Log.Info("relay install runs another binary than the daemon's own, left as it was adopted", "runtime", rt.ID(), "install", in.GetId(), "path", in.GetPath())
+				continue
+			}
+			if _, err := d.Installs.Readopt(ctx, in.GetId(), exe, installs.OriginSelf); err != nil {
+				d.Log.Warn("relay install not moved to own binary", "runtime", rt.ID(), "install", in.GetId(), "path", in.GetPath(), "err", err)
+			} else if in.GetPath() != exe {
+				d.Log.Info("relay install moved to own binary", "runtime", rt.ID(), "install", in.GetId(), "from", in.GetPath(), "path", exe)
+			}
+		}
+		if len(list) > 0 {
+			continue
+		}
+		in, err := d.Installs.Adopt(ctx, rt.ID(), exe)
+		if err == nil {
+			in, err = d.Installs.Readopt(ctx, in.GetId(), exe, installs.OriginSelf)
+		}
+		if err != nil {
 			d.Log.Warn("own binary not adopted", "runtime", rt.ID(), "err", err)
 		} else {
 			d.Log.Info("own binary adopted", "runtime", rt.ID(), "path", in.GetPath())

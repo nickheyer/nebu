@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +34,9 @@ const (
 	readConns = 4
 	// The table the migration runner before atlas recorded its versions in
 	legacyTable = "schema_migrations"
+	// What the copy made before pending migrations run is called, and how many of them are kept
+	beforeMigrating = "pre-migrate"
+	backupsKept     = 3
 	// Where the reverse of each migration lives, by the migration's file name
 	downDir = "migrations/down"
 )
@@ -55,6 +60,10 @@ type DB struct {
 	Drift []string
 	// Recovery details for revisions missing from the migration directory, or empty.
 	Baselined string
+	// The copy made of the database before migrations it had not seen ran, or empty when none were pending
+	Backup string
+	// Why the database's files are readable beyond their owner, when their mode could not be set, or empty
+	Exposed string
 }
 
 // Work a release does on the data once its migrations have run, before the schema is checked
@@ -62,6 +71,10 @@ type Upgrade func(ctx context.Context, d *DB) error
 
 // Opens the database, applies embedded migrations, and runs the upgrades over the migrated rows
 func Open(path string, upgrades ...Upgrade) (*DB, error) {
+	exposed, err := ownerOnly(path)
+	if err != nil {
+		return nil, err
+	}
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -75,12 +88,37 @@ func Open(path string, upgrades ...Upgrade) (*DB, error) {
 	}
 	reads.SetMaxOpenConns(readConns)
 	reads.SetMaxIdleConns(readConns)
-	d := &DB{sql: sqldb, reads: reads, path: path}
+	d := &DB{sql: sqldb, reads: reads, path: path, Exposed: exposed}
 	if err := d.migrate(context.Background(), upgrades); err != nil {
 		d.Close()
 		return nil, err
 	}
 	return d, nil
+}
+
+// Keeps the database and its WAL files owner-only, the file made 0600 when missing so the WAL files SQLite makes take its mode.
+// A mode that cannot be set, as on a file another account owns or a filesystem keeping none, stops nothing: the database
+// opens as it did before its mode was kept, and what is left readable beyond its owner is answered to be said
+func ownerOnly(path string) (string, error) {
+	if path == "" || path == ":memory:" {
+		return "", nil
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return "", err
+	}
+	f.Close()
+	var exposed []string
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		err := os.Chmod(p, 0o600)
+		if err == nil || errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if info, serr := os.Stat(p); serr != nil || info.Mode().Perm()&0o077 != 0 {
+			exposed = append(exposed, err.Error())
+		}
+	}
+	return strings.Join(exposed, "; "), nil
 }
 
 // Closes the readers and the writer
@@ -132,11 +170,41 @@ func (d *DB) apply(ctx context.Context, dir migrate.Dir) error {
 		if err != nil {
 			return err
 		}
+		if d.Backup, err = backUp(ctx, conn, d.path, ex, revs); err != nil {
+			return err
+		}
 		if err := ex.ExecuteN(ctx, 0); err != nil && !errors.Is(err, migrate.ErrNoPendingFiles) {
 			return fmt.Errorf("migrate: %w", err)
 		}
 		return nil
 	})
+}
+
+// Copies a database that has rows to lose aside before migrations it has not seen run over them, the newest few copies
+// kept, answering the copy made or nothing when no migration is pending or the database is new
+func backUp(ctx context.Context, conn *sql.Conn, path string, ex *migrate.Executor, revs revisionStore) (string, error) {
+	pending, err := ex.Pending(ctx)
+	if errors.Is(err, migrate.ErrNoPendingFiles) || err == nil && len(pending) == 0 {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	applied, err := revs.ReadRevisions(ctx)
+	if err != nil || len(applied) == 0 {
+		return "", err
+	}
+	aside, err := copyAside(ctx, conn, path, beforeMigrating)
+	if err != nil || aside == "" {
+		return "", err
+	}
+	// The stamp in each name sorts them oldest first
+	copies, _ := filepath.Glob(path + "." + beforeMigrating + ".*")
+	slices.Sort(copies)
+	for i := 0; i < len(copies)-backupsKept; i++ {
+		os.Remove(copies[i])
+	}
+	return aside, nil
 }
 
 // Reverts every applied migration newer than version, newest first, each through its down file, all when version is empty
@@ -385,10 +453,16 @@ func copyAside(ctx context.Context, conn *sql.Conn, path, why string) (string, e
 	if err := os.Remove(aside); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
+	// Made empty and 0600 first, VACUUM INTO filling an empty file it finds and keeping its mode
+	f, err := os.OpenFile(aside, os.O_RDONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	f.Close()
 	if _, err := conn.ExecContext(ctx, `VACUUM INTO ?`, aside); err != nil {
 		return "", fmt.Errorf("backup to %s: %w", aside, err)
 	}
-	return aside, os.Chmod(aside, 0o600)
+	return aside, nil
 }
 
 // Copies the embedded migration files into an atlas memory dir, the down directory left out of its checksum

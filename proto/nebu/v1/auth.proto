@@ -168,8 +168,8 @@ enum BudgetUnit {
   BUDGET_UNIT_INPUT_TOKENS = 2;
   BUDGET_UNIT_OUTPUT_TOKENS = 3;
   BUDGET_UNIT_REQUESTS = 4;
-  // The percent of a reported window used, from what the provider says is left
-  BUDGET_UNIT_PERCENT_LEFT = 5;
+  // The percent of a reported window used, from what the provider says is left, spent once it reaches the limit
+  BUDGET_UNIT_PERCENT_USED = 5;
 }
 
 // The span a budget counts over
@@ -198,13 +198,13 @@ message CredentialBudget {
     finite: true
   }];
   BudgetPeriod period = 5 [(buf.validate.field).enum.defined_only = true];
-  // Seconds a rolling period spans
+  // Seconds a rolling period spans, from 300, the span usage is counted in, to 8640000, the 100 days it is kept
   uint32 seconds = 6;
   // Where a day, week or month starts: the hour, the weekday from Sunday as 0, or the day of the month
   uint32 start = 7 [(buf.validate.field).uint32.lte = 31];
   // The time zone a day, week or month is counted in, UTC when empty
   string zone = 8 [(buf.validate.field).string.max_len = 64];
-  // The reported window a percent left unit or a reported period reads
+  // The reported window a percent used unit or a reported period reads
   string window = 9 [(buf.validate.field).string.max_len = 64];
   // Percent of the limit held back, the credential spent once the rest is used
   uint32 reserve_percent = 10 [(buf.validate.field).uint32.lte = 100];
@@ -294,7 +294,11 @@ message DeleteCredentialRequest {
 }
 
 // Confirms the removal
-message DeleteCredentialResponse {}
+message DeleteCredentialResponse {
+  // Whether the provider has yet to confirm revoking the removed sign-in's session. The daemon keeps asking it to, and
+  // the person can end the session at the provider meanwhile
+  bool revocation_unconfirmed = 1;
+}
 
 // Asks for what the caller's credentials were used for over a time range
 message ListCredentialUsageRequest {
@@ -338,6 +342,9 @@ message StartSignInRequest {
   string source_id = 1 [(buf.validate.field).string.min_len = 1];
   // Label the credential gets
   string name = 2;
+  // One of the caller's sign-ins with the source to authorize again, under the client its provider issued it and with
+  // its tokens replaced in place once the same account approves; a new credential when empty
+  string credential_id = 3;
 }
 
 // Where the person goes to approve it

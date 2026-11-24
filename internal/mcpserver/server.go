@@ -61,10 +61,12 @@ type Deps struct {
 	Formations *formations.Manager
 	Perf       *perf.Table
 	Guard      *auth.Guard
-	Tools      *tools.Registry
-	Events     *events.Bus
-	Version    string
-	Log        *slog.Logger
+	// The provider credentials callers keep, signing what a tool reaches of provider sources for whoever calls it
+	Credentials *auth.Credentials
+	Tools       *tools.Registry
+	Events      *events.Bus
+	Version     string
+	Log         *slog.Logger
 }
 
 // The services the tools wrap, called in process
@@ -97,7 +99,7 @@ func New(d Deps) *mcp.Server {
 	n := &nebu{
 		d:        d,
 		host:     services.NewHostService(d.Host, d.Doctor, nil, d.Store),
-		sources:  services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes, nil, d.Guard),
+		sources:  services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes),
 		runtimes: services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats),
 		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo, d.Runtimes),
 		instance: services.NewInstanceService(d.Instances),
@@ -112,6 +114,15 @@ func New(d Deps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "nebu", Title: "Nebu", Version: d.Version, Description: "Model weights, inference runtimes, routes, and the mesh they run on"}, &mcp.ServerOptions{
 		Instructions: "Nebu manages model weights and inference runtimes. List what is stored and running before changing anything, pull and run models by source, repo, and group, and read traces to see what the gateway served.",
 		Logger:       d.Log,
+	})
+	// The services are called in process, past the interceptor that signs calls over the API, so each is signed here
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if extra := req.GetExtra(); extra != nil {
+				ctx = d.Credentials.SignCaller(ctx, d.Guard, extra.Header)
+			}
+			return next(ctx, method, req)
+		}
 	})
 	n.addTools(s)
 	n.addResources(s)

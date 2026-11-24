@@ -104,7 +104,8 @@ func NewHandler(d Deps) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := connect.WithInterceptors(logging{log: d.Log}, d.Guard.Interceptor(), valid)
+	// Every call past the guard is signed with its caller's provider credentials, whichever service it reaches a provider source through
+	opts := connect.WithInterceptors(logging{log: d.Log}, d.Guard.Interceptor(), d.Credentials.Interceptor(d.Guard), valid)
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewMeshServiceHandler(services.NewMeshService(d.Mesh, d.Formations, d.Puller, d.Tasks, d.Store, d.Perf, d.Instances, d.Guard), opts))
 	mux.Handle(nebuv1connect.NewToolServiceHandler(services.NewToolService(d.Tools, d.Mesh), opts))
@@ -118,7 +119,7 @@ func NewHandler(d Deps) (http.Handler, error) {
 	}
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor, d.Recent, d.Store), opts))
 	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings, d.Notifier), opts))
-	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes, d.Credentials, d.Guard), opts))
+	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
@@ -156,7 +157,7 @@ func NewHandler(d Deps) (http.Handler, error) {
 	mux.Handle(reflectV1, &credentialed{guard: d.Guard, scope: v1.Scope_SCOPE_READ, next: reflectV1Handler})
 	reflectAlpha, reflectAlphaHandler := grpcreflect.NewHandlerV1Alpha(reflector)
 	mux.Handle(reflectAlpha, &credentialed{guard: d.Guard, scope: v1.Scope_SCOPE_READ, next: reflectAlphaHandler})
-	mux.Handle(filesPath, &files{inspector: d.Inspector, auth: d.Guard, log: d.Log})
+	mux.Handle(filesPath, &files{inspector: d.Inspector, auth: d.Guard, credentials: d.Credentials, log: d.Log})
 	entry := auth.Options{Sessions: d.Sessions, Users: d.Users, Log: d.Log}
 	if d.SSO != nil {
 		entry.SSO, entry.SSOHandler = d.SSO.Name(), sso.Handler(d.SSO)

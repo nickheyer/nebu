@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/chat"
+	"github.com/nickheyer/nebu/pkg/bodyparse"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -136,6 +137,102 @@ func (p *pulse) end(event []byte) error {
 	}
 	p.err = p.put(append(b, event...))
 	return p.err
+}
+
+// The body asking for the usage of its stream, whatever else the client set of its stream options kept beside it
+func withUsage(doc bodyparse.Document) (bodyparse.Document, error) {
+	opts := map[string]json.RawMessage{}
+	if raw, ok := doc.Field("stream_options"); ok && json.Unmarshal(raw, &opts) != nil || opts == nil {
+		opts = map[string]json.RawMessage{}
+	}
+	opts["include_usage"] = json.RawMessage("true")
+	raw, err := json.Marshal(opts)
+	if err != nil {
+		return nil, err
+	}
+	return doc.WithField("stream_options", raw)
+}
+
+// The body without one top level field, every other member as the client wrote it and in its order
+func withoutField(doc bodyparse.Document, name string) (bodyparse.Document, error) {
+	dec := json.NewDecoder(bytes.NewReader(doc.Bytes()))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, bodyparse.ErrNotJSON
+	}
+	out := []byte{'{'}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		if key == name {
+			continue
+		}
+		if len(out) > 1 {
+			out = append(out, ',')
+		}
+		quoted, _ := json.Marshal(key)
+		out = append(append(append(out, quoted...), ':'), value...)
+	}
+	return bodyparse.Parse(doc.Kind(), append(out, '}'))
+}
+
+// Passes a stream on event by event without the chunk of usage alone a provider ends it with when asked, which a
+// client that did not ask would not expect, an event held back until it is whole
+type usageDrop struct {
+	held []byte
+}
+
+// What of the stream so far may go to the client now that b arrived
+func (d *usageDrop) pass(b []byte) []byte {
+	d.held = append(d.held, b...)
+	var out []byte
+	for {
+		end := eventEnd(d.held)
+		if end < 0 {
+			return out
+		}
+		if !usageAlone(d.held[:end]) {
+			out = append(out, d.held[:end]...)
+		}
+		d.held = d.held[end:]
+	}
+}
+
+// Where the first event of a stream ends, past its blank line, negative while it is not whole
+func eventEnd(b []byte) int {
+	for i := 0; i+1 < len(b); i++ {
+		if b[i] != '\n' {
+			continue
+		}
+		if b[i+1] == '\n' {
+			return i + 2
+		}
+		if b[i+1] == '\r' && i+2 < len(b) && b[i+2] == '\n' {
+			return i + 3
+		}
+	}
+	return -1
+}
+
+// Whether an event is the chunk that carries a stream's usage and no choice, as stream_options.include_usage adds one before the end
+func usageAlone(event []byte) bool {
+	data, ok := bytes.CutPrefix(bytes.TrimSpace(event), []byte("data:"))
+	if !ok {
+		return false
+	}
+	var chunk struct {
+		Choices *[]json.RawMessage `json:"choices"`
+		Usage   json.RawMessage    `json:"usage"`
+	}
+	if json.Unmarshal(data, &chunk) != nil {
+		return false
+	}
+	return chunk.Choices != nil && len(*chunk.Choices) == 0 && len(chunk.Usage) > 0 && string(chunk.Usage) != "null"
 }
 
 // The number the next event of a Responses stream takes, following the highest one the relayed bytes carried

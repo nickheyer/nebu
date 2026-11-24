@@ -3,9 +3,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // A provider credential with its owner and its secret, which the API never answers
@@ -18,26 +21,53 @@ type CredentialRow struct {
 
 const credentialColumns = `id, owner, source_id, name, kind, secret, expires_at, position, created_at, updated_at, budgets`
 
-// Stores budgets as JSON inside a credential wrapper, empty text when there are none
+// Stores budgets as JSON inside a credential wrapper, empty text when there are none, each enum by its number so a
+// release naming a value otherwise, before or after this one, reads the same budget
 func budgetsCol(list []*v1.CredentialBudget) (string, error) {
 	if len(list) == 0 {
 		return "", nil
 	}
-	data, err := protojson.Marshal(&v1.ProviderCredential{Budgets: list})
+	data, err := protojson.MarshalOptions{UseEnumNumbers: true}.Marshal(&v1.ProviderCredential{Budgets: list})
 	return string(data), err
 }
 
-// Inserts a credential or replaces one the same owner holds under its id, reporting whether it was written
-func (d *DB) PutCredential(ctx context.Context, r CredentialRow) (bool, error) {
+// Inserts a new credential, one already kept changed column by column below so that a key replaced, a sign-in
+// refreshed and a reorder never write over one another
+func (d *DB) PutCredential(ctx context.Context, r CredentialRow) error {
 	c := r.Credential
 	budgets, err := budgetsCol(c.GetBudgets())
 	if err != nil {
+		return err
+	}
+	_, err = d.sql.ExecContext(ctx, `INSERT INTO provider_credentials (`+credentialColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.GetId(), r.Owner, c.GetSourceId(), c.GetName(), enumCol(c.GetKind()), r.Secret, timeCol(c.GetExpiresAt()), c.GetPosition(), stamp(c.GetCreatedAt().AsTime()), stamp(c.GetUpdatedAt().AsTime()), budgets)
+	return err
+}
+
+// Sets what an owner edits of one of their credentials, an empty name or key leaving the stored one and the budgets
+// replaced only when set, reporting whether the owner holds it
+func (d *DB) EditCredential(ctx context.Context, owner, id, name, key string, budgets []*v1.CredentialBudget, set bool, changed time.Time) (bool, error) {
+	col, err := budgetsCol(budgets)
+	if err != nil {
 		return false, err
 	}
-	res, err := d.sql.ExecContext(ctx, `INSERT INTO provider_credentials (`+credentialColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET name = excluded.name, secret = excluded.secret, expires_at = excluded.expires_at, position = excluded.position, updated_at = excluded.updated_at, budgets = excluded.budgets
-		WHERE provider_credentials.owner = excluded.owner`,
-		c.GetId(), r.Owner, c.GetSourceId(), c.GetName(), enumCol(c.GetKind()), r.Secret, timeCol(c.GetExpiresAt()), c.GetPosition(), stamp(c.GetCreatedAt().AsTime()), stamp(c.GetUpdatedAt().AsTime()), budgets)
+	return d.credentialSet(ctx, `name = COALESCE(NULLIF(?, ''), name), secret = COALESCE(NULLIF(?, ''), secret), budgets = CASE WHEN ? THEN ? ELSE budgets END, updated_at = ?`,
+		owner, id, name, key, set, col, stamp(changed))
+}
+
+// Stores the secret of one of an owner's credentials with when it lapses, a refreshed sign-in's tokens, reporting whether the owner holds it
+func (d *DB) SetCredentialSecret(ctx context.Context, owner, id, secret string, expires *timestamppb.Timestamp, changed time.Time) (bool, error) {
+	return d.credentialSet(ctx, `secret = ?, expires_at = ?, updated_at = ?`, owner, id, secret, timeCol(expires), stamp(changed))
+}
+
+// Moves one of an owner's credentials to a position among those of its source, reporting whether the owner holds it
+func (d *DB) SetCredentialPosition(ctx context.Context, owner, id string, position uint32) (bool, error) {
+	return d.credentialSet(ctx, `position = ?`, owner, id, position)
+}
+
+// Sets the named columns of one of an owner's credentials and nothing else, reporting whether the owner holds it
+func (d *DB) credentialSet(ctx context.Context, set, owner, id string, values ...any) (bool, error) {
+	res, err := d.sql.ExecContext(ctx, `UPDATE provider_credentials SET `+set+` WHERE owner = ? AND id = ?`, append(values, owner, id)...)
 	if err != nil {
 		return false, err
 	}
@@ -55,20 +85,96 @@ func (d *DB) SourceCredentials(ctx context.Context, owner, sourceID string) ([]C
 	return list(ctx, d, `SELECT `+credentialColumns+` FROM provider_credentials WHERE owner = ? AND source_id = ? ORDER BY position, created_at, id`, scanCredential, owner, sourceID)
 }
 
+// The id of every credential kept, whoever owns it
+func (d *DB) CredentialIDs(ctx context.Context) (map[string]struct{}, error) {
+	ids, err := list(ctx, d, `SELECT id FROM provider_credentials`, func(rows *sql.Rows) (string, error) {
+		var id string
+		return id, rows.Scan(&id)
+	})
+	out := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out, err
+}
+
 // One of an owner's credentials by id
 func (d *DB) GetCredential(ctx context.Context, owner, id string) (CredentialRow, error) {
 	rows, err := list(ctx, d, `SELECT `+credentialColumns+` FROM provider_credentials WHERE owner = ? AND id = ?`, scanCredential, owner, id)
 	return one(rows, err, "credential", id)
 }
 
-// Removes one of an owner's credentials, reporting existence
-func (d *DB) DeleteCredential(ctx context.Context, owner, id string) (bool, error) {
-	res, err := d.sql.ExecContext(ctx, `DELETE FROM provider_credentials WHERE owner = ? AND id = ?`, owner, id)
+// Removes one of an owner's credentials, the rest for its source renumbered from 1 in their order, reporting existence.
+// A revocation given is queued in the same write, so a removed sign-in's token is never left without one.
+func (d *DB) DeleteCredential(ctx context.Context, owner, id string, revoke *Revocation) (bool, error) {
+	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	defer tx.Rollback()
+	var sourceID string
+	err = tx.QueryRowContext(ctx, `DELETE FROM provider_credentials WHERE owner = ? AND id = ? RETURNING source_id`, owner, id).Scan(&sourceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE provider_credentials SET position = ranked.n
+		FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY position, created_at, id) AS n FROM provider_credentials WHERE owner = ? AND source_id = ?) AS ranked
+		WHERE provider_credentials.id = ranked.id AND provider_credentials.position != ranked.n`, owner, sourceID); err != nil {
+		return false, err
+	}
+	if revoke != nil {
+		if _, err := tx.ExecContext(ctx, queueRevocation, revoke.ID, revoke.Endpoint, revoke.ClientID, revoke.Token, stamp(revoke.Since)); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit()
+}
+
+// A refresh token its provider has yet to confirm revoking: where it is revoked, the client it was issued to, since when
+// it waits, and when and how often the provider was asked
+type Revocation struct {
+	ID, Endpoint, ClientID, Token string
+	Since, Tried                  time.Time
+	Tries                         int
+}
+
+const queueRevocation = `INSERT INTO credential_revocations (id, endpoint, client_id, token, created_at) VALUES (?, ?, ?, ?, ?)
+	ON CONFLICT (id) DO UPDATE SET endpoint = excluded.endpoint, client_id = excluded.client_id, token = excluded.token, created_at = excluded.created_at, tried_at = NULL, tries = 0`
+
+// Queues a refresh token for revocation
+func (d *DB) QueueRevocation(ctx context.Context, r Revocation) error {
+	_, err := d.sql.ExecContext(ctx, queueRevocation, r.ID, r.Endpoint, r.ClientID, r.Token, stamp(r.Since))
+	return err
+}
+
+// Every refresh token waiting to be revoked, the longest waiting first
+func (d *DB) Revocations(ctx context.Context) ([]Revocation, error) {
+	return list(ctx, d, `SELECT id, endpoint, client_id, token, created_at, tried_at, tries FROM credential_revocations ORDER BY created_at, id`, func(rows *sql.Rows) (Revocation, error) {
+		var r Revocation
+		var since string
+		var tried sql.NullString
+		if err := rows.Scan(&r.ID, &r.Endpoint, &r.ClientID, &r.Token, &since, &tried, &r.Tries); err != nil {
+			return Revocation{}, err
+		}
+		r.Since, _ = time.Parse(time.RFC3339Nano, since)
+		r.Tried, _ = time.Parse(time.RFC3339Nano, tried.String)
+		return r, nil
+	})
+}
+
+// Notes that a provider was asked to revoke a token and did not
+func (d *DB) TriedRevocation(ctx context.Context, id string, at time.Time) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE credential_revocations SET tried_at = ?, tries = tries + 1 WHERE id = ?`, stamp(at), id)
+	return err
+}
+
+// Forgets a token once it is revoked or its provider will never take the revocation
+func (d *DB) DropRevocation(ctx context.Context, id string) error {
+	_, err := d.sql.ExecContext(ctx, `DELETE FROM credential_revocations WHERE id = ?`, id)
+	return err
 }
 
 func scanCredential(rows *sql.Rows) (CredentialRow, error) {

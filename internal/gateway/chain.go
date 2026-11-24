@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
 	"github.com/nickheyer/nebu/pkg/scheduling/framework"
@@ -44,26 +46,51 @@ func (g *Gateway) registry() *requestcontrol.Registry {
 	}
 	for typ, build := range fixed {
 		reg.Register(typ, func(name string, params map[string]any) (framework.Plugin, error) {
-			if name != typ {
+			p := build()
+			// The step signing provider requests alone takes a name of its own, for a chain that gave its type's name to another plugin
+			if signs, ok := p.(*providerCredential); ok {
+				signs.name = name
+			} else if name != typ {
 				return nil, fmt.Errorf("plugin type %s is named by its type, not %q", typ, name)
 			}
 			if len(params) > 0 {
 				return nil, fmt.Errorf("plugin type %s takes no parameters", typ)
 			}
-			return build(), nil
+			return p, nil
 		})
 	}
 	return reg
 }
 
-// Builds the processing chain from a YAML document, the built in one when the document is empty
+// Builds the processing chain from a YAML document, the built in one when the document is empty, a document without the
+// provider credential step given it so provider models are signed
 func (g *Gateway) chain(doc []byte) (requestcontrol.Topology, error) {
 	if len(doc) == 0 {
 		doc = []byte(DefaultChain)
 	}
-	topo, err := requestcontrol.LoadChain(doc, g.registry())
+	c, err := requestcontrol.ParseChain(doc)
 	if err != nil {
 		return nil, fmt.Errorf("request chain: %w", err)
+	}
+	// Unordered as in the built in chain, so it runs among the post decision steps wherever the document places them
+	signs := requestcontrol.ChainPlugin{Type: signingStep}
+	added := !slices.ContainsFunc(c.Plugins, func(p requestcontrol.ChainPlugin) bool { return p.Type == signs.Type })
+	if added {
+		// A plugin of another type the document gave the step's name leaves it to take another
+		taken := func(p requestcontrol.ChainPlugin) bool {
+			return cmp.Or(p.Name, p.Type) == cmp.Or(signs.Name, signs.Type)
+		}
+		for slices.ContainsFunc(c.Plugins, taken) {
+			signs.Name = cmp.Or(signs.Name, signs.Type) + "-signing"
+		}
+		c.Plugins = append(c.Plugins, signs)
+	}
+	topo, err := c.Build(g.registry())
+	if err != nil {
+		return nil, fmt.Errorf("request chain: %w", err)
+	}
+	if added {
+		g.log.Warn("request chain names no provider-credential step, adding it so provider models are signed with the caller's credential")
 	}
 	return topo, nil
 }

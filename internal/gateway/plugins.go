@@ -346,10 +346,17 @@ func (s *servedOnly) PostDecision(_ context.Context, _ *requestcontrol.Inbound, 
 }
 
 // Signs a request to a provider's model with the caller's credential for its source, the client's own credentials already stripped
-type providerCredential struct{ g *Gateway }
+type providerCredential struct {
+	g *Gateway
+	// The name the step goes by in its chain, its type's unless the chain gave that to another plugin
+	name string
+}
 
-func (*providerCredential) TypedName() framework.TypedName {
-	return framework.TypedName{Type: "provider-credential", Name: "provider-credential"}
+// The type of the step signing provider requests
+const signingStep = "provider-credential"
+
+func (p *providerCredential) TypedName() framework.TypedName {
+	return framework.TypedName{Type: signingStep, Name: cmp.Or(p.name, signingStep)}
 }
 
 func (p *providerCredential) PostDecision(ctx context.Context, in *requestcontrol.Inbound, dec *requestcontrol.Decision) error {
@@ -358,6 +365,10 @@ func (p *providerCredential) PostDecision(ctx context.Context, in *requestcontro
 		return nil
 	}
 	x := exchangeOf(ctx)
+	// A body attached after the decision runs the step again, the decision signed already
+	if x.signed == dec {
+		return nil
+	}
 	cred, headers, err := p.g.creds.Headers(ctx, x.who.credentialOwner(), sourceID, model, in.Headers)
 	switch {
 	case errors.Is(err, sources.ErrNoCredential):
@@ -369,7 +380,7 @@ func (p *providerCredential) PostDecision(ctx context.Context, in *requestcontro
 	case cred == nil:
 		return nil
 	}
-	x.credential, x.t.Credential = cred, cred.GetName()
+	x.credential, x.t.Credential, x.signed = cred, cred.GetName(), dec
 	for k, v := range headers {
 		dec.Headers[k] = v
 	}

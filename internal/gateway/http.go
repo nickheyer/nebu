@@ -36,8 +36,12 @@ const (
 	EntryHeader = "X-Nebu-Entry"
 	// The subject the entry node authenticated, whose traces the request joins
 	OwnerHeader = "X-Nebu-Owner"
+	// The owner the entry node keeps the caller's provider credentials under, whose credential signs the request
+	CredentialOwnerHeader = auth.CredentialOwnerHeader
 	// The header a gateway answer carries its trace id in
 	TraceHeader = "X-Nebu-Trace"
+	// The header a token count carries when it is the gateway's own estimate rather than the model's tokenizer's
+	CountHeader = "X-Nebu-Token-Count"
 )
 
 // Marks requests made in process, which pass without credentials
@@ -127,7 +131,7 @@ func (g *Gateway) cors(next http.HandlerFunc) http.HandlerFunc {
 			if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
 				h.Set("Access-Control-Allow-Headers", asked)
 			}
-			h.Set("Access-Control-Expose-Headers", "Retry-After, "+TraceHeader+", "+requestcontrol.HeaderServed+", "+requestcontrol.HeaderRequestID)
+			h.Set("Access-Control-Expose-Headers", "Retry-After, "+TraceHeader+", "+CountHeader+", "+requestcontrol.HeaderServed+", "+requestcontrol.HeaderRequestID)
 			h.Set("Access-Control-Max-Age", "600")
 			h.Add("Vary", "Origin")
 			h.Add("Vary", "Access-Control-Request-Headers")
@@ -227,7 +231,7 @@ func (g *Gateway) identify(r *http.Request) (identity, bool) {
 	if r.Header.Get(EntryHeader) != "" {
 		if _, ok := g.guard.PeerOf(r.Header); ok {
 			owner := r.Header.Get(OwnerHeader)
-			return identity{owner: owner, fairness: owner, peer: true}, true
+			return identity{owner: owner, fairness: owner, peer: true, credentials: r.Header.Get(CredentialOwnerHeader)}, true
 		}
 	}
 	if !g.guard.Enabled() {
@@ -238,7 +242,7 @@ func (g *Gateway) identify(r *http.Request) (identity, bool) {
 			return identity{}, false
 		}
 		owner := firstOf(id.Subject, id.TokenPrefix, id.Provider)
-		return identity{owner: owner, fairness: owner, admin: id.Admin()}, true
+		return identity{owner: owner, fairness: owner, admin: id.Admin(), credentials: auth.CredentialOwner(id)}, true
 	}
 	return identity{}, false
 }

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/calibrate"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/inspect"
@@ -98,6 +99,8 @@ type Manager struct {
 	Calibration *calibrate.Table
 	Events      *events.Bus
 	Log         *slog.Logger
+	// The provider credentials callers keep, signing the pulls a launch or a pull onto a member starts for whoever began it
+	Credentials *auth.Credentials
 	// Where stages keep the tensors their heads stream to them
 	CacheDir string
 	// Set by the daemon once slots exist

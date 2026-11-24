@@ -16,6 +16,7 @@ import (
 	"github.com/nickheyer/nebu/internal/gateway/jinja"
 	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/tools"
+	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -84,10 +85,13 @@ type Instances interface {
 type Credentials interface {
 	// The credential the owner's requests for a model of a source go under and the headers they carry beside the ones sent, both nil for a source serving no models
 	Headers(ctx context.Context, owner, sourceID, model string, sent http.Header) (*v1.ProviderCredential, map[string]string, error)
-	// Notes what a provider answered under a credential, with the wait a refusal named
-	Answered(cred *v1.ProviderCredential, status int, header http.Header, retry time.Duration)
+	// Notes what a provider answered under a credential for a model, with the wait a refusal named
+	Answered(cred *v1.ProviderCredential, model string, status int, header http.Header, retry time.Duration)
 	// Adds one finished request's tokens to what the credential was used for with the model
 	Record(cred *v1.ProviderCredential, model string, in, out, cached int)
+	// How the source's provider takes stream_options: whether a stream names its usage only when asked through it, and
+	// whether a body naming it at all is refused, with the server the source reaches, which what is learned of it is kept by
+	StreamOptions(sourceID string) (asks, refuses bool, server string)
 }
 
 // Connections to other members, for forwarded routes and the relay's slot moves
@@ -144,6 +148,8 @@ type Config struct {
 
 // What a gateway is built over
 type Deps struct {
+	// Keeps what provider sources' answers taught across restarts, nil keeping it for the run alone
+	Cache     *cache.Store
 	Pools     pools.View
 	Resolver  requestcontrol.Resolver
 	Manager   Manager
@@ -222,7 +228,12 @@ type Gateway struct {
 	grpcHealth *health.GRPC
 
 	transports sync.Map
-	routes     sync.Map
+	// What each provider source's answers taught of how it takes stream_options, by source and server, the sources whose
+	// streams were said to name no usage, and where a refusal learned is kept across restarts
+	streamOpts  sync.Map
+	usageWarned sync.Map
+	learned     *cache.Store
+	routes      sync.Map
 	// Adapter loads in flight by name, shared by every request naming one meanwhile
 	loads      sync.Map
 	inflight   sync.Map
@@ -281,6 +292,7 @@ func New(deps Deps) (*Gateway, error) {
 		runtimes:   deps.Runtimes,
 		instances:  deps.Instances,
 		creds:      deps.Credentials,
+		learned:    deps.Cache,
 		adapters:   deps.Adapters,
 		metrics:    deps.Metrics,
 		tracer:     deps.Telemetry.Tracer("github.com/nickheyer/nebu/internal/gateway"),

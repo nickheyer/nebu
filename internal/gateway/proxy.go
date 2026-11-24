@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -27,6 +28,9 @@ import (
 
 // Idle connections kept per upstream host for a route with no in flight cap
 const idleUncapped = 256
+
+// The header a relay names its provider's status in when it answers the gateway another, dropped at that hop
+const ProviderStatusHeader = "X-Nebu-Provider-Status"
 
 // What a transport is shared by, its protocol, header timeout and idle connections per host
 type transportKey struct {
@@ -71,10 +75,12 @@ type upstream struct {
 	header http.Header
 }
 
-// Headers a runtime never gets, credentials, forwarding marks, the client's trace context, and what the connection itself sets
+// Headers a runtime never gets, credentials, forwarding marks, the client's trace context, the page a browser sent the request from,
+// and what the connection itself sets
 var clientOnlyHeaders = map[string]bool{
 	"Authorization": true, "X-Api-Key": true, "Cookie": true, "Traceparent": true, "Tracestate": true,
 	"Forwarded": true, "X-Forwarded-For": true, "X-Forwarded-Host": true, "X-Forwarded-Proto": true,
+	"Origin": true, "Referer": true,
 	"Content-Length": true, "Accept-Encoding": true, "Expect": true, "Connection": true, "Keep-Alive": true,
 	"Proxy-Authenticate": true, "Proxy-Authorization": true, "Proxy-Connection": true, "Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true,
 }
@@ -84,11 +90,16 @@ func gatewayOnly(name string) bool {
 	return strings.HasPrefix(name, "X-Nebu-") || strings.HasPrefix(name, "X-Gateway-") || name == mesh.HopHeader
 }
 
+// Whether a header is one only a browser sets, describing the fetch and the page behind it, which the hop to a runtime is not
+func browserOnly(name string) bool {
+	return strings.HasPrefix(name, "Sec-")
+}
+
 // The client's headers as a runtime gets them with the decision's headers added
 func (x *exchange) runtimeHeaders() http.Header {
 	out := http.Header{}
 	for name, v := range x.r.Header {
-		if !clientOnlyHeaders[name] && !gatewayOnly(name) {
+		if !clientOnlyHeaders[name] && !gatewayOnly(name) && !browserOnly(name) {
 			out[name] = append([]string(nil), v...)
 		}
 	}
@@ -185,8 +196,9 @@ func (x *exchange) attempt(ctx context.Context, out *upstream, eps []datalayer.E
 			x.fellBack(ep, resp.Status, written)
 			continue
 		case refused(resp.StatusCode):
-			x.keepBack(ctx, ep, resp.Status, written, resp.StatusCode == http.StatusTooManyRequests && x.credential != nil)
+			x.keepBack(ctx, ep, resp.Status, written, credentialRefused(providerStatus(resp)) && x.credential != nil)
 		}
+		resp.Header.Del(ProviderStatusHeader)
 		return resp, ep, nil
 	}
 	return nil, nil, last
@@ -238,7 +250,8 @@ func (x *exchange) sendTo(ctx context.Context, ep datalayer.Endpoint, out *upstr
 		x.resp.FirstByteAt = x.g.clock.Now()
 	}
 	if x.credential != nil {
-		x.g.creds.Answered(x.credential, resp.StatusCode, resp.Header, chat.RetryAfterOf(resp.Header, x.g.clock.Now()))
+		_, model, _ := providerModel(x.dec.Pool.Model)
+		x.g.creds.Answered(x.credential, model, providerStatus(resp), resp.Header, chat.RetryAfterOf(resp.Header, x.g.clock.Now()))
 	}
 	return resp, true, nil
 }
@@ -351,6 +364,19 @@ func retryable(err error, method string, written bool) bool {
 // Whether a status refuses the request rather than answering it, over its limits or failing on its side
 func refused(status int) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+// The status the provider behind a relay answered, which the relay names on the 502 it answers in its place
+func providerStatus(resp *http.Response) int {
+	if n, err := strconv.Atoi(resp.Header.Get(ProviderStatusHeader)); err == nil && resp.StatusCode == http.StatusBadGateway {
+		return n
+	}
+	return resp.StatusCode
+}
+
+// Whether a provider's status refuses the credential the request went under, over its limits or rejected, the caller's next one may pass
+func credentialRefused(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusUnauthorized
 }
 
 // Follows same host redirects, trailing slash ones included, keeping backend URLs out of client answers

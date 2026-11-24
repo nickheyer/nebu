@@ -387,7 +387,7 @@ func (m *Manager) validRouteLocked(name string, spec *v1.RouteSpec) error {
 			if m.st.pools[datalayer.PoolID(t.GetPoolId())] == nil {
 				return fmt.Errorf("%w: route %s rule %d names pool %q which does not exist", ErrInvalid, name, i, t.GetPoolId())
 			}
-			if _, err := m.condition(t.GetWhen()); err != nil {
+			if _, err := m.condition(t.GetWhen(), true); err != nil {
 				return fmt.Errorf("%w: route %s rule %d target %s when: %v", ErrInvalid, name, i, t.GetPoolId(), err)
 			}
 		}

@@ -8,5 +8,7 @@ var groq = modelCatalog(v1.SourceKind_SOURCE_KIND_GROQ, "groq", "Groq", "https:/
 func init() {
 	// Requests per day and tokens per minute, resets as durations such as 7.66s, https://console.groq.com/docs/rate-limits
 	groq.Limits = &Limits{Header: "x-ratelimit-{field}-{window}", Windows: []string{"requests", "tokens"}}
+	// A stream names its usage when asked through stream_options, https://console.groq.com/docs/api-reference
+	groq.StreamUsage = true
 	register(groq)
 }

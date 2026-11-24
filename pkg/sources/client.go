@@ -77,6 +77,10 @@ type Catalog struct {
 	SignIn *SignIn
 	// The headers a provider of models reports its rate limits in on each answer, nil for one that reports none
 	Limits *Limits
+	// Whether a provider of models takes OpenAI's stream_options.include_usage, a stream naming its usage only when asked
+	StreamUsage bool
+	// Whether a provider of models refuses a body naming stream_options, its schema taking no field but its own
+	NoStreamOptions bool
 
 	API API
 }

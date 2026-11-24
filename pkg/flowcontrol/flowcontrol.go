@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/datalayer"
@@ -46,7 +47,12 @@ type Item struct {
 	RouteLimit int
 	// Claims room on an endpoint, ErrNoRoom or ErrPoolFull keeping the item queued and any other error ending its admission
 	Place func() error
+	// Shared by every admission of one request and set once one was metered, so the quota judges and counts the request once, nil metering every admission
+	Metered *atomic.Bool
 }
+
+// Whether an earlier admission of the item's request was metered
+func (i *Item) metered() bool { return i.Metered != nil && i.Metered.Load() }
 
 // The permit a dispatched request holds until it is released
 type Permit interface {

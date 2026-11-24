@@ -49,6 +49,8 @@ type Request struct {
 	Stream bool
 	// Whether a streamed answer ends with a chunk of usage alone, as OpenAI clients ask with stream_options
 	IncludeUsage bool
+	// Whether the upstream takes no body naming stream_options, a stream rendered for it then asking for no usage chunk
+	NoStreamOptions bool
 	// Whether the answer goes out in the OpenAI Responses shape rather than chat completions
 	Responses bool
 	Tools     []Tool

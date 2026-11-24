@@ -205,10 +205,14 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 		return nil, nil, err
 	}
 	key := resolveKey(src, repo, revision)
+	// A provider resolves under the caller's own credential, so its models are not cached for every caller to share
+	cached := sources.ProviderOf(src.Spec().GetKind()) == nil
 	model := &v1.Model{}
-	if data, ok := i.Cache.Get(key, resolveTTL); ok && proto.Unmarshal(data, model) == nil {
-		i.Formats.Classify(model)
-		return src, model, nil
+	if cached {
+		if data, ok := i.Cache.Get(key, resolveTTL); ok && proto.Unmarshal(data, model) == nil {
+			i.Formats.Classify(model)
+			return src, model, nil
+		}
 	}
 	model, err = src.Resolve(ctx, repo, revision)
 	if err != nil {
@@ -220,7 +224,9 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 		return nil, nil, err
 	}
 	i.Formats.Classify(model)
-	i.remember(key, model)
+	if cached {
+		i.remember(key, model)
+	}
 	return src, model, nil
 }
 

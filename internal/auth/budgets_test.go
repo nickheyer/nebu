@@ -85,7 +85,7 @@ func TestLedgerAddsUpAndSurvivesARestart(t *testing.T) {
 	if _, err := again.Usage(context.Background(), "bob", cred.GetId(), time.Time{}, time.Time{}); !errors.Is(err, ErrUnknownCredential) {
 		t.Fatalf("another owner reads it, got %v", err)
 	}
-	if err := again.Delete(context.Background(), "ann", cred.GetId()); err != nil {
+	if _, err := again.Delete(context.Background(), "ann", cred.GetId()); err != nil {
 		t.Fatal(err)
 	}
 	again.Record(cred, "m", 1, 1, 0)
@@ -160,7 +160,7 @@ func TestReportedWindowFollowsResets(t *testing.T) {
 	c, now := clocked(t, start)
 	claude := keep(t, c, "anthropic", "claude")
 	gpt := keep(t, c, "openai", "gpt")
-	c.Answered(claude, http.StatusOK, http.Header{
+	c.Answered(claude, "", http.StatusOK, http.Header{
 		"Anthropic-Ratelimit-Tokens-Limit":       {"1000"},
 		"Anthropic-Ratelimit-Tokens-Remaining":   {"0"},
 		"Anthropic-Ratelimit-Tokens-Reset":       {start.Add(time.Minute).Format(time.RFC3339)},
@@ -168,7 +168,7 @@ func TestReportedWindowFollowsResets(t *testing.T) {
 		"Anthropic-Ratelimit-Requests-Remaining": {"49"},
 		"Anthropic-Ratelimit-Requests-Reset":     {start.Add(time.Second).Format(time.RFC3339)},
 	}, 0)
-	c.Answered(gpt, http.StatusOK, http.Header{"X-Ratelimit-Limit-Tokens": {"150000"}, "X-Ratelimit-Remaining-Tokens": {"0"}, "X-Ratelimit-Reset-Tokens": {"6m0s"}}, 0)
+	c.Answered(gpt, "", http.StatusOK, http.Header{"X-Ratelimit-Limit-Tokens": {"150000"}, "X-Ratelimit-Remaining-Tokens": {"0"}, "X-Ratelimit-Reset-Tokens": {"6m0s"}}, 0)
 	if w := windowOf(t, c, claude.GetId(), "tokens"); !w.GetSpent() || w.GetUsed() != 1000 || w.GetKind() != v1.WindowKind_WINDOW_KIND_REPORTED || w.GetResetsAt().AsTime() != start.Add(time.Minute) {
 		t.Fatalf("tokens %v", w)
 	}
@@ -196,7 +196,7 @@ func TestCooldownBacksOffAndClears(t *testing.T) {
 	c, now := clocked(t, start)
 	cred := keep(t, c, "lab", "main")
 	for _, want := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 10 * time.Minute, 10 * time.Minute} {
-		c.Answered(cred, http.StatusTooManyRequests, http.Header{}, 0)
+		c.Answered(cred, "", http.StatusTooManyRequests, http.Header{}, 0)
 		w := windowOf(t, c, cred.GetId(), cooldownName)
 		if !w.GetSpent() || w.GetKind() != v1.WindowKind_WINDOW_KIND_COOLDOWN || w.GetResetsAt().AsTime() != now.Add(want) {
 			t.Fatalf("cooldown %v, want %s", w, want)
@@ -206,16 +206,16 @@ func TestCooldownBacksOffAndClears(t *testing.T) {
 			t.Fatal("the cooldown outlives its end")
 		}
 	}
-	c.Answered(cred, http.StatusOK, http.Header{}, 0)
-	c.Answered(cred, http.StatusTooManyRequests, http.Header{}, 0)
+	c.Answered(cred, "", http.StatusOK, http.Header{}, 0)
+	c.Answered(cred, "", http.StatusTooManyRequests, http.Header{}, 0)
 	if w := windowOf(t, c, cred.GetId(), cooldownName); w.GetResetsAt().AsTime() != now.Add(30*time.Second) {
 		t.Fatalf("a success starts the backoff over, got %v", w)
 	}
-	c.Answered(cred, http.StatusOK, http.Header{}, 0)
-	if windowOf(t, c, cred.GetId(), cooldownName) != nil {
-		t.Fatal("a success leaves the cooldown")
+	c.Answered(cred, "", http.StatusOK, http.Header{}, 0)
+	if windowOf(t, c, cred.GetId(), cooldownName) == nil {
+		t.Fatal("a success while the cooldown runs, from a request sent before the refusal, ends it")
 	}
-	c.Answered(cred, http.StatusTooManyRequests, http.Header{}, 5*time.Second)
+	c.Answered(cred, "", http.StatusTooManyRequests, http.Header{}, 5*time.Second)
 	if w := windowOf(t, c, cred.GetId(), cooldownName); w.GetResetsAt().AsTime() != now.Add(5*time.Second) {
 		t.Fatalf("the wait the provider named, got %v", w)
 	}
@@ -249,21 +249,21 @@ func TestChosenSkipsSpent(t *testing.T) {
 			t.Fatalf("%s went under %s, want %s", model, got, want)
 		}
 	}
-	c.Answered(second, http.StatusTooManyRequests, http.Header{}, 10*time.Second)
+	c.Answered(second, "", http.StatusTooManyRequests, http.Header{}, 10*time.Second)
 	_, _, err := c.Headers(ctx, "ann", "lab", "gpt-4o", nil)
 	se, ok := errors.AsType[*requestcontrol.SpentError](err)
 	if !ok || se.Retry != 10*time.Second {
 		t.Fatalf("every credential spent, got %v", err)
 	}
-	c.Answered(first, http.StatusTooManyRequests, http.Header{}, 0)
+	c.Answered(first, "", http.StatusTooManyRequests, http.Header{}, 0)
 	*now = start.Add(11 * time.Second)
 	if got := pick("gpt-3.5"); got != "second" {
 		t.Fatalf("the first cools down and the second came back, got %s", got)
 	}
-	c.Answered(second, http.StatusTooManyRequests, http.Header{}, time.Minute)
+	c.Answered(second, "", http.StatusTooManyRequests, http.Header{}, time.Minute)
 	_, _, err = c.Headers(ctx, "ann", "lab", "gpt-4o", nil)
-	if se, ok := errors.AsType[*requestcontrol.SpentError](err); !ok || se.Retry != 19*time.Second {
-		t.Fatalf("the first's cooldown is the earliest left, got %v", err)
+	if se, ok := errors.AsType[*requestcontrol.SpentError](err); !ok || se.Retry != time.Minute {
+		t.Fatalf("the second comes free first, the first held by its budget past its cooldown, got %v", err)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestBudgetsCheckedAndPlacement(t *testing.T) {
 		{Name: "no period", Unit: v1.BudgetUnit_BUDGET_UNIT_TOKENS, Limit: 1},
 		{Name: "no seconds", Unit: v1.BudgetUnit_BUDGET_UNIT_TOKENS, Limit: 1, Period: v1.BudgetPeriod_BUDGET_PERIOD_ROLLING},
 		{Name: "zone", Unit: v1.BudgetUnit_BUDGET_UNIT_TOKENS, Limit: 1, Period: v1.BudgetPeriod_BUDGET_PERIOD_DAY, Zone: "Mars/Olympus"},
-		{Name: "percent", Unit: v1.BudgetUnit_BUDGET_UNIT_PERCENT_LEFT, Limit: 80},
+		{Name: "percent", Unit: v1.BudgetUnit_BUDGET_UNIT_PERCENT_USED, Limit: 80},
 		{Name: "month", Unit: v1.BudgetUnit_BUDGET_UNIT_TOKENS, Limit: 1, Period: v1.BudgetPeriod_BUDGET_PERIOD_MONTH, Start: 30},
 	} {
 		if _, err := c.Put(ctx, "ann", &v1.PutCredentialRequest{SourceId: "lab", Secret: "k", Budgets: []*v1.CredentialBudget{b}, BudgetsSet: true}); !errors.Is(err, ErrProviderCredential) {

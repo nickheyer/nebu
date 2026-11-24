@@ -3,6 +3,7 @@ package installs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -162,6 +163,39 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		Origin:    abs,
 		CreatedAt: timestamppb.Now(),
 	}
+	m.probe(ctx, rt, in)
+	if err := m.saveInstall(ctx, in); err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
+// The origin of the install the daemon makes of its own binary, which follows the binary the daemon runs from, where an
+// install a person adopted stays on the binary they pointed it at
+const OriginSelf = "nebu daemon"
+
+// Points an adopted install at another binary, keeping its id for the slots, formations and instances naming it, its
+// origin the binary's path unless one is given
+func (m *Manager) Readopt(ctx context.Context, id, path, origin string) (*v1.Install, error) {
+	in, err := m.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if in.GetKind() != v1.InstallKind_INSTALL_KIND_ADOPTED {
+		return nil, fmt.Errorf("%w: install %s was not adopted", runtimes.ErrParam, id)
+	}
+	rt, err := m.Runtimes.Get(in.GetRuntimeId())
+	if err != nil {
+		return nil, err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := os.Stat(abs); err != nil || info.IsDir() {
+		return nil, fmt.Errorf("%s is not an executable file", abs)
+	}
+	in.Path, in.Dir, in.Origin, in.Version = abs, filepath.Dir(abs), cmp.Or(origin, abs), ""
 	m.probe(ctx, rt, in)
 	if err := m.saveInstall(ctx, in); err != nil {
 		return nil, err

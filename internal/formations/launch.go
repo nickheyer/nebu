@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
@@ -175,13 +176,15 @@ func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, pre
 	m.Events.Publish(v1.EventKind_EVENT_KIND_FORMATION, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), proto.Clone(f).(*v1.Formation))
 	m.Mesh.Bump()
 	labels := map[string]string{"formation": f.GetId(), "name": f.GetName(), "shape": shapeWord(f.GetShape())}
+	// The launch outlives the request, so its pulls go under the credentials of whoever asked for it, the shared owner's for a relaunch
+	owner := auth.SignedFor(ctx)
 	task := m.Tasks.Start(kindFormation, "formation "+f.GetName(), labels, func(ctx context.Context, h *tasks.Handle) error {
 		defer func() {
 			m.mu.Lock()
 			delete(m.busy, f.GetId())
 			m.mu.Unlock()
 		}()
-		return m.launch(ctx, h, f.GetId(), p)
+		return m.launch(m.Credentials.Sign(ctx, owner), h, f.GetId(), p)
 	})
 	out := m.update(f.GetId(), func(r *v1.Formation) { r.TaskId = task.GetId() })
 	return out, task, nil
@@ -662,8 +665,11 @@ func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(don
 	if err != nil {
 		return err
 	}
+	req := connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths, Slot: slot})
+	// The member pulls under the credentials of whoever began the pull here
+	req.Header().Set(auth.CredentialOwnerHeader, auth.SignedFor(ctx))
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
-	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths, Slot: slot}))
+	resp, err := cl.Mesh.PullSeat(cctx, req)
 	cancel()
 	if err != nil {
 		return err

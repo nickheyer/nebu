@@ -68,7 +68,7 @@ func (x *exchange) forward(ctx context.Context, in *requestcontrol.Inbound) {
 	x.relayAnswer(ctx, resp, chat.RuntimeOf(x.api), creq)
 }
 
-// Opens the request on a member's gateway with the hop count, entry node, owner and fairness id it carries on
+// Opens the request on a member's gateway with the hop count, entry node, owner, credential owner and fairness id it carries on
 func (x *exchange) toNode(ctx context.Context, node, fairness string, body []byte) (*http.Response, error) {
 	g := x.g
 	base, hc, err := g.peers.Dial(ctx, node)
@@ -91,6 +91,7 @@ func (x *exchange) toNode(ctx context.Context, node, fairness string, body []byt
 	req.Header.Set(requestcontrol.HeaderModelName, servedName(x.route))
 	req.Header.Set(EntryHeader, cmp.Or(x.entry, g.peers.Self()))
 	req.Header.Set(OwnerHeader, x.who.owner)
+	req.Header.Set(CredentialOwnerHeader, x.who.credentialOwner())
 	req.Header.Set(requestcontrol.HeaderFairnessID, fairness)
 	req.Header.Set(mesh.HopHeader, strconv.Itoa(x.hops))
 	req.Header.Set(requestcontrol.HeaderRequestID, x.id)
@@ -187,6 +188,7 @@ func (g *Gateway) forwardVideo(w http.ResponseWriter, r *http.Request, client ch
 	}
 	req.Header.Set(EntryHeader, g.peers.Self())
 	req.Header.Set(OwnerHeader, identityOf(r).owner)
+	req.Header.Set(CredentialOwnerHeader, identityOf(r).credentialOwner())
 	resp, err := hc.Transport.RoundTrip(req)
 	if err != nil {
 		client.Error(w, chat.Failure{Status: http.StatusBadGateway, Code: chat.CodeServer, Message: "the node running video " + id + " did not answer: " + err.Error()})

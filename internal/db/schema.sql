@@ -489,10 +489,10 @@ CREATE TABLE api_tokens (
 CREATE UNIQUE INDEX api_tokens_prefix ON api_tokens (prefix);
 CREATE INDEX api_tokens_owner ON api_tokens (provider, subject);
 
--- Credentials callers keep for providers serving models. The owner is the subject the caller's
--- traces are kept under, daemon for the daemon token and auth.disabled. The kind is key or
+-- Credentials callers keep for providers serving models. The owner is a local account's id, a
+-- single sign-on subject under oidc:, or daemon for the daemon token and auth.disabled. The kind is key or
 -- sign_in, the secret a key or a sign-in's tokens as JSON, and expires_at when those lapse.
--- budgets holds the owner's budgets as JSON, empty when there are none.
+-- budgets holds the owner's budgets as JSON with enums by number, empty when there are none.
 CREATE TABLE provider_credentials (
   id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
@@ -519,6 +519,19 @@ CREATE TABLE credential_usage (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cached_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (credential_id, model, bucket)
+);
+CREATE INDEX credential_usage_by_bucket ON credential_usage (credential_id, bucket);
+
+-- Refresh tokens of sign-ins removed or refused that their provider has yet to confirm revoking,
+-- asked again until it does. The id is the credential's, a fresh one for tokens never kept.
+CREATE TABLE credential_revocations (
+  id TEXT PRIMARY KEY,
+  endpoint TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  token TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  tried_at TEXT,
+  tries INTEGER NOT NULL DEFAULT 0
 );
 
 -- Saved web chat conversations, owned by the account that made them. The turns

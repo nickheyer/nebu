@@ -29,6 +29,10 @@ const (
 	cooldownMost  = 10 * time.Minute
 	// The name the cooldown window goes by
 	cooldownName = "cooldown"
+	// The name the window goes by while the provider rejected the credential itself
+	rejectedName = "rejected"
+	// Models one credential keeps a standing for, the one answered longest ago forgotten past them
+	maxStandings = 64
 	// Budgets one credential may carry
 	maxBudgets = 32
 )
@@ -47,18 +51,38 @@ type reported struct {
 	since time.Time
 }
 
-// What a credential's provider reports of its limits and how long its refusals keep it out, kept in memory
-type standing struct {
-	reported map[string]*reported
+// How long refusals keep a credential out, or one model under it
+type cooldown struct {
 	// When the cooldown after a refusal ends, and the wait the last refusal naming none was given
 	until   time.Time
 	backoff time.Duration
+}
+
+// What a credential's provider reports of its limits for one model and how long its refusals keep the model out, kept in memory
+type standing struct {
+	reported map[string]*reported
+	cooldown
+	// When the provider last answered for the model
+	seen time.Time
+}
+
+// What a provider's answers under one credential left in memory: a standing by model, "" for answers naming none
+// and holding back every model, and the cooldown after the provider rejected the credential itself
+type answers struct {
+	models   map[string]*standing
+	rejected cooldown
+	// Whether a request went under the credential while it was rejected, whose success ends the rejection at once rather
+	// than passing for the answer to a request sent before it
+	retried bool
 }
 
 // A window with the models it counts, every model when nil
 type window struct {
 	*v1.CredentialWindow
 	models []string
+	// Whether it is the wait after the provider rejected the credential itself, which passes the credential over for
+	// another and never keeps a request from the last one left
+	rejected bool
 }
 
 // Whether the window holds back a request for the model
@@ -91,7 +115,8 @@ func matches(pattern, s string) bool {
 	return strings.HasSuffix(s, parts[len(parts)-1])
 }
 
-// Refuses budgets with no unit or period, a period missing what it reads, an unknown zone or a name used twice
+// Refuses budgets with no unit or period, a period missing what it reads, a rolling period shorter than a usage bucket or
+// longer than usage is kept, an unknown zone or a name used twice
 func checkBudgets(list []*v1.CredentialBudget) error {
 	if len(list) > maxBudgets {
 		return fmt.Errorf("%w: a credential carries at most %d budgets", ErrProviderCredential, maxBudgets)
@@ -115,9 +140,9 @@ func checkBudgets(list []*v1.CredentialBudget) error {
 			return bad("names an empty model")
 		}
 		seen[name] = true
-		if b.GetUnit() == v1.BudgetUnit_BUDGET_UNIT_PERCENT_LEFT {
+		if b.GetUnit() == v1.BudgetUnit_BUDGET_UNIT_PERCENT_USED {
 			if b.GetWindow() == "" {
-				return bad("reads percent left of a reported window, name it")
+				return bad("reads the percent used of a reported window, name it")
 			}
 			continue
 		}
@@ -126,8 +151,13 @@ func checkBudgets(list []*v1.CredentialBudget) error {
 		}
 		switch b.GetPeriod() {
 		case v1.BudgetPeriod_BUDGET_PERIOD_ROLLING:
-			if b.GetSeconds() == 0 {
+			switch s := int64(b.GetSeconds()); {
+			case s == 0:
 				return bad("rolls over no seconds")
+			case s < db.UsageBucket:
+				return bad("rolls over %d seconds, at least %d, the span usage is counted in", s, db.UsageBucket)
+			case s > int64(usageKeep/time.Second):
+				return bad("rolls over %d seconds, at most %d, as long as usage is kept", s, int64(usageKeep/time.Second))
 			}
 		case v1.BudgetPeriod_BUDGET_PERIOD_DAY:
 			if b.GetStart() > 23 {
@@ -174,7 +204,10 @@ func (c *Credentials) Run(ctx context.Context) {
 	defer flush.Stop()
 	prune := time.NewTicker(usagePrune)
 	defer prune.Stop()
+	revoke := time.NewTicker(revokeEvery)
+	defer revoke.Stop()
 	c.prune(ctx)
+	c.revokeQueued(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -184,6 +217,8 @@ func (c *Credentials) Run(ctx context.Context) {
 			c.flush(ctx)
 		case <-prune.C:
 			c.prune(ctx)
+		case <-revoke.C:
+			c.revokeQueued(ctx)
 		}
 	}
 }
@@ -214,6 +249,25 @@ func (c *Credentials) prune(ctx context.Context) {
 	}
 	if n > 0 {
 		c.log.Debug("credential usage past its keep pruned", "rows", n)
+	}
+	c.pruneStandings(ctx)
+}
+
+// Forgets what providers answered under credentials removed since, the answer to a request in flight at a removal having kept it again
+func (c *Credentials) pruneStandings(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.standings) == 0 {
+		return
+	}
+	ids, err := c.db.CredentialIDs(ctx)
+	if err != nil {
+		return
+	}
+	for id := range c.standings {
+		if _, kept := ids[id]; !kept {
+			delete(c.standings, id)
+		}
 	}
 }
 
@@ -270,8 +324,9 @@ func (c *Credentials) used(ctx context.Context, row db.CredentialRow, from, to i
 	return rows, nil
 }
 
-// Notes what a provider answered under a credential: the limits its headers report, a refusal's cooldown, and a success clearing it
-func (c *Credentials) Answered(cred *v1.ProviderCredential, status int, header http.Header, retry time.Duration) {
+// Notes what a provider answered under a credential for a model: the limits its headers report and a refusal's cooldown for that model,
+// a rejection of the credential itself for every model, and a success starting the backoff over once the cooldown ran out
+func (c *Credentials) Answered(cred *v1.ProviderCredential, model string, status int, header http.Header, retry time.Duration) {
 	_, cat, err := c.provider(cred.GetSourceId())
 	if err != nil || cat == nil {
 		return
@@ -279,11 +334,20 @@ func (c *Credentials) Answered(cred *v1.ProviderCredential, status int, header h
 	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	st := c.standings[cred.GetId()]
-	if st == nil {
-		st = &standing{reported: map[string]*reported{}}
-		c.standings[cred.GetId()] = st
+	a := c.standings[cred.GetId()]
+	if a == nil {
+		a = &answers{models: map[string]*standing{}}
+		c.standings[cred.GetId()] = a
 	}
+	st := a.models[model]
+	if st == nil {
+		if len(a.models) >= maxStandings {
+			delete(a.models, slices.MinFunc(slices.Collect(maps.Keys(a.models)), func(x, y string) int { return a.models[x].seen.Compare(a.models[y].seen) }))
+		}
+		st = &standing{reported: map[string]*reported{}}
+		a.models[model] = st
+	}
+	st.seen = now
 	if l := cat.Limits; l != nil {
 		for _, name := range l.Windows {
 			limit, remaining, reset, ok := l.Read(header, name, now)
@@ -303,18 +367,52 @@ func (c *Credentials) Answered(cred *v1.ProviderCredential, status int, header h
 	}
 	switch {
 	case status == http.StatusTooManyRequests:
-		if retry <= 0 {
-			if st.backoff == 0 || now.After(st.until.Add(cooldownMost)) {
-				st.backoff = cooldownFirst
-			} else {
-				st.backoff = min(st.backoff*2, cooldownMost)
-			}
-			retry = st.backoff
-		}
-		st.until = now.Add(retry)
-		c.log.Info("provider refused a credential as over its limits, cooling down", "source", cred.GetSourceId(), "credential", cred.GetName(), "until", st.until)
+		st.refuse(now, retry)
+		c.log.Info("provider refused a credential as over its limits, cooling down", "source", cred.GetSourceId(), "credential", cred.GetName(), "model", model, "until", st.until)
+	case status == http.StatusUnauthorized:
+		a.retried = false
+		a.rejected.refuse(now, retry)
+		c.log.Warn("provider rejected a credential, passing it over", "source", cred.GetSourceId(), "credential", cred.GetName(), "until", a.rejected.until)
 	case status < http.StatusBadRequest:
-		st.until, st.backoff = time.Time{}, 0
+		st.answered(now)
+		if a.retried {
+			a.rejected, a.retried = cooldown{}, false
+		} else {
+			a.rejected.answered(now)
+		}
+	}
+}
+
+// Notes that a request goes under a credential while its provider's rejection of it stands
+func (c *Credentials) retrying(id string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if a := c.standings[id]; a != nil && now.Before(a.rejected.until) {
+		a.retried = true
+	}
+}
+
+// Starts the cooldown after a refusal for the wait it named, or naming none for one doubling while refusals continue
+func (cd *cooldown) refuse(now time.Time, retry time.Duration) {
+	if retry <= 0 {
+		if cd.backoff == 0 || now.After(cd.until.Add(cooldownMost)) {
+			cd.backoff = cooldownFirst
+		} else {
+			cd.backoff = min(cd.backoff*2, cooldownMost)
+		}
+		// A refusal naming no wait never ends a cooldown sooner than the wait the provider named for it
+		if until := now.Add(cd.backoff); until.After(cd.until) {
+			cd.until = until
+		}
+		return
+	}
+	cd.until = now.Add(retry)
+}
+
+// Starts the backoff over after a success once the cooldown ran out, a success while it runs coming from a request sent before the refusal
+func (cd *cooldown) answered(now time.Time) {
+	if !now.Before(cd.until) {
+		*cd = cooldown{}
 	}
 }
 
@@ -325,29 +423,100 @@ func (c *Credentials) forgetStanding(id string) {
 	c.mu.Unlock()
 }
 
-// The credential's windows as they stand: each budget, each limit its provider reported, and a cooldown running
-func (c *Credentials) windows(ctx context.Context, row db.CredentialRow, now time.Time) []window {
-	st := standing{reported: map[string]*reported{}}
+// A copy of what the provider's answers under a credential left, for the model and answers naming none, or every model for none named
+func (c *Credentials) standingOf(id, model string) (map[string]standing, cooldown) {
 	c.mu.Lock()
-	if s := c.standings[row.Credential.GetId()]; s != nil {
-		st.until = s.until
-		for name, r := range s.reported {
+	defer c.mu.Unlock()
+	a := c.standings[id]
+	if a == nil {
+		return nil, cooldown{}
+	}
+	out := map[string]standing{}
+	for m, st := range a.models {
+		if model != "" && m != "" && m != model {
+			continue
+		}
+		kept := standing{reported: make(map[string]*reported, len(st.reported)), cooldown: st.cooldown}
+		for name, r := range st.reported {
 			copied := *r
-			st.reported[name] = &copied
+			kept.reported[name] = &copied
+		}
+		out[m] = kept
+	}
+	return out, a.rejected
+}
+
+// The standing a budget reads for a model, the model's reported windows over those answers naming none left
+func readFor(kept map[string]standing, model string) standing {
+	st := standing{reported: map[string]*reported{}}
+	maps.Copy(st.reported, kept[""].reported)
+	if model != "" {
+		maps.Copy(st.reported, kept[model].reported)
+	}
+	return st
+}
+
+// A window's name with the model it was kept for
+func named(name, model string) string {
+	if model == "" {
+		return name
+	}
+	return name + " for " + model
+}
+
+// The credential's windows as they stand for a request for the model: each budget, each limit its provider reported and a cooldown running,
+// those kept for one model holding back that model alone, and the wait after a rejection. A budget reading a reported window reads the model's.
+// With no model named, as the owner's listing has them, every model's are read, named for it, and such a budget shows again for each that reported it.
+func (c *Credentials) windows(ctx context.Context, row db.CredentialRow, now time.Time, model string) []window {
+	kept, rejected := c.standingOf(row.Credential.GetId(), model)
+	scopes := []string{""}
+	if model != "" {
+		scopes = append(scopes, model)
+	} else {
+		for _, m := range slices.Sorted(maps.Keys(kept)) {
+			if m != "" {
+				scopes = append(scopes, m)
+			}
 		}
 	}
-	c.mu.Unlock()
 	var out []window
 	for _, b := range row.Credential.GetBudgets() {
-		out = append(out, window{CredentialWindow: c.budget(ctx, row, b, st, now), models: b.GetModels()})
+		out = append(out, window{CredentialWindow: c.budget(ctx, row, b, readFor(kept, model), now), models: b.GetModels()})
+		reads := b.GetUnit() == v1.BudgetUnit_BUDGET_UNIT_PERCENT_USED || b.GetPeriod() == v1.BudgetPeriod_BUDGET_PERIOD_REPORTED
+		if model != "" || !reads {
+			continue
+		}
+		for _, m := range scopes[1:] {
+			if kept[m].reported[b.GetWindow()] == nil || !counts(b.GetModels(), m) {
+				continue
+			}
+			w := c.budget(ctx, row, b, readFor(kept, m), now)
+			w.Name = named(w.GetName(), m)
+			out = append(out, window{CredentialWindow: w, models: []string{m}})
+		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(st.reported)) {
-		out = append(out, window{CredentialWindow: st.reported[name].window(name, now)})
+	for _, m := range scopes {
+		st := kept[m]
+		var models []string
+		if m != "" {
+			models = []string{m}
+		}
+		for _, name := range slices.Sorted(maps.Keys(st.reported)) {
+			out = append(out, window{CredentialWindow: st.reported[name].window(named(name, m), now), models: models})
+		}
+		if now.Before(st.until) {
+			out = append(out, window{CredentialWindow: cooling(named(cooldownName, m), st.until), models: models})
+		}
 	}
-	if now.Before(st.until) {
-		out = append(out, window{CredentialWindow: &v1.CredentialWindow{Name: cooldownName, Kind: v1.WindowKind_WINDOW_KIND_COOLDOWN, Limit: 1, Used: 1, ResetsAt: timestamppb.New(st.until), Spent: true}})
+	if now.Before(rejected.until) {
+		out = append(out, window{CredentialWindow: cooling(rejectedName, rejected.until), rejected: true})
 	}
 	return out
+}
+
+// A cooldown running as a window, spent until it ends
+func cooling(name string, until time.Time) *v1.CredentialWindow {
+	return &v1.CredentialWindow{Name: name, Kind: v1.WindowKind_WINDOW_KIND_COOLDOWN, Limit: 1, Used: 1, ResetsAt: timestamppb.New(until), Spent: true}
 }
 
 // A reported limit as a window, spent while nothing is left before a known reset and replenished once it passed
@@ -368,7 +537,7 @@ func (r *reported) window(name string, now time.Time) *v1.CredentialWindow {
 func (c *Credentials) budget(ctx context.Context, row db.CredentialRow, b *v1.CredentialBudget, st standing, now time.Time) *v1.CredentialWindow {
 	w := &v1.CredentialWindow{Name: b.GetName(), Kind: v1.WindowKind_WINDOW_KIND_BUDGET, Limit: b.GetLimit()}
 	var reset time.Time
-	if b.GetUnit() == v1.BudgetUnit_BUDGET_UNIT_PERCENT_LEFT {
+	if b.GetUnit() == v1.BudgetUnit_BUDGET_UNIT_PERCENT_USED {
 		if r := st.reported[b.GetWindow()]; r != nil && r.limit > 0 && (r.reset.IsZero() || now.Before(r.reset)) {
 			w.Used, reset = max(r.limit-r.remaining, 0)/r.limit*100, r.reset
 		}
@@ -389,7 +558,7 @@ func (c *Credentials) budget(ctx context.Context, row db.CredentialRow, b *v1.Cr
 			}
 		}
 		if b.GetPeriod() == v1.BudgetPeriod_BUDGET_PERIOD_ROLLING && oldest >= 0 {
-			reset = time.Unix((oldest+1)*db.UsageBucket, 0).Add(time.Duration(b.GetSeconds()) * time.Second)
+			reset = time.Unix((oldest+1)*db.UsageBucket, 0).Add(rolling(b))
 		}
 	}
 	if !reset.IsZero() {
@@ -418,6 +587,12 @@ func amount(b *v1.CredentialBudget, u *v1.CredentialUsage) float64 {
 	return 0
 }
 
+// The span a rolling budget counts over. One stored before spans were bounded reads as the nearest span usage can measure,
+// a bucket at least and as long as usage is kept at most, its stored seconds left as its owner wrote them.
+func rolling(b *v1.CredentialBudget) time.Duration {
+	return min(max(time.Duration(b.GetSeconds())*time.Second, db.UsageBucket*time.Second), usageKeep)
+}
+
 // When a budget's period began and when it next resets, a rolling period's reset left to the usage it holds
 func period(b *v1.CredentialBudget, st standing, now time.Time) (time.Time, time.Time) {
 	loc, err := time.LoadLocation(b.GetZone())
@@ -427,7 +602,7 @@ func period(b *v1.CredentialBudget, st standing, now time.Time) (time.Time, time
 	t := now.In(loc)
 	switch b.GetPeriod() {
 	case v1.BudgetPeriod_BUDGET_PERIOD_ROLLING:
-		return now.Add(-time.Duration(b.GetSeconds()) * time.Second), time.Time{}
+		return now.Add(-rolling(b)), time.Time{}
 	case v1.BudgetPeriod_BUDGET_PERIOD_DAY:
 		start := time.Date(t.Year(), t.Month(), t.Day(), int(b.GetStart()), 0, 0, 0, loc)
 		if start.After(t) {
@@ -455,34 +630,74 @@ func period(b *v1.CredentialBudget, st standing, now time.Time) (time.Time, time
 }
 
 // The credential a request for the model goes under among the owner's for a source: the first by position with no spent
-// window counting the model. With none it answers false and the earliest a window holding one back resets.
+// window counting the model. One its provider rejected is passed over for the next, but with every other spent the first
+// held by its rejection alone is gone under all the same: a rejection may pass, and with nothing else to go under, waiting
+// it out would turn one refusal into an outage. With none it answers false and the earliest any comes free, each once the
+// last window holding it resets, one held by a window naming no reset left out.
 func (c *Credentials) chosen(ctx context.Context, rows []db.CredentialRow, model string) (db.CredentialRow, time.Time, bool) {
 	now := c.now()
 	var reset time.Time
+	var last *db.CredentialRow
 	for _, r := range rows {
-		held := false
-		for _, w := range c.windows(ctx, r, now) {
+		held, known, rejected := false, true, true
+		// When the credential comes free, the latest reset among the windows holding it
+		var free time.Time
+		for _, w := range c.windows(ctx, r, now, model) {
 			if !w.holds(model) {
 				continue
 			}
-			held = true
-			if at := w.GetResetsAt(); at != nil && (reset.IsZero() || at.AsTime().Before(reset)) {
-				reset = at.AsTime()
+			held, rejected = true, rejected && w.rejected
+			if at := w.GetResetsAt(); at == nil {
+				known = false
+			} else if at.AsTime().After(free) {
+				free = at.AsTime()
 			}
 		}
 		if !held {
 			return r, time.Time{}, true
 		}
+		if rejected && last == nil {
+			last = &r
+		}
+		if known && (reset.IsZero() || free.Before(reset)) {
+			reset = free
+		}
+	}
+	if last != nil {
+		return *last, time.Time{}, true
 	}
 	return db.CredentialRow{}, reset, false
 }
 
-// The refusal for a request whose every credential is spent, waiting until the first resets
-func spent(name, model string, reset, now time.Time) error {
-	what := cmp.Or(model, "its models")
+// The refusal for a request whose every credential is spent, waiting until the first resets, saying so when the provider
+// rejected some or all of them rather than their limits being reached
+func spent(name, model string, reset, now time.Time, rejected, all int) error {
+	what := fmt.Sprintf("every credential for %s is spent for %s", name, cmp.Or(model, "its models"))
+	switch {
+	case rejected > 0 && rejected == all:
+		what = fmt.Sprintf("%s rejected every credential kept for it, check them", name)
+	case rejected > 0:
+		what += " or was rejected by it"
+	}
 	if reset.IsZero() {
-		return &requestcontrol.SpentError{Message: fmt.Sprintf("every credential for %s is spent for %s", name, what)}
+		return &requestcontrol.SpentError{Message: what}
 	}
 	wait := reset.Sub(now)
-	return &requestcontrol.SpentError{Message: fmt.Sprintf("every credential for %s is spent for %s, the first resets in %s", name, what, wait.Round(time.Second)), Retry: wait}
+	if rejected > 0 && rejected == all {
+		return &requestcontrol.SpentError{Message: fmt.Sprintf("%s, the first is tried again in %s", what, wait.Round(time.Second)), Retry: wait}
+	}
+	return &requestcontrol.SpentError{Message: fmt.Sprintf("%s, the first resets in %s", what, wait.Round(time.Second)), Retry: wait}
+}
+
+// How many of the credentials their provider rejected and is not asked under again yet
+func (c *Credentials) rejected(rows []db.CredentialRow, now time.Time) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, r := range rows {
+		if a := c.standings[r.Credential.GetId()]; a != nil && now.Before(a.rejected.until) {
+			n++
+		}
+	}
+	return n
 }

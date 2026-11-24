@@ -7,9 +7,11 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"cel.dev/cel-go/cel"
+	"cel.dev/cel-go/checker"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/requestcontrol"
@@ -31,37 +33,104 @@ func leftOf(ctx context.Context, pool datalayer.PoolID) bool {
 // The names a target condition reads: the time, the target's ready endpoints, and the requests they have room for
 var whenEnv, _ = cel.NewEnv(cel.Variable("now", cel.TimestampType), cel.Variable("ready", cel.IntType), cel.Variable("free", cel.IntType))
 
-// A target condition compiled once, nil for an empty one, refusing one that does not parse or answer true or false
-func (m *Manager) condition(expr string) (cel.Program, error) {
+// The most a target condition may cost, its loops over the lists it writes out counted, refused on saving when its estimate
+// is higher
+const whenCost = 1000
+
+// What reading the time in a named zone counts for, the zone looked up at each call, which CEL counts no dearer than any other
+const whenZoneCost = 25
+
+// The estimate's sizes and call costs beyond those CEL knows: no sizes, a condition reading nothing whose size it does not
+// write out, and the dearer reads of the time in a named zone
+type whenSizes struct{}
+
+func (whenSizes) EstimateSize(checker.AstNode) *checker.SizeEstimate { return nil }
+
+func (whenSizes) EstimateCallCost(_, overload string, _ *checker.AstNode, _ []checker.AstNode) *checker.CallEstimate {
+	if strings.HasSuffix(overload, "_with_tz") {
+		return &checker.CallEstimate{CostEstimate: checker.CostEstimate{Min: whenZoneCost, Max: whenZoneCost}}
+	}
+	return nil
+}
+
+// A condition kept compiled, or the fault that keeps it from compiling
+type when struct {
+	program cel.Program
+	err     error
+	// What it may cost at most when that is more than a condition may, zero within it
+	over uint64
+}
+
+// A target condition compiled once, nil for an empty one, refusing one that does not parse or answer true or false. One
+// being saved is refused as well when it may cost more than a condition may. One stored before conditions were costed is
+// not: it keeps deciding as it did, run whole, and is refused once its route is next saved.
+func (m *Manager) condition(expr string, saving bool) (cel.Program, error) {
 	if expr == "" {
 		return nil, nil
 	}
-	if p, ok := m.whens.Load(expr); ok {
-		return p.(cel.Program), nil
+	w := m.compiled(expr)
+	switch {
+	case w.err != nil:
+		return nil, w.err
+	case w.over > 0 && saving:
+		return nil, fmt.Errorf("%q may cost up to %d to evaluate, more than %d", expr, w.over, whenCost)
 	}
-	ast, iss := whenEnv.Compile(expr)
-	if iss.Err() != nil {
-		return nil, iss.Err()
-	}
-	if ast.OutputType() != cel.BoolType {
-		return nil, fmt.Errorf("%q answers %s, not true or false", expr, ast.OutputType())
-	}
-	p, err := whenEnv.Program(ast)
-	if err != nil {
-		return nil, err
-	}
-	m.whens.Store(expr, p)
-	return p, nil
+	return w.program, nil
 }
 
-// Whether a target's condition holds for its scope now, one that fails to evaluate holding nothing
-func (m *Manager) holds(v *view, t target, s scope) bool {
-	p, err := m.condition(t.when)
+// The condition as compiled before, or compiled now and kept: cut off at the most a condition may cost when its estimate
+// is within that, so never in practice, and run whole when it is over
+func (m *Manager) compiled(expr string) when {
+	if kept, ok := m.whens.Load(expr); ok {
+		return kept.(when)
+	}
+	w := compile(expr)
+	m.whens.Store(expr, w)
+	return w
+}
+
+func compile(expr string) when {
+	ast, iss := whenEnv.Compile(expr)
+	if faults := iss.Errors(); len(faults) > 0 {
+		// The first fault alone, CEL's own report repeating the whole condition under each one
+		return when{err: fmt.Errorf("%q: %s, at character %d", expr, faults[0].Message, faults[0].Location.Column()+1)}
+	}
+	if ast.OutputType() != cel.BoolType {
+		return when{err: fmt.Errorf("%q answers %s, not true or false", expr, ast.OutputType())}
+	}
+	est, err := whenEnv.EstimateCost(ast, whenSizes{})
 	if err != nil {
+		return when{err: err}
+	}
+	var opts []cel.ProgramOption
+	w := when{}
+	if est.Max > whenCost {
+		w.over = est.Max
+	} else {
+		opts = append(opts, cel.CostLimit(whenCost))
+	}
+	if w.program, err = whenEnv.Program(ast, opts...); err != nil {
+		return when{err: err}
+	}
+	return w
+}
+
+// Whether a target's condition holds for its scope now, one that does not compile or fails to evaluate holding nothing
+func (m *Manager) holds(v *view, t target, s scope) bool {
+	p, err := m.condition(t.when, false)
+	if err != nil {
+		if _, said := m.whenFaults.LoadOrStore(t.when, true); !said {
+			m.log.Warn("a route target's condition does not compile, the target draws nothing until it is changed", "pool", s.pool, "err", err)
+		}
 		return false
 	}
 	if p == nil {
 		return true
+	}
+	if w := m.compiled(t.when); w.over > 0 {
+		if _, said := m.whenFaults.LoadOrStore(t.when, true); !said {
+			m.log.Warn("a route target's condition may cost more than a condition may, it decides as before and is refused when its route is next saved", "pool", s.pool, "when", t.when, "cost", w.over, "most", whenCost)
+		}
 	}
 	out, _, err := p.Eval(map[string]any{"now": time.Now(), "ready": len(m.readyIn(v, s)), "free": m.freeCapacity(v, s)})
 	if err != nil {

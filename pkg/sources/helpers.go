@@ -227,22 +227,6 @@ func Shown(cols ...*v1.HitColumn) []*v1.HitColumn {
 	return cols
 }
 
-// One facet a provider reads from its own tag taxonomy
-type taxonomy struct{ kind, id, label string }
-
-// Builds a single choice facet per taxonomy from the values fetch reads for its kind
-func taxonomyFacets(ctx context.Context, specs []taxonomy, fetch func(ctx context.Context, kind string) ([]*v1.FacetValue, error)) ([]*v1.Facet, error) {
-	var out []*v1.Facet
-	for _, t := range specs {
-		values, err := fetch(ctx, t.kind)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, NewFacet(t.id, t.label, false, values...))
-	}
-	return out, nil
-}
-
 // Turns an identifier like text-generation into Text generation
 func Humanize(id string) string {
 	s := strings.NewReplacer("-", " ", "_", " ").Replace(id)

@@ -120,7 +120,8 @@ func (s *AuthService) PutCredential(ctx context.Context, req *connect.Request[v1
 }
 
 func (s *AuthService) DeleteCredential(ctx context.Context, req *connect.Request[v1.DeleteCredentialRequest]) (*connect.Response[v1.DeleteCredentialResponse], error) {
-	return authReply(&v1.DeleteCredentialResponse{}, s.credentials.Delete(ctx, s.owner(req.Header()), req.Msg.GetId()))
+	unconfirmed, err := s.credentials.Delete(ctx, s.owner(req.Header()), req.Msg.GetId())
+	return authReply(&v1.DeleteCredentialResponse{RevocationUnconfirmed: unconfirmed}, err)
 }
 
 func (s *AuthService) ListCredentialUsage(ctx context.Context, req *connect.Request[v1.ListCredentialUsageRequest]) (*connect.Response[v1.ListCredentialUsageResponse], error) {
@@ -136,7 +137,7 @@ func (s *AuthService) ListCredentialUsage(ctx context.Context, req *connect.Requ
 }
 
 func (s *AuthService) StartSignIn(ctx context.Context, req *connect.Request[v1.StartSignInRequest]) (*connect.Response[v1.StartSignInResponse], error) {
-	in, err := s.credentials.StartSignIn(ctx, s.owner(req.Header()), req.Msg.GetSourceId(), req.Msg.GetName())
+	in, err := s.credentials.StartSignIn(ctx, s.owner(req.Header()), req.Msg.GetSourceId(), req.Msg.GetName(), req.Msg.GetCredentialId())
 	return authReply(&v1.StartSignInResponse{SignIn: in}, err)
 }
 

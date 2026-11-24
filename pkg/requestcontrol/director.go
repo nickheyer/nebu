@@ -449,6 +449,7 @@ func (d *director) item(in *Inbound, pool datalayer.Pool, req *framework.Request
 		EnqueuedAt: d.clock.Now(),
 		Route:      in.Route,
 		RouteLimit: in.MaxInFlight,
+		Metered:    in.Metered,
 	}
 }
 

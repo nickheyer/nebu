@@ -7,6 +7,8 @@ var compatible = func() *Catalog {
 	cat := modelCatalog(v1.SourceKind_SOURCE_KIND_OPENAI_COMPATIBLE, "openai-compatible", "OpenAI compatible", "", v1.ApiFlavor_API_FLAVOR_OPENAI, bearerKey())
 	cat.Transports[0].Required = []string{"endpoint"}
 	cat.Configured = true
+	// A server speaking the OpenAI API takes its stream_options as well
+	cat.StreamUsage = true
 	cat.Description = "Any server speaking the OpenAI API, such as https://host/v1, run through the relay with your own key"
 	return cat
 }()

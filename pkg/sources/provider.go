@@ -43,6 +43,8 @@ type OAuth struct {
 	Config oauth2.Config
 	// Parameters the authorization request carries beside the standard ones, {host} and {nonce} filled in
 	Authorize map[string]string
+	// Parameters the authorization request of a first sign-in carries beside those, a sign-in authorized again under the client it was issued leaving them out
+	Registers map[string]string
 	// Parameters every token request carries, such as a resource, {state} filled in on the code exchange
 	Token map[string]string
 	// Token requests go as JSON rather than a form
@@ -51,6 +53,11 @@ type OAuth struct {
 	Issues bool
 	// The scope the granted tokens must hold to serve requests
 	Requires string
+	// Where the provider publishes the keys a sign-in by redirect's ID token is checked against, signed RS256 by Issuer for
+	// the client and carrying the {nonce} Authorize sent; empty for a provider whose ID token is not checked
+	JWKS, Issuer string
+	// Where a sign-in's refresh token is revoked when it is removed, empty for a provider taking no revocation
+	Revoke string
 	// Headers requests signed with the tokens carry beside the provider's fixed ones
 	Fixed map[string]string
 	// Asks for a code the person enters, for a sign-in by device, nil for one by redirect
@@ -261,7 +268,8 @@ func listModels(ctx context.Context, c *Client) ([]modelEntry, error) {
 		case page.HasMore && page.LastID != "":
 			query.Set("after_id", page.LastID)
 		case page.Links.Next != "" && page.Links.Next != next:
-			next, query = c.HTTP().Absolute(page.Links.Next), nil
+			// The link carries its own query, a later page's after_id joining it
+			next, query = c.HTTP().Absolute(page.Links.Next), url.Values{}
 		default:
 			return out, nil
 		}

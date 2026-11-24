@@ -216,11 +216,11 @@ func (openai) Render(c *Request) (string, []byte, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		req.Prompt, req.IncludeUsage = prompts, c.Stream
+		req.Prompt, req.IncludeUsage = prompts, c.Stream && !c.NoStreamOptions
 		req.appendTo(&b)
 		return OpenAICompletions, b, nil
 	}
-	req.IncludeUsage = c.Stream
+	req.IncludeUsage = c.Stream && !c.NoStreamOptions
 	req.Messages = make([]oaiMessage, 0, len(c.Messages))
 	// Tool turns carry text only, their images following the run of tool turns as a user turn
 	var held []Part

@@ -29,11 +29,17 @@ type identity struct {
 	peer bool
 	// Whether a gateway key opened the request, naming no account
 	key bool
+	// The owner provider credentials are kept under as the auth layer or the forwarding member named it, empty when neither did
+	credentials string
 }
 
-// The owner provider credentials are kept under, the shared one for a gateway key, an in process caller and auth.disabled
+// The owner provider credentials are kept under, the shared one for a gateway key, an in process caller and auth.disabled,
+// and the trace owner for a request a member forwarded without naming one
 func (id identity) credentialOwner() string {
-	if id.key || id.owner == "" {
+	switch {
+	case id.credentials != "":
+		return id.credentials
+	case id.key || id.owner == "":
 		return auth.ProviderDaemon
 	}
 	return id.owner
@@ -101,11 +107,17 @@ type exchange struct {
 	served datalayer.Endpoint
 	// The provider credential the decision goes under, nil for a pool no provider serves
 	credential *v1.ProviderCredential
+	// The decision the credential signed, a body attached to it later not signing it again
+	signed *requestcontrol.Decision
+	// Whether the gateway asked the provider for the usage of a stream whose client did not, the chunk naming it kept from the client
+	asked bool
 	// The last refusal the request was decided again after, given to the client when nothing remains
 	last *kept
 	// The pools the request left, which no later decision goes to, and the credentials a provider refused it under
 	left   map[datalayer.PoolID]bool
 	cooled map[string]bool
+	// Set once flow control metered the request against its caller's quota, which no later decision meters it against again
+	metered atomic.Bool
 	// The instance count the request is held under, moving with each attempt
 	counted *atomic.Int64
 }
