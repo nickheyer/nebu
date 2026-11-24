@@ -120,6 +120,10 @@ func (s *BuildService) Build(ctx context.Context, req *connect.Request[v1.BuildR
 	return reply(&v1.BuildResponse{Build: b, Task: task}, err)
 }
 
+func (s *BuildService) PreviewBuild(ctx context.Context, req *connect.Request[v1.PreviewBuildRequest]) (*connect.Response[v1.PreviewBuildResponse], error) {
+	return reply(s.installs.Preview(ctx, req.Msg.GetBuild()))
+}
+
 func (s *BuildService) ListBuilds(ctx context.Context, req *connect.Request[v1.ListBuildsRequest]) (*connect.Response[v1.ListBuildsResponse], error) {
 	list, err := s.installs.ListBuilds(ctx, req.Msg.GetRuntimeId())
 	if err != nil {

@@ -603,7 +603,8 @@ func mergeHeader(base, extra http.Header) http.Header {
 }
 
 // Clones ref into dest and returns the commit. Empty or latest selects the default branch. Commit
-// hashes use full clones, while branches and tags use shallow clones.
+// hashes use full clones, while branches and tags use shallow clones. Any other ref the remote
+// serves, as refs/pull/123/head is, is fetched by its name.
 func Checkout(ctx context.Context, remote, ref, dest string, out io.Writer) (string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", fmt.Errorf("git is not installed on this host")
@@ -629,6 +630,20 @@ func Checkout(ctx context.Context, remote, ref, dest string, out io.Writer) (str
 			return "", err
 		}
 		if err := run("-C", dest, "checkout", "--quiet", ref); err != nil {
+			return "", err
+		}
+	case strings.HasPrefix(ref, "refs/") || strings.HasPrefix(ref, "pull/"):
+		// Clone names branches and tags alone, so a ref outside them is fetched into a tree of its own
+		if err := run("init", "--quiet", dest); err != nil {
+			return "", err
+		}
+		if err := run("-C", dest, "remote", "add", "origin", remote); err != nil {
+			return "", err
+		}
+		if err := run("-C", dest, "fetch", "--depth", "1", "origin", ref); err != nil {
+			return "", err
+		}
+		if err := run("-C", dest, "checkout", "--quiet", "FETCH_HEAD"); err != nil {
 			return "", err
 		}
 	default:

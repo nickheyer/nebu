@@ -46,10 +46,31 @@ message Var {
   string label = 5;
 }
 
-// One source patch a recipe applies before its steps
+// One source patch, a recipe's applied before its steps or a build's own applied after the recipe's
 message Patch {
   string id = 1;
   string description = 2;
+  // Where the unified diff is fetched from
+  string url = 3;
+  // The unified diff itself, in place of a URL, which a recipe's own patch leaves out of its description
+  string content = 4;
+  // Leading path components stripped from the diff's paths, one when zero
+  uint32 strip = 5;
+}
+
+// One command a build runs in its sandbox. Every word, the script and every environment value is a template over the
+// build: {{.Src}}, {{.Out}} and {{.Root}} are the source tree, the output directory and the build's own directory,
+// {{.Jobs}} the parallel jobs, {{.Ref}}, {{.Commit}} and {{.Variant}} what is built, and {{.Vars.name}} a variable
+message BuildStep {
+  string name = 1;
+  // The words of the command, run without a shell, a word whose template renders empty left out
+  repeated string command = 2;
+  // A script sh runs, in place of a command
+  string script = 3;
+  // Environment variables the step sets over the build's
+  map<string, string> env = 4;
+  // Working directory relative to the source tree, the tree itself when empty
+  string dir = 5;
 }
 
 // Build recipe.
@@ -92,6 +113,8 @@ message Build {
   repeated string patches = 17;
   google.protobuf.Timestamp created_at = 18;
   google.protobuf.Timestamp finished_at = 19;
+  // The request the build was made from, with everything it set in place of the recipe's
+  BuildRequest request = 20;
 }
 
 // Recipe with its selected host variant.
@@ -131,9 +154,44 @@ message BuildRequest {
   SandboxKind sandbox = 5;
   string image = 6;
   bool force = 7;
+  // A tag, branch, commit, or any other ref of the source, such as refs/pull/123/head
   string ref = 8;
   // Recipe patches the build leaves out, by id
   repeated string skip_patches = 9;
+  // A git repository cloned at the ref in place of the recipe's source, a URL or a GitHub owner/name
+  string repo = 10;
+  // Steps run in order in place of the recipe's
+  repeated BuildStep steps = 11;
+  // Environment variables every step runs with, each value a template as a step's are
+  map<string, string> env = 12;
+  // Paths under the source tree copied into the output directory after the steps, globs allowed, in place of the recipe's
+  repeated string outputs = 13;
+  // The installed binary relative to the output directory, in place of the recipe's
+  string binary = 14;
+  // Unified diffs applied to the source after the recipe's patches, each by its URL or its content
+  repeated Patch patches = 15;
+  // Longest the build may run, the recipe's own limit when zero
+  uint32 timeout_ms = 16;
+}
+
+// Asks what a build request would run, building nothing
+message PreviewBuildRequest {
+  BuildRequest build = 1 [(buf.validate.field).required = true];
+}
+
+// What a build request resolves to
+message PreviewBuildResponse {
+  // The build as it would be recorded, or the one already made when this exact build exists
+  Build build = 1;
+  // The steps in order, the recipe's for the chosen variant and variables unless the request gave its own, in the form a request sends back
+  repeated BuildStep steps = 2;
+  // Paths under the source tree copied into the output directory after the steps
+  repeated string outputs = 3;
+  // The installed binary relative to the output directory
+  string binary = 4;
+  // Where the source comes from
+  string source = 5;
+  uint32 timeout_ms = 6;
 }
 
 // Returns the build record and its task
@@ -182,6 +240,8 @@ service BuildService {
   rpc ListRecipes(ListRecipesRequest) returns (ListRecipesResponse);
   // Starts or reuses a build
   rpc Build(BuildRequest) returns (BuildResponse);
+  // Resolves a build request to its ref, steps and outputs without building
+  rpc PreviewBuild(PreviewBuildRequest) returns (PreviewBuildResponse);
   // Lists builds
   rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
   // Fetches one build

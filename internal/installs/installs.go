@@ -357,6 +357,14 @@ type installPlan struct {
 	rule    runtimes.PrebuiltRule
 	release string
 	build   *v1.BuildRequest
+	// The build the request resolves to, for a built install
+	buildID string
+}
+
+// What tells one install of a runtime from another, so asking twice for the same one answers its running task and
+// asking for a different one starts it
+func (p *installPlan) key(runtimeID string) string {
+	return strings.Join([]string{runtimeID, p.method.ID, p.path, p.rule.ID, p.release, p.buildID}, "\x00")
 }
 
 // Builds an install plan and rejects unknown settings.
@@ -427,15 +435,17 @@ func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.Hos
 		}
 		slices.Sort(p.build.SkipPatches)
 		// Validate before starting work.
-		if _, _, err := m.resolveBuild(ctx, p.build); err != nil {
+		_, b, err := m.resolveBuild(ctx, p.build)
+		if err != nil {
 			return nil, err
 		}
+		p.buildID = b.GetId()
 	}
 	return p, nil
 }
 
 // Installs a runtime using the selected method and settings. Returns an existing
-// install task if one is already running for that runtime.
+// install task if one is already running for the same install of that runtime.
 func (m *Manager) Install(ctx context.Context, runtimeID, method string, settings map[string]string) (*v1.Task, error) {
 	rt, err := m.Runtimes.Get(runtimeID)
 	if err != nil {
@@ -452,9 +462,10 @@ func (m *Manager) Install(ctx context.Context, runtimeID, method string, setting
 	if err != nil {
 		return nil, err
 	}
+	key := p.key(runtimeID)
 	m.buildMu.Lock()
 	defer m.buildMu.Unlock()
-	if task, ok := m.installing[runtimeID]; ok {
+	if task, ok := m.installing[key]; ok {
 		if t, _, err := m.Tasks.Get(task.GetId()); err == nil && !terminal(t.GetState()) {
 			return t, nil
 		}
@@ -462,7 +473,7 @@ func (m *Manager) Install(ctx context.Context, runtimeID, method string, setting
 	task := m.Tasks.Start(kindInstall, "install "+rt.Name(), map[string]string{"runtime": runtimeID, "method": method}, func(ctx context.Context, h *tasks.Handle) error {
 		defer func() {
 			m.buildMu.Lock()
-			delete(m.installing, runtimeID)
+			delete(m.installing, key)
 			m.buildMu.Unlock()
 		}()
 		return m.install(ctx, h, rt, p)
@@ -470,7 +481,7 @@ func (m *Manager) Install(ctx context.Context, runtimeID, method string, setting
 	if m.installing == nil {
 		m.installing = map[string]*v1.Task{}
 	}
-	m.installing[runtimeID] = task
+	m.installing[key] = task
 	return task, nil
 }
 

@@ -36,7 +36,8 @@ func (LlamaCpp) Facts() []string {
 func (LlamaCpp) Vars() []Var {
 	return []Var{
 		{Name: "build_type", Label: "Build type", Default: "Release", Description: "The cmake build type", Choices: []string{"Release", "RelWithDebInfo", "Debug", "MinSizeRel"}},
-		{Name: "extra", Label: "Extra cmake flags", Description: "Space-separated CMake flags, such as -DGGML_CUDA_F16=ON"},
+		{Name: "extra", Label: "Extra cmake flags", Description: "Space-separated CMake flags, such as -DGGML_CUDA_F16=ON, which come last and so win over the recipe's own"},
+		{Name: "targets", Label: "Targets", Description: "Space-separated CMake targets to build, such as llama-server, every target when empty"},
 	}
 }
 
@@ -102,15 +103,27 @@ func (LlamaCpp) Sandbox() Sandbox {
 	return Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST, CLIs: []string{"podman", "docker", "nerdctl"}}
 }
 
+// The server's own web page is left out, since the gateway is what clients reach. With it the build downloads the
+// newest prebuilt page at compile time, and a revision that page was not made for fails on it
 func (LlamaCpp) Steps(b *Build) []Step {
 	configure := command("cmake", "-S", ".", "-B", "build",
 		"-DCMAKE_BUILD_TYPE="+arg(b.Vars, "build_type"), arg(b.Vars, "backend"), arg(b.Vars, "archs"),
-		"-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TOOLS=ON", "-DGGML_RPC=ON")
+		"-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TOOLS=ON", "-DGGML_RPC=ON",
+		"-DLLAMA_USE_PREBUILT_UI=OFF")
 	configure = append(configure, args(b.Vars, "extra")...)
 	return []Step{
 		{Name: "configure", Command: configure},
-		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "-j", strconv.Itoa(b.Jobs))},
+		{Name: "compile", Command: cmakeBuild(b)},
 	}
+}
+
+// Compiles a configured CMake tree, the targets a build names or else every one
+func cmakeBuild(b *Build) []string {
+	compile := command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "-j", strconv.Itoa(b.Jobs))
+	if targets := args(b.Vars, "targets"); len(targets) > 0 {
+		compile = append(append(compile, "--target"), targets...)
+	}
+	return compile
 }
 
 // The server and the rpc server under whatever name this revision builds it

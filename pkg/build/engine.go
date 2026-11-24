@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,10 +63,31 @@ func (s *Selection) context(b *v1.Build, runner sandbox.Runner, jobs int) *recip
 	return out
 }
 
+// Parallel jobs a build's steps may run
+func (e *Engine) jobs() int {
+	if e.Jobs > 0 {
+		return e.Jobs
+	}
+	return runtime.NumCPU()
+}
+
+// What a resolved build would run, in the form a request sends back: its steps with the build's directories left as
+// templates, what it copies out, its binary, its source and its time limit
+func (e *Engine) Preview(s *Selection, b *v1.Build) *v1.PreviewBuildResponse {
+	return &v1.PreviewBuildResponse{
+		Build:     b,
+		Steps:     s.Templates(b, e.jobs()),
+		Outputs:   s.Outputs(),
+		Binary:    s.Binary(),
+		Source:    s.Source.String(),
+		TimeoutMs: uint32(s.Timeout() / time.Millisecond),
+	}
+}
+
 // Resolves the ref, selects patches, and assigns id and directory
 func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	rc := s.Recipe
-	src := rc.Source()
+	src := s.Source
 	if src.Releases != "" && (b.Ref == "" || b.Ref == Latest) {
 		tag, err := latestTag(ctx, e.Sources, recipes.ReleaseSource, src.Releases)
 		if err != nil {
@@ -90,14 +112,18 @@ func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	}
 	b.Patches = s.Patches
 	contents := map[string][]byte{}
-	for _, p := range rc.Patches() {
+	for _, p := range s.patches() {
 		if len(p.Content) > 0 {
 			contents[p.ID] = p.Content
 		} else {
 			contents[p.ID] = []byte(p.URL)
 		}
 	}
-	b.Id = hashBuild(rc, b, s.context(b, nil, 1), contents)
+	id, err := hashBuild(s, b, s.context(b, nil, 1), contents)
+	if err != nil {
+		return err
+	}
+	b.Id = id
 	b.Dir = filepath.Join(e.Root, rc.RuntimeID(), b.Id)
 	return nil
 }
@@ -108,7 +134,7 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 	if progress == nil {
 		progress = func(int, int, string) {}
 	}
-	ctx, cancel := context.WithTimeout(ctx, Timeout(rc))
+	ctx, cancel := context.WithTimeout(ctx, s.Timeout())
 	defer cancel()
 	if b.Dir == "" {
 		return fmt.Errorf("build has no directory, resolve it first")
@@ -127,12 +153,11 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 	if err != nil {
 		return err
 	}
-	jobs := e.Jobs
-	if jobs <= 0 {
-		jobs = runtime.NumCPU()
+	bctx := s.context(b, runner, e.jobs())
+	steps, err := s.Steps(bctx)
+	if err != nil {
+		return err
 	}
-	bctx := s.context(b, runner, jobs)
-	steps := rc.Steps(bctx)
 	total := len(steps) + 3
 	progress(0, total, "fetching source")
 	commit, err := e.fetch(ctx, s, b, out)
@@ -145,7 +170,18 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 	if err := e.patch(ctx, s, b, out); err != nil {
 		return err
 	}
-	for i, st := range rc.Steps(bctx) {
+	// The steps again, now that the commit the fetch landed on is known to them
+	if steps, err = s.Steps(bctx); err != nil {
+		return err
+	}
+	shared, err := renderEnv(s.Env, bctx)
+	if err != nil {
+		return err
+	}
+	for _, kv := range sortedPairs(shared) {
+		fmt.Fprintf(out, "env %s\n", kv)
+	}
+	for i, st := range steps {
 		name := st.Name
 		if name == "" {
 			name = fmt.Sprintf("step %d", i+1)
@@ -158,9 +194,15 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 		if st.Dir != "" {
 			dir = filepath.Join(srcDir, filepath.FromSlash(st.Dir))
 		}
+		env := st.Env
+		if len(shared) > 0 {
+			env = map[string]string{}
+			maps.Copy(env, shared)
+			maps.Copy(env, st.Env)
+		}
 		fmt.Fprintf(out, "--- %s: %s\n", name, strings.Join(st.Command, " "))
 		started := time.Now()
-		if err := runner.Run(ctx, sandbox.Step{Name: name, Command: st.Command, Env: st.Env, Dir: dir}, out); err != nil {
+		if err := runner.Run(ctx, sandbox.Step{Name: name, Command: st.Command, Env: env, Dir: dir}, out); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -187,7 +229,7 @@ func (e *Engine) runner(s *Selection, b *v1.Build) (sandbox.Runner, error) {
 }
 
 func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, out io.Writer) (string, error) {
-	src := s.Recipe.Source()
+	src := s.Source
 	dest := filepath.Join(b.GetDir(), srcDir)
 	switch {
 	case src.Archive != nil:
@@ -225,7 +267,7 @@ func (e *Engine) patch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 	for _, id := range b.GetPatches() {
 		selected[id] = true
 	}
-	for _, p := range s.Recipe.Patches() {
+	for _, p := range s.patches() {
 		if !selected[p.ID] {
 			fmt.Fprintf(out, "patch %s left out\n", p.ID)
 			continue
@@ -262,7 +304,7 @@ func (e *Engine) patch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 func (e *Engine) collect(s *Selection, b *v1.Build, out io.Writer) error {
 	tree := filepath.Join(b.GetDir(), srcDir)
 	dest := filepath.Join(b.GetDir(), outDir)
-	for _, pattern := range s.Recipe.Outputs() {
+	for _, pattern := range s.Outputs() {
 		pattern = strings.TrimSpace(pattern)
 		matches, err := filepath.Glob(filepath.Join(tree, filepath.FromSlash(pattern)))
 		if err != nil {
@@ -277,7 +319,7 @@ func (e *Engine) collect(s *Selection, b *v1.Build, out io.Writer) error {
 			}
 		}
 	}
-	binary := strings.TrimSpace(s.Recipe.Binary())
+	binary := s.Binary()
 	b.Binary = filepath.Join(dest, filepath.FromSlash(binary))
 	info, err := os.Stat(b.Binary)
 	if err != nil || info.IsDir() {

@@ -85,12 +85,25 @@ func (d *DB) installs(ctx context.Context, where string, args ...any) ([]*v1.Ins
 	return out, nil
 }
 
-// Inserts or replaces a build with vars, facts, and patches
+// Scans the request a build was made from out of its JSON, none when the column is empty
+type buildRequestAt struct{ p **v1.BuildRequest }
+
+func (a buildRequestAt) Scan(v any) error {
+	s, _ := v.(string)
+	*a.p = nil
+	if s == "" {
+		return nil
+	}
+	*a.p = &v1.BuildRequest{}
+	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal([]byte(s), *a.p)
+}
+
+// Inserts or replaces a build with vars, facts, patches, and the request it was made from
 func (d *DB) PutBuild(ctx context.Context, b *v1.Build) error {
 	return d.tx(ctx, func(exec execFn) error {
 		id := b.GetId()
-		if err := exec(`INSERT OR REPLACE INTO builds (id, recipe_id, runtime_id, variant, ref, commit_id, sandbox, image, dir, binary, install_id, task_id, state, error, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, b.GetRecipeId(), b.GetRuntimeId(), b.GetVariant(), b.GetRef(), b.GetCommit(), enumCol(b.GetSandbox()), b.GetImage(), b.GetDir(), b.GetBinary(), b.GetInstallId(), b.GetTaskId(), enumCol(b.GetState()), b.GetError(), stamp(b.GetCreatedAt().AsTime()), timeCol(b.GetFinishedAt())); err != nil {
+		if err := exec(`INSERT OR REPLACE INTO builds (id, recipe_id, runtime_id, variant, ref, commit_id, sandbox, image, dir, binary, install_id, task_id, state, error, created_at, finished_at, request) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, b.GetRecipeId(), b.GetRuntimeId(), b.GetVariant(), b.GetRef(), b.GetCommit(), enumCol(b.GetSandbox()), b.GetImage(), b.GetDir(), b.GetBinary(), b.GetInstallId(), b.GetTaskId(), enumCol(b.GetState()), b.GetError(), stamp(b.GetCreatedAt().AsTime()), timeCol(b.GetFinishedAt()), messageCol(b.GetRequest())); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "build_id", id, "build_vars", "build_facts", "build_patches"); err != nil {
@@ -141,9 +154,9 @@ func (d *DB) FailUnfinishedBuilds(ctx context.Context) (int64, error) {
 }
 
 func (d *DB) builds(ctx context.Context, where string, args ...any) ([]*v1.Build, error) {
-	out, err := list(ctx, d, `SELECT id, recipe_id, runtime_id, variant, ref, commit_id, sandbox, image, dir, binary, install_id, task_id, state, error, created_at, finished_at FROM builds `+where+` ORDER BY created_at DESC, id`, func(rows *sql.Rows) (*v1.Build, error) {
+	out, err := list(ctx, d, `SELECT id, recipe_id, runtime_id, variant, ref, commit_id, sandbox, image, dir, binary, install_id, task_id, state, error, created_at, finished_at, request FROM builds `+where+` ORDER BY created_at DESC, id`, func(rows *sql.Rows) (*v1.Build, error) {
 		b := &v1.Build{}
-		return b, rows.Scan(&b.Id, &b.RecipeId, &b.RuntimeId, &b.Variant, &b.Ref, &b.Commit, enumAt[v1.SandboxKind]{&b.Sandbox}, &b.Image, &b.Dir, &b.Binary, &b.InstallId, &b.TaskId, enumAt[v1.BuildState]{&b.State}, &b.Error, at{&b.CreatedAt}, at{&b.FinishedAt})
+		return b, rows.Scan(&b.Id, &b.RecipeId, &b.RuntimeId, &b.Variant, &b.Ref, &b.Commit, enumAt[v1.SandboxKind]{&b.Sandbox}, &b.Image, &b.Dir, &b.Binary, &b.InstallId, &b.TaskId, enumAt[v1.BuildState]{&b.State}, &b.Error, at{&b.CreatedAt}, at{&b.FinishedAt}, buildRequestAt{&b.Request})
 	}, args...)
 	if err != nil {
 		return nil, err

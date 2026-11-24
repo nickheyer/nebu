@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 	"unicode"
@@ -11,6 +13,27 @@ import (
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
+
+// The prefix of a param that sets an environment variable of the server process, env.NAME setting NAME. Any runtime
+// takes one, beside the params it declares
+const EnvPrefix = "env."
+
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// The environment variable a param sets, when its name is env.NAME
+func envParam(name string) (string, bool) {
+	variable, named := strings.CutPrefix(name, EnvPrefix)
+	return variable, named
+}
+
+// Checks a param naming an environment variable: the name is one a process can hold, and the value parses as a template
+func checkEnv(variable, value string) error {
+	if !envName.MatchString(variable) {
+		return fmt.Errorf("%w: %q is no name for an environment variable", ErrParam, variable)
+	}
+	_, err := argTemplate(value)
+	return err
+}
 
 // What a slot's argument templates read about a launch
 type ArgScope struct {
@@ -54,6 +77,43 @@ func ScopeOf(in Launch, cmd *Command) ArgScope {
 		port = cmd.Port
 	}
 	return ArgScope{Name: in.Name, Host: in.Host, Port: port, Model: model, Artifacts: in.Artifacts, Params: params, Devices: devices, Install: in.Install, Seat: in.Seat}
+}
+
+// Adds to a rendered command what a launch sets by hand: its extra words, one argument each, and the environment
+// variables its params name, which win over the ones the runtime set. Each is a template over the launch
+func Extend(in Launch, cmd *Command, args string) error {
+	scope := ScopeOf(in, cmd)
+	extra, err := RenderArgs(args, scope)
+	if err != nil {
+		return err
+	}
+	cmd.Args = append(cmd.Args, extra...)
+	var names []string
+	for name := range in.Params {
+		if _, named := envParam(name); named && in.Params.Str(name) != "" {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		variable, _ := envParam(name)
+		t, err := argTemplate(in.Params.Str(name))
+		if err != nil {
+			return err
+		}
+		var buf bytes.Buffer
+		if err := t.Execute(&buf, scope); err != nil {
+			return fmt.Errorf("%w: environment variable %s: %v", ErrParam, variable, err)
+		}
+		if cmd.Env == nil {
+			cmd.Env = map[string]string{}
+		}
+		if cmd.Params == nil {
+			cmd.Params = map[string]string{}
+		}
+		cmd.Env[variable], cmd.Params[name] = buf.String(), buf.String()
+	}
+	return nil
 }
 
 // The extra words a run launches with, its own when it names any and its slot's otherwise

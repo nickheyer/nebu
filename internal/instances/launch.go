@@ -116,9 +116,7 @@ func (m *Manager) Preview(ctx context.Context, req *v1.RunRequest) ([]string, ma
 		input.Artifacts = launchArtifacts
 	}
 	cmds, err := renderRanks(input, p.rt.Ranks(stringParams(p.params)), p.rt.Launch, func(in runtimes.Launch, cmd *runtimes.Command) error {
-		extra, err := runtimes.RenderArgs(p.args(), runtimes.ScopeOf(in, cmd))
-		cmd.Args = append(cmd.Args, extra...)
-		return err
+		return runtimes.Extend(in, cmd, p.args())
 	})
 	if err != nil {
 		return nil, nil, err
@@ -181,9 +179,7 @@ func (m *Manager) launchSolo(ctx context.Context, h *tasks.Handle, in *instance,
 		}
 		input.Port = port
 		cmds, err := renderRanks(input, ranks, rt.Launch, func(in runtimes.Launch, cmd *runtimes.Command) error {
-			extra, err := runtimes.RenderArgs(p.args(), runtimes.ScopeOf(in, cmd))
-			cmd.Args = append(cmd.Args, extra...)
-			return err
+			return runtimes.Extend(in, cmd, p.args())
 		})
 		if err != nil {
 			m.release(in)

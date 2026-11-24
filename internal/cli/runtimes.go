@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -208,9 +210,17 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 	ref := fs.String("ref", "", "source ref, the recipe default when empty")
 	force := fs.Bool("force", false, "rebuild even when this exact build already exists")
 	detach := fs.Bool("detach", false, "start the task and return its id")
-	var vars, skip multi
+	repo := fs.String("repo", "", "git repository to build in place of the recipe's source, a URL or a GitHub owner/name")
+	binary := fs.String("binary", "", "the server binary among the outputs, in place of the recipe's")
+	timeout := fs.Duration("timeout", 0, "longest the build may run, the recipe's limit when zero")
+	preview := fs.Bool("preview", false, "print what the build would run and build nothing")
+	var vars, skip, envs, steps, outputs, patches multi
 	fs.Var(&vars, "var", "recipe var as name=value, repeatable")
 	fs.Var(&skip, "no-patch", "recipe patch id to leave out, repeatable, see nebu runtimes recipes")
+	fs.Var(&envs, "env", "environment variable of every step as NAME=value, repeatable")
+	fs.Var(&steps, "step", "shell script run as a step in place of the recipe's steps, repeatable, see --preview for those")
+	fs.Var(&outputs, "output", "path under the source tree to keep in place of the recipe's, globs allowed, repeatable")
+	fs.Var(&patches, "patch", "unified diff applied after the recipe's patches, a URL or a file, repeatable")
 	usage := "build <runtime> [flags]"
 	positional, err := e.parse(fs, args, 0, 1, usage)
 	if err != nil {
@@ -228,9 +238,27 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := &v1.BuildRequest{RecipeId: *recipe, Variant: *variant, Image: *image, Ref: *ref, Force: *force, Vars: varMap, SkipPatches: skip}
+	envMap, err := pairs(envs, "env")
+	if err != nil {
+		return err
+	}
+	req := &v1.BuildRequest{RecipeId: *recipe, Variant: *variant, Image: *image, Ref: *ref, Force: *force, Vars: varMap, SkipPatches: skip, Repo: *repo, Env: envMap, Outputs: outputs, Binary: *binary, TimeoutMs: uint32(*timeout / time.Millisecond)}
 	if len(positional) == 1 {
 		req.RuntimeId = positional[0]
+	}
+	for _, script := range steps {
+		req.Steps = append(req.Steps, &v1.BuildStep{Script: script})
+	}
+	for _, patch := range patches {
+		if strings.Contains(patch, "://") {
+			req.Patches = append(req.Patches, &v1.Patch{Url: patch})
+			continue
+		}
+		diff, err := os.ReadFile(patch)
+		if err != nil {
+			return err
+		}
+		req.Patches = append(req.Patches, &v1.Patch{Id: filepath.Base(patch), Content: string(diff)})
 	}
 	switch strings.ToLower(*sandboxName) {
 	case "":
@@ -240,6 +268,13 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 		req.Sandbox = v1.SandboxKind_SANDBOX_KIND_OCI
 	default:
 		return fmt.Errorf("sandbox %q: expected host or oci", *sandboxName)
+	}
+	if *preview {
+		resp, err := e.cl.builds.PreviewBuild(ctx, connect.NewRequest(&v1.PreviewBuildRequest{Build: req}))
+		if err != nil {
+			return err
+		}
+		return e.print(resp.Msg, func(w io.Writer) { buildPreview(w, resp.Msg) })
 	}
 	resp, err := e.cl.builds.Build(ctx, connect.NewRequest(req))
 	if err != nil {
@@ -262,6 +297,60 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 		return fmt.Errorf("build %s %s: %s", fb.GetId(), text.Enum(fb.GetState()), fb.GetError())
 	}
 	return e.print(final.Msg, func(w io.Writer) { fmt.Fprintf(w, "install %s at %s\n", fb.GetInstallId(), fb.GetBinary()) })
+}
+
+// One step as a line, a script as it was written and a command with the words that need it quoted
+func stepLine(st *v1.BuildStep) string {
+	if st.GetScript() != "" {
+		return st.GetScript()
+	}
+	words := make([]string, 0, len(st.GetCommand()))
+	for _, w := range st.GetCommand() {
+		if w == "" || strings.ContainsAny(w, " \t\n\"'\\$&|;<>()*?[]#~`") {
+			w = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+		}
+		words = append(words, w)
+	}
+	return strings.Join(words, " ")
+}
+
+// The steps of a build as rows, each with its directory and environment when it has any
+func stepRows(steps []*v1.BuildStep) [][]string {
+	var rows [][]string
+	for i, st := range steps {
+		name := st.GetName()
+		if name == "" {
+			name = fmt.Sprintf("step %d", i+1)
+		}
+		rows = append(rows, []string{name, stepLine(st), st.GetDir(), compact(st.GetEnv())})
+	}
+	return rows
+}
+
+// What a build would run: where its source comes from, its steps in order, and what it keeps
+func buildPreview(w io.Writer, p *v1.PreviewBuildResponse) {
+	b := p.GetBuild()
+	state := "not built"
+	if b.GetState() != v1.BuildState_BUILD_STATE_UNSPECIFIED {
+		state = loud(b.GetState())
+	}
+	fmt.Fprintf(w, "%s %s %s\n", b.GetId(), b.GetRecipeId(), state)
+	table(w, nil, [][]string{
+		{"source", p.GetSource()},
+		{"ref", b.GetRef()},
+		{"commit", b.GetCommit()},
+		{"variant", b.GetVariant()},
+		{"sandbox", strings.TrimSpace(text.Enum(b.GetSandbox()) + " " + b.GetImage())},
+		{"patches", strings.Join(b.GetPatches(), ", ")},
+		{"outputs", strings.Join(p.GetOutputs(), ", ")},
+		{"binary", p.GetBinary()},
+		{"timeout", (time.Duration(p.GetTimeoutMs()) * time.Millisecond).String()},
+		{"install", b.GetInstallId()},
+	})
+	section(w, "vars")
+	table(w, nil, rowsOf(b.GetVars()))
+	section(w, "steps")
+	table(w, []string{"STEP", "RUNS", "DIR", "ENV"}, stepRows(p.GetSteps()))
 }
 
 func runBuildsList(ctx context.Context, e *env, args []string) error {
@@ -315,11 +404,31 @@ func runBuildsShow(ctx context.Context, e *env, args []string) error {
 		if b.GetError() != "" {
 			rows = append(rows, []string{"error", b.GetError()})
 		}
+		// What the request set in place of the recipe's
+		if req := b.GetRequest(); req != nil {
+			if req.GetRepo() != "" {
+				rows = append(rows, []string{"repo", req.GetRepo()})
+			}
+			if len(req.GetOutputs()) > 0 {
+				rows = append(rows, []string{"outputs", strings.Join(req.GetOutputs(), ", ")})
+			}
+			if req.GetTimeoutMs() > 0 {
+				rows = append(rows, []string{"timeout", (time.Duration(req.GetTimeoutMs()) * time.Millisecond).String()})
+			}
+		}
 		table(w, nil, rows)
 		section(w, "vars")
 		table(w, nil, rowsOf(b.GetVars()))
 		section(w, "facts")
 		table(w, nil, rowsOf(b.GetFacts()))
+		if env := b.GetRequest().GetEnv(); len(env) > 0 {
+			section(w, "env")
+			table(w, nil, rowsOf(env))
+		}
+		if steps := b.GetRequest().GetSteps(); len(steps) > 0 {
+			section(w, "steps")
+			table(w, []string{"STEP", "RUNS", "DIR", "ENV"}, stepRows(steps))
+		}
 	})
 }
 

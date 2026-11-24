@@ -42,6 +42,7 @@ message Slot {
   repeated string device_ids = 4;
   uint64 memory_bytes = 5;
   string runtime_id = 6;
+  // Runtime parameters every launch in the slot starts from, env.NAME setting an environment variable of the server process
   map<string, string> params = 7;
   string instance_id = 8;
   SlotState state = 9;

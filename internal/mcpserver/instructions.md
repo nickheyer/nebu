@@ -44,24 +44,36 @@ Nebu stores model weights, installs inference runtimes, and serves models behind
 - `get_runtime` lists each install method with its `fields` and `unmet`. The result is long.
 - `install_runtime` takes `runtime_id`, `method`, and `settings` keyed by field `name`. Any field you leave out uses its `default`, which is already chosen for this host.
 - `release` downloads a published build. Prefer it when its `build` matches the host's GPU.
-- `source` builds on this host. Use it when no published build matches the device, a newer `ref` is needed, or the runtime has no other method.
-- `variant` picks the backend of a source build: `cuda` for an NVIDIA device, `rocm` for an AMD one, `metal` on Apple silicon, `vulkan` for any other GPU, and `cpu` if there is no GPU.
-- `sandbox` `oci` builds in a container. Use it when `unmet` lists missing tools.
 - `adopt` takes the `path` of a binary already on the host.
 - A method with `unmet` entries won't work with its defaults. Say why and what would fix it.
+
+## Building a runtime
+
+- `build_runtime` builds from source and installs the result. Use it when no published build matches the device, or the model needs a newer commit, a pull request, a fork, or a patch.
+- Nothing about a build is fixed. A recipe only supplies defaults, and a call replaces any of them.
+- `list_recipes` gives a recipe's variants, variables, and patches. `variant` picks the backend: `cuda` for an NVIDIA device, `rocm` for an AMD one, `metal` on Apple silicon, `vulkan` for any other GPU, and `cpu` if there is no GPU.
+- `ref` takes a tag, branch, commit, or any other ref, such as `refs/pull/123/head` for a pull request. `repo` builds a fork.
+- `vars` set the recipe's variables. On the CMake recipes, `extra` adds configure flags and `targets` names what to compile.
+- `patches` apply more diffs by `url` or `content`. `env` sets the environment of every step.
+- `steps` replace the recipe's commands. Call `preview_build` first: it returns the steps the recipe would run, in the form `steps` takes. Change what you need and send them back. A step is a `command` or a shell `script`, so it can run anything the host can.
+- `outputs` and `binary` say which files to keep and which one is the server, when your steps put them somewhere else.
+- `sandbox` `oci` builds in a container. Use it when `unmet` lists missing tools.
+- When a build fails, read the end of its log with `get_task` and `tail`. Find the cause before you build again: a step can `grep` or `cat` the source and its output lands in the log, and a web tool can read the project's own instructions. Don't guess at flags.
 
 ## Running
 
 - Run models in a slot when you can. A slot keeps its name, devices, memory, runtime, and params, relaunches when the daemon restarts, and can switch to another model with `swap_slot` while clients keep using the same name.
 - Use `create_slot`, then `run_model` with `slot_id`. The slot's name is the model name clients send. `run_model` fails on a slot that already has a model, so use `swap_slot` there.
 - Leave params unset unless there is a reason to set them. A param whose default is `auto` is worked out by the plan.
+- Nothing about a launch is fixed either. `install_id` picks which build runs. `args` adds any flag the server takes, and a flag given again there wins. A param named `env.NAME` sets an environment variable of the server.
+- `preview_run` returns the exact command a run would launch with.
 - `update_slot` only changes the settings you pass.
-- `delete_slot`, `remove_model`, `delete_route`, and `delete_pool` cannot be undone. Ask first.
+- `delete_slot`, `remove_model`, `remove_build`, `remove_install`, `delete_route`, and `delete_pool` cannot be undone. Ask first.
 
 ## Tasks
 
-- `pull_model`, `install_runtime`, `run_model`, `swap_slot`, `run_formation`, and `doctor` return a `task`. The work continues after the tool returns.
-- `get_task` returns a task's state, progress, and log. `TASK_STATE_SUCCEEDED`, `TASK_STATE_FAILED`, and `TASK_STATE_CANCELED` are final.
+- `pull_model`, `install_runtime`, `build_runtime`, `run_model`, `swap_slot`, `relaunch_slot`, `run_formation`, and `doctor` return a `task`. The work continues after the tool returns.
+- `get_task` returns a task's state, progress, and log. Pass `tail` to read only the end of a long log. `TASK_STATE_SUCCEEDED`, `TASK_STATE_FAILED`, and `TASK_STATE_CANCELED` are final.
 - Don't start a step until the task it depends on has succeeded.
 
 ## After a launch

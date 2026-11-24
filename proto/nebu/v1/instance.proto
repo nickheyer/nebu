@@ -224,6 +224,7 @@ message RunRequest {
   string runtime_id = 4;
   string install_id = 5;
   string name = 6;
+  // Runtime parameters by name. A name of the form env.NAME sets the environment variable NAME of the server process, over anything the launch sets itself
   map<string, string> params = 7;
   string slot_id = 8;
   // The nodes and devices the run may use

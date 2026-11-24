@@ -208,3 +208,63 @@ Where the code differs from the above.
 - **Kept thread.** It also keeps the followed tasks and the account it belongs to, is dropped when the tab signs in as another account, and is removed when it no longer fits `sessionStorage`. Calls of the last answer nothing answered wait again after a reload.
 - **`mcp.ts`** ends its session with `DELETE /mcp` when the page goes, and the tools are listed again when the event stream reconnects.
 - **The route needs a long context.** The tools and instructions are about 9.8K tokens before the first message, and one tool answer runs from a few KB to 120KB (`list_runtimes`). A 32K route ran out on its third round.
+
+## Builds and launches without limits
+
+The first real ask ended with Morpheus saying it could not do what the person typed: clone a pull request and build one target. The tools let it pick a variant, a ref, and a string of extra flags, and nothing else. What a recipe fixed was fixed for everyone. That is the wrong shape. A recipe supplies defaults, and whoever builds or runs may replace any of them, through the API, the CLI, the UI, and `/mcp` alike.
+
+### A build
+
+`BuildRequest` takes, beside what it took:
+
+| Field | In place of |
+|---|---|
+| `repo` | The recipe's source. A URL or a GitHub `owner/name`, cloned with git at `ref` |
+| `ref` | Any ref the remote serves, `refs/pull/123/head` included |
+| `steps` | The recipe's commands. Each a `command` run without a shell or a `script` run by `sh` |
+| `env` | Nothing. Environment variables of every step |
+| `outputs`, `binary` | What the recipe copies out and which file is the server |
+| `patches` | Nothing. Diffs applied after the recipe's, by `url` or `content` |
+| `timeout_ms` | The recipe's time limit |
+
+- **Templates.** A step's words, script and environment values are templates over the build, as a launch's extra arguments are over the launch: `{{.Src}}`, `{{.Out}}`, `{{.Root}}`, `{{.Jobs}}`, `{{.Ref}}`, `{{.Commit}}`, `{{.Variant}}`, `{{.Vars.name}}`.
+- **`PreviewBuild`** resolves a request and answers the steps it would run, in the form `steps` takes. The recipe's steps come back with the build's directories left as templates, so sending them back unchanged builds what the recipe builds. Changing a recipe's build means changing its previewed steps.
+- **A build keeps its request** (`Build.request`, one column), so a custom build says how it was made.
+- **The recipe's tool check** is skipped for a request with steps of its own, which call what they like.
+- **The hash** takes the request's steps, repository and environment. A request that sets none of them hashes as before.
+- The CMake recipes gain a `targets` variable. The llama.cpp recipe configures with `-DLLAMA_USE_PREBUILT_UI=OFF`: the failure in that first ask was the build downloading the newest prebuilt web page for a revision it was not made for, and nothing nebu serves shows that page.
+
+### A launch
+
+- A param named `env.NAME` sets the environment variable `NAME` of the server process, over what the launch sets itself. It rides wherever params do: runtime defaults, a slot, a run, a formation's seats. Its value is a template as an extra argument is.
+- Extra arguments were already free, and a flag given again there wins.
+
+### Tools
+
+| Tool | Behind it | |
+|---|---|---|
+| `list_recipes` | `BuildService.ListRecipes` | read-only |
+| `preview_build` | `BuildService.PreviewBuild` | read-only |
+| `build_runtime` | `BuildService.Build`, every field above | |
+| `list_builds`, `get_build` | `BuildService` | read-only |
+| `remove_build`, `remove_install` | `BuildService`, `RuntimeService` | destructive |
+| `preview_run` | `InstanceService.PreviewRun` | read-only |
+| `relaunch_slot` | `SlotService.RelaunchSlot` | |
+
+- `run_model` gains `args`, `exact`, `idle_unload_seconds` and `snapshot`. `swap_slot` gains `install_id` and `args`. `pull_model` gains `paths`, `alone` and `slot`. `get_task` gains `tail`.
+- `install_runtime` is for a binary on the host or a published build. Its description sends source builds to `build_runtime`.
+- The instructions gain a section on building and say what to do when a build fails: read the end of the log, find the cause in the source or on the web, change one thing. They are about 1,300 words.
+
+### Web and CLI
+
+- The build form gains Repository beside the ref, and under Advanced: extra patches, environment, a switch that takes the recipe's previewed steps into an editor, outputs, binary and timeout. A build's row shows what it set in place of the recipe's.
+- The slot editor and the launch form gain Environment, which reads and writes the `env.NAME` params.
+- `nebu build` gains `--repo`, `--step`, `--env`, `--output`, `--binary`, `--patch`, `--timeout` and `--preview`. `nebu builds show` prints a build's own steps and environment.
+
+### Who this lets do what
+
+Nothing new. `/mcp` and `BuildService.Build` need the operate scope, and an operator could already adopt any binary on the host and launch it with any arguments. Steps of the caller's own run with the daemon's account in the build's sandbox, as a recipe's steps do.
+
+### Also changed
+
+- Two installs of one runtime that differ run side by side. The second used to answer the first one's task, whatever it asked for.

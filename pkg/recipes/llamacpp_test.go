@@ -81,3 +81,28 @@ func TestLlamaCppVariantsSayWhatTheyRequire(t *testing.T) {
 		}
 	}
 }
+
+// Every target is compiled unless a build names its own, each a word after one --target
+func TestCMakeRecipesCompileNamedTargets(t *testing.T) {
+	for name, steps := range map[string]func(*Build) []Step{"llamacpp": LlamaCpp{}.Steps, "sdcpp": SDCpp{}.Steps} {
+		all := steps(&Build{Vars: map[string]string{"build_type": "Release"}, Jobs: 4})
+		if compile := all[len(all)-1]; compile.Name != "compile" || slices.Contains(compile.Command, "--target") {
+			t.Fatalf("%s compiles every target until one is named: %v", name, compile)
+		}
+		named := steps(&Build{Vars: map[string]string{"build_type": "Release", "targets": " server  rpc-server "}, Jobs: 4})
+		compile := named[len(named)-1].Command
+		if i := slices.Index(compile, "--target"); i < 0 || !slices.Equal(compile[i:], []string{"--target", "server", "rpc-server"}) {
+			t.Fatalf("%s names its targets after one --target: %v", name, compile)
+		}
+	}
+}
+
+// The server's own web page stays out of the build, which then downloads nothing while it compiles, and a flag a
+// build gives comes after the recipe's and so wins
+func TestLlamaCppLeavesTheWebPageOut(t *testing.T) {
+	configure := LlamaCpp{}.Steps(&Build{Vars: map[string]string{"build_type": "Release", "extra": "-DLLAMA_USE_PREBUILT_UI=ON"}, Jobs: 1})[0].Command
+	off, on := slices.Index(configure, "-DLLAMA_USE_PREBUILT_UI=OFF"), slices.Index(configure, "-DLLAMA_USE_PREBUILT_UI=ON")
+	if off < 0 || on < off {
+		t.Fatalf("configure %v", configure)
+	}
+}

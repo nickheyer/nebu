@@ -55,11 +55,12 @@ var procedures = map[string]rule{
 	nebuv1connect.BotServiceProbeBotTokenProcedure:   needOperate,
 	nebuv1connect.BotServiceSendBotMessageProcedure:  needOperate,
 
-	nebuv1connect.BuildServiceListRecipesProcedure: needRead,
-	nebuv1connect.BuildServiceListBuildsProcedure:  needRead,
-	nebuv1connect.BuildServiceGetBuildProcedure:    needRead,
-	nebuv1connect.BuildServiceBuildProcedure:       needOperate,
-	nebuv1connect.BuildServiceRemoveBuildProcedure: needOperate,
+	nebuv1connect.BuildServiceListRecipesProcedure:  needRead,
+	nebuv1connect.BuildServiceListBuildsProcedure:   needRead,
+	nebuv1connect.BuildServiceGetBuildProcedure:     needRead,
+	nebuv1connect.BuildServicePreviewBuildProcedure: needRead,
+	nebuv1connect.BuildServiceBuildProcedure:        needOperate,
+	nebuv1connect.BuildServiceRemoveBuildProcedure:  needOperate,
 
 	nebuv1connect.ChatServiceListConversationsProcedure:  needInference,
 	nebuv1connect.ChatServiceGetConversationProcedure:    needInference,

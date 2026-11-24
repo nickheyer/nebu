@@ -152,3 +152,32 @@ func TestSeatArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A run's env params are environment variables of the launch, the slot's standing where the run names none, each
+// rendered over the launch and recorded with the params it started with
+func TestRunEnvParams(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSeatNode(t, ctx)
+	m := n.manager(t, ctx, nil)
+	var settled []*v1.RunRequest
+	m.Slots = oneSlot{&Reservation{SlotID: "s", Name: "main", Params: map[string]string{"env.FROM_SLOT": "slot", "env.BOTH": "slot"}}, &settled}
+	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, SlotId: "s", Params: map[string]string{"env.BOTH": "run", "env.NAMED": "{{.Name}}"}}
+
+	bad := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, Params: map[string]string{"env.NOT A NAME": "x"}}
+	if _, _, err := m.Run(ctx, bad); !errors.Is(err, runtimes.ErrParam) {
+		t.Fatalf("a name no variable can have: %v", err)
+	}
+	command, params, err := m.Preview(ctx, run)
+	if err != nil || len(command) == 0 || params["env.BOTH"] != "run" || params["env.FROM_SLOT"] != "slot" {
+		t.Fatalf("preview %q %v %v", command, params, err)
+	}
+	in, _, err := m.Run(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY).GetParams()
+	if got["env.FROM_SLOT"] != "slot" || got["env.BOTH"] != "run" || got["env.NAMED"] != "main" {
+		t.Fatalf("launched with %v", got)
+	}
+}

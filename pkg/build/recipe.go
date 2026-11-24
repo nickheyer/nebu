@@ -4,6 +4,7 @@ package build
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -115,7 +116,7 @@ func Describe(rc recipes.Recipe, profile *v1.HostProfile) *v1.Recipe {
 		out.Variants = append(out.Variants, pv)
 	}
 	for _, p := range rc.Patches() {
-		out.Patches = append(out.Patches, &v1.Patch{Id: p.ID, Description: p.Description})
+		out.Patches = append(out.Patches, &v1.Patch{Id: p.ID, Description: p.Description, Url: p.URL, Strip: uint32(p.Strip)})
 	}
 	return out
 }
@@ -194,7 +195,8 @@ func Variants(rc recipes.Recipe, profile *v1.HostProfile) []recipes.Variant {
 	return out
 }
 
-// Caller choices and site defaults for one build
+// Caller choices and site defaults for one build. Everything a recipe fixes is a default here: a request may name its
+// own source, steps, environment, outputs, binary, patches and time limit
 type Options struct {
 	Variant string
 	Vars    map[string]string
@@ -203,7 +205,21 @@ type Options struct {
 	Ref     string
 	// Recipe patches the build leaves out, by id
 	SkipPatches []string
-	Defaults    *v1.Builds
+	// A git repository cloned at the ref in place of the recipe's source, a URL or a GitHub owner/name
+	Repo string
+	// Steps run in place of the recipe's
+	Steps []*v1.BuildStep
+	// Environment variables every step runs with
+	Env map[string]string
+	// Paths copied out after the steps in place of the recipe's
+	Outputs []string
+	// The installed binary in place of the recipe's
+	Binary string
+	// Patches applied after the recipe's
+	Patches []*v1.Patch
+	// Longest the build may run, the recipe's limit when zero
+	Timeout  time.Duration
+	Defaults *v1.Builds
 }
 
 // Resolved build selection.
@@ -218,8 +234,16 @@ type Selection struct {
 	Image string
 	Ref   string
 	Facts map[string]string
-	// Recipe patches the build applies, by id in recipe order
+	// Patches the build applies, by id, the recipe's in recipe order and then the request's own
 	Patches []string
+	// Where the source comes from, the recipe's unless the request named a repository
+	Source recipes.Source
+	// The request's own steps, run in place of the recipe's when it gave any
+	Custom []*v1.BuildStep
+	// Environment variables every step runs with
+	Env map[string]string
+	// The request's own patches, applied after the recipe's
+	Extra []recipes.Patch
 	// Tools the chosen variant needs that the host lacks, under the host sandbox
 	MissingTools []string
 	// Tools any variant needs that the host lacks
@@ -227,11 +251,119 @@ type Selection struct {
 	Unmet       []string
 	profile     *v1.HostProfile
 	overrides   map[string]string
+	repo        string
+	outputs     []string
+	binary      string
+	timeout     time.Duration
+}
+
+// A GitHub repository named as owner/name
+var githubName = regexp.MustCompile(`^[\w-][\w.-]*/[\w.-]+$`)
+
+// The source a build fetches: the recipe's, or the repository a request names, which git clones whatever host it is on
+func sourceOf(rc recipes.Recipe, repo string) recipes.Source {
+	if repo == "" {
+		return rc.Source()
+	}
+	if githubName.MatchString(repo) {
+		repo = "https://github.com/" + repo
+	}
+	return recipes.Source{Repo: repo}
+}
+
+// The steps the build runs, the request's own rendered over the build or else the recipe's
+func (s *Selection) Steps(b *recipes.Build) ([]recipes.Step, error) {
+	if len(s.Custom) == 0 {
+		return s.Recipe.Steps(b), nil
+	}
+	return renderSteps(s.Custom, b)
+}
+
+// The steps in the form a request sends them: its own as given, or the recipe's for the selection with the build's
+// directories left as the templates a build fills in
+func (s *Selection) Templates(b *v1.Build, jobs int) []*v1.BuildStep {
+	if len(s.Custom) > 0 {
+		return s.Custom
+	}
+	bctx := &recipes.Build{Ref: b.GetRef(), Commit: b.GetCommit(), Variant: b.GetVariant(), Vars: b.GetVars(), Jobs: jobs, Host: s.profile, Root: "{{.Root}}", Src: "{{.Src}}", Out: "{{.Out}}"}
+	var out []*v1.BuildStep
+	for _, st := range s.Recipe.Steps(bctx) {
+		out = append(out, &v1.BuildStep{Name: st.Name, Command: st.Command, Env: st.Env, Dir: st.Dir})
+	}
+	return out
+}
+
+// Paths under the source tree copied out after the steps, the request's or else the recipe's
+func (s *Selection) Outputs() []string {
+	if len(s.outputs) > 0 {
+		return s.outputs
+	}
+	return s.Recipe.Outputs()
+}
+
+// The installed binary relative to the output directory, the request's or else the recipe's
+func (s *Selection) Binary() string {
+	if s.binary != "" {
+		return s.binary
+	}
+	return strings.TrimSpace(s.Recipe.Binary())
+}
+
+// Longest the build may run, the request's limit or else the recipe's
+func (s *Selection) Timeout() time.Duration {
+	if s.timeout > 0 {
+		return s.timeout
+	}
+	return Timeout(s.Recipe)
+}
+
+// Every patch the build knows, the recipe's and then the request's own
+func (s *Selection) patches() []recipes.Patch {
+	return append(append([]recipes.Patch(nil), s.Recipe.Patches()...), s.Extra...)
+}
+
+// Takes the request's own patches, each a diff given by its URL or its content under an id no other patch has
+func (s *Selection) addPatches(patches []*v1.Patch) error {
+	taken := map[string]bool{}
+	for _, p := range s.Recipe.Patches() {
+		taken[p.ID] = true
+	}
+	for i, p := range patches {
+		id := strings.TrimSpace(p.GetId())
+		if id == "" {
+			id = fmt.Sprintf("request-%d", i+1)
+		}
+		if taken[id] {
+			return fmt.Errorf("%w: two patches are named %q", ErrSelection, id)
+		}
+		taken[id] = true
+		url, content := strings.TrimSpace(p.GetUrl()), p.GetContent()
+		if (url == "") == (strings.TrimSpace(content) == "") {
+			return fmt.Errorf("%w: patch %s needs a url or its content, one of the two", ErrSelection, id)
+		}
+		extra := recipes.Patch{ID: id, Description: p.GetDescription(), URL: url, Strip: int(p.GetStrip())}
+		if url == "" {
+			extra.Content = []byte(content)
+			if _, err := parseUnified(extra.Content); err != nil {
+				return fmt.Errorf("%w: patch %s: %v", ErrSelection, id, err)
+			}
+		}
+		s.Extra = append(s.Extra, extra)
+	}
+	return nil
 }
 
 // Evaluates variants, sandbox, tools, vars, and facts against the host
 func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selection, error) {
 	sel := &Selection{Recipe: rc, profile: profile, Vars: map[string]string{}, Facts: map[string]string{}, overrides: opts.Vars}
+	sel.repo = strings.TrimSpace(opts.Repo)
+	sel.Source = sourceOf(rc, sel.repo)
+	sel.Custom, sel.Env, sel.binary, sel.timeout = opts.Steps, opts.Env, strings.TrimSpace(opts.Binary), opts.Timeout
+	for _, pattern := range opts.Outputs {
+		if pattern = strings.TrimSpace(pattern); pattern != "" {
+			sel.outputs = append(sel.outputs, pattern)
+		}
+	}
 	sel.Sandbox = rc.Sandbox().Kind
 	if k := opts.Defaults.GetSandbox(); k != v1.SandboxKind_SANDBOX_KIND_UNSPECIFIED {
 		sel.Sandbox = k
@@ -245,12 +377,18 @@ func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selectio
 	if err := sel.pickVariant(opts.Variant); err != nil {
 		return nil, err
 	}
-	sel.Ref = opts.Ref
-	if sel.Ref == "" && rc.Source().Releases != "" {
+	sel.Ref = strings.TrimSpace(opts.Ref)
+	if sel.Ref == "" && sel.Source.Releases != "" {
 		sel.Ref = Latest
 	}
 	sel.resolveVars()
+	if err := sel.addPatches(opts.Patches); err != nil {
+		return nil, err
+	}
 	if err := sel.pickPatches(opts.SkipPatches); err != nil {
+		return nil, err
+	}
+	if err := checkSteps(sel.Custom, sel.Env); err != nil {
 		return nil, err
 	}
 	sel.CLIs = CLIs(rc, opts.Defaults)
@@ -267,13 +405,14 @@ func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selectio
 		if sel.Image == "" {
 			sel.Unmet = append(sel.Unmet, "no container image, pass --image or set builds.image")
 		}
-	} else {
+	} else if len(sel.Custom) == 0 {
+		// The recipe's tools are what its own steps call, and a request's steps call whatever they like
 		sel.MissingTools = sandbox.MissingTools(append(append([]string(nil), rc.Tools()...), sel.Variant.Tools...))
 		if len(sel.MissingTools) > 0 {
 			sel.Unmet = append(sel.Unmet, "missing tools "+strings.Join(sel.MissingTools, ", "))
 		}
 	}
-	src := rc.Source()
+	src := sel.Source
 	if src.Repo != "" && src.Archive == nil {
 		if missing := sandbox.MissingTools([]string{"git"}); len(missing) > 0 {
 			sel.Unmet = append(sel.Unmet, "git is needed on the host to clone the source")
@@ -315,6 +454,9 @@ func (s *Selection) pickPatches(skip []string) error {
 	}
 	for id := range left {
 		return fmt.Errorf("%w: recipe %s has no patch %q", ErrSelection, s.Recipe.ID(), id)
+	}
+	for _, p := range s.Extra {
+		s.Patches = append(s.Patches, p.ID)
 	}
 	return nil
 }

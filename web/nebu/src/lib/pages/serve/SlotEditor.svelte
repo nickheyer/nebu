@@ -15,6 +15,7 @@
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
+	import KeyValues from '#lib/ui/fields/KeyValues.svelte';
 	import PoolMemory from '#lib/ui/fields/PoolMemory.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
@@ -27,6 +28,7 @@
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import RuntimeFields from '#lib/pages/serve/RuntimeFields.svelte';
+	import { isEnvParam, paramsEnv, withEnv } from '#lib/pages/serve/serve.js';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 
@@ -128,14 +130,22 @@
 	const closed = $derived(limits !== undefined && Object.values(limits).every((n) => n <= 0));
 	const runtimeParams = $derived(runtimes?.find((r) => r.runtime?.id === runtimeId)?.runtime?.params ?? []);
 
-	// Parameters of another runtime leave with it, so the slot never launches one runtime with another's
+	// Parameters of another runtime leave with it, the environment staying, so the slot never launches one runtime with another's
 	let paramsOf = untrack(() => runtimeId);
 	$effect(() => {
 		const known = new Set(runtimeParams.map((p) => p.name));
 		if (runtimeId === paramsOf || !runtimes?.length) return;
 		paramsOf = runtimeId;
-		untrack(() => (params = Object.fromEntries(Object.entries(params).filter(([k]) => known.has(k)))));
+		untrack(() => (params = Object.fromEntries(Object.entries(params).filter(([k]) => known.has(k) || isEnvParam(k)))));
 	});
+
+	// Takes the environment editor's variables back into the params as env.NAME, the params left alone when nothing changed
+	function setEnv(env: Record<string, string>) {
+		untrack(() => {
+			if (JSON.stringify(env) !== JSON.stringify(paramsEnv(params))) params = withEnv(params, env);
+		});
+	}
+
 	const occupied = $derived(slot !== undefined && slot.instanceId !== '');
 	const others = $derived(
 		[...live.slots.values()]
@@ -199,6 +209,7 @@
 	<FormSection title="Launch settings" info="What a model launched in the slot runs with. A launch or swap into the slot replaces them with its own.">
 		<RuntimeFields {runtimes} bind:runtimeId bind:installId optional />
 		<Text bind:value={args} label="Extra arguments" max={512} mono />
+		<KeyValues bind:value={() => paramsEnv(params), (env) => setEnv(env)} label="Environment" info="Variables the server runs with" keyLabel="Name" addLabel="Variable" />
 	</FormSection>
 	{#if runtimeParams.length}
 		<FormSection title="Parameters">

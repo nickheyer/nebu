@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -329,9 +330,9 @@ func TestInstallByMethod(t *testing.T) {
 	if task.GetLabels()["method"] != "source" {
 		t.Fatalf("labels %v", task.GetLabels())
 	}
-	again, err := m.Install(ctx, "fake", "source", nil)
+	again, err := m.Install(ctx, "fake", "source", map[string]string{"patch.motd": "false", "var.greeting": "moon"})
 	if err != nil || again.GetId() != task.GetId() {
-		t.Fatalf("a second install should return the running task: %v %v", again, err)
+		t.Fatalf("asking for the same install again should return the running task: %v %v", again, err)
 	}
 	final, err := m.Tasks.Wait(ctx, task.GetId())
 	if err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
@@ -381,5 +382,90 @@ func TestRecoverBuilds(t *testing.T) {
 	b, _ := m.GetBuild(ctx, "stuck")
 	if b.GetState() != v1.BuildState_BUILD_STATE_FAILED || b.GetError() != db.RestartNote {
 		t.Fatalf("recovered %v", b)
+	}
+}
+
+// A preview answers what a request would run and builds nothing, and a build made from a request of its own keeps it
+func TestPreviewAndBuildOfARequestsOwnSteps(t *testing.T) {
+	m := buildManager(t)
+	ctx := context.Background()
+	preview, err := m.Preview(ctx, &v1.BuildRequest{RuntimeId: "fake", Vars: map[string]string{"greeting": "sun"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps := preview.GetSteps(); len(steps) != 1 || !strings.Contains(strings.Join(steps[0].GetCommand(), " "), "{{.Out}}/fakebin") || !strings.Contains(strings.Join(steps[0].GetCommand(), " "), "sun") {
+		t.Fatalf("previewed steps %v", steps)
+	}
+	if preview.GetBinary() != "fakebin" || preview.GetTimeoutMs() != 60_000 || preview.GetBuild().GetId() == "" || preview.GetBuild().GetState() != v1.BuildState_BUILD_STATE_UNSPECIFIED {
+		t.Fatalf("preview %v", preview)
+	}
+	if builds, _ := m.ListBuilds(ctx, ""); len(builds) != 0 {
+		t.Fatalf("a preview builds nothing: %v", builds)
+	}
+	req := &v1.BuildRequest{
+		RuntimeId: "fake",
+		Steps:     []*v1.BuildStep{{Name: "write", Script: `printf '#!/bin/sh\necho fake version 9.9.9 %s\n' "{{.Vars.greeting}} $WORD" > {{.Out}}/tool && chmod +x {{.Out}}/tool`}},
+		Env:       map[string]string{"WORD": "there"},
+		Binary:    "tool",
+		TimeoutMs: 30_000,
+	}
+	if again, err := m.Preview(ctx, req); err != nil || again.GetBinary() != "tool" || again.GetTimeoutMs() != 30_000 || again.GetSteps()[0].GetScript() != req.GetSteps()[0].GetScript() {
+		t.Fatalf("a request's own steps preview as given: %v %v", again, err)
+	}
+	b, task, err := m.Build(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.GetId() == preview.GetBuild().GetId() {
+		t.Fatal("other steps should be another build")
+	}
+	if final, err := m.Tasks.Wait(ctx, task.GetId()); err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		t.Fatalf("build task %v %v", final, err)
+	}
+	done, err := m.GetBuild(ctx, b.GetId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept := done.GetRequest(); kept.GetBinary() != "tool" || kept.GetEnv()["WORD"] != "there" || len(kept.GetSteps()) != 1 || kept.GetSteps()[0].GetName() != "write" || kept.GetTimeoutMs() != 30_000 {
+		t.Fatalf("the build keeps the request it was made from: %v", kept)
+	}
+	in, err := m.Get(ctx, done.GetInstallId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(in.GetPath(), filepath.Join("out", "tool")) || in.GetFacts()["version"] != "9.9.9" {
+		t.Fatalf("install %v", in)
+	}
+	if out, _ := exec.Command(in.GetPath()).Output(); strings.TrimSpace(string(out)) != "fake version 9.9.9 hello there" {
+		t.Fatalf("the binary the request's steps wrote prints %q", out)
+	}
+	// The build already made is the one a preview of the same request answers
+	if made, err := m.Preview(ctx, req); err != nil || made.GetBuild().GetState() != v1.BuildState_BUILD_STATE_SUCCEEDED || made.GetBuild().GetInstallId() != in.GetId() {
+		t.Fatalf("preview of a build already made %v %v", made, err)
+	}
+	if _, err := m.Preview(ctx, &v1.BuildRequest{RuntimeId: "fake", Steps: []*v1.BuildStep{{Name: "both", Script: "true", Command: []string{"true"}}}}); err == nil {
+		t.Fatal("a step that is a command and a script should be refused")
+	}
+}
+
+// Installs of one runtime that differ run each as its own task
+func TestDifferentInstallsOfARuntimeRunSideBySide(t *testing.T) {
+	m := buildManager(t)
+	ctx := context.Background()
+	one, err := m.Install(ctx, "fake", "source", map[string]string{"var.greeting": "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := m.Install(ctx, "fake", "source", map[string]string{"var.greeting": "two"})
+	if err != nil || two.GetId() == one.GetId() {
+		t.Fatalf("an install with other settings is a task of its own: %v %v", two, err)
+	}
+	for _, task := range []*v1.Task{one, two} {
+		if final, err := m.Tasks.Wait(ctx, task.GetId()); err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+			t.Fatalf("install task %v %v", final, err)
+		}
+	}
+	if list, _ := m.List(ctx, "fake"); len(list) != 2 {
+		t.Fatalf("installs %v", list)
 	}
 }

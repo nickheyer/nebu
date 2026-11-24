@@ -20,7 +20,7 @@ type slotIn struct {
 	Description   *string           `json:"description,omitempty"`
 	RuntimeID     *string           `json:"runtime_id,omitempty" jsonschema:"runtime for every launch in the slot"`
 	InstallID     *string           `json:"install_id,omitempty" jsonschema:"install for every launch in the slot"`
-	Params        map[string]string `json:"params,omitempty" jsonschema:"runtime parameters for every launch in the slot, such as n_ctx"`
+	Params        map[string]string `json:"params,omitempty" jsonschema:"runtime parameters for every launch in the slot, such as n_ctx, and environment variables of the server process as env.NAME"`
 	Args          *string           `json:"args,omitempty" jsonschema:"extra arguments for the runtime's server command"`
 	Placement     string            `json:"placement,omitempty" jsonschema:"auto, device, or host"`
 	DeviceIDs     []string          `json:"device_ids,omitempty" jsonschema:"devices the slot may use"`
@@ -140,6 +140,10 @@ func (n *nebu) addSlotTools(s *mcp.Server) {
 			return nil, nil, err
 		}
 		r, err := n.slots.UpdateSlot(ctx, req)
+		return answer(r, err)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "relaunch_slot", Description: "Runs a slot's model again after it failed or stopped, and returns the slot, instance, and task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.slots.RelaunchSlot(ctx, connect.NewRequest(&v1.RelaunchSlotRequest{Id: in.ID}))
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_slot", Description: "Deletes a slot and its routes", Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(true)}}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteSlotIn) (*mcp.CallToolResult, any, error) {

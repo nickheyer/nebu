@@ -2,6 +2,7 @@ package build
 
 import (
 	"testing"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/recipes"
@@ -118,17 +119,24 @@ func TestRegistryRefusesBrokenRecipes(t *testing.T) {
 	}
 }
 
+// The hash of a build of a recipe as a request with nothing of its own selects it
+func hashOf(t *testing.T, s *Selection, b *v1.Build, patches map[string][]byte) string {
+	t.Helper()
+	id, err := hashBuild(s, b, &recipes.Build{Ref: b.GetRef(), Variant: b.GetVariant(), Vars: b.GetVars()}, patches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func TestHashChangesWithInputs(t *testing.T) {
 	rc := selectRecipe()
 	base := func() *v1.Build {
 		return &v1.Build{Variant: "cpu", Ref: "1.0", Sandbox: v1.SandboxKind_SANDBOX_KIND_HOST, Vars: map[string]string{"a": "1"}, Facts: map[string]string{"f": "x"}, Patches: []string{"p"}}
 	}
 	patches := map[string][]byte{"p": []byte("diff")}
-	bctx := func(b *v1.Build) *recipes.Build {
-		return &recipes.Build{Ref: b.GetRef(), Variant: b.GetVariant(), Vars: b.GetVars()}
-	}
-	id := hashBuild(rc, base(), bctx(base()), patches)
-	if len(id) != idLength || id != hashBuild(rc, base(), bctx(base()), patches) {
+	id := hashOf(t, &Selection{Recipe: rc}, base(), patches)
+	if len(id) != idLength || id != hashOf(t, &Selection{Recipe: rc}, base(), patches) {
 		t.Fatal("hash should be stable")
 	}
 	for name, mutate := range map[string]func(*v1.Build){
@@ -142,11 +150,11 @@ func TestHashChangesWithInputs(t *testing.T) {
 	} {
 		b := base()
 		mutate(b)
-		if hashBuild(rc, b, bctx(b), patches) == id {
+		if hashOf(t, &Selection{Recipe: rc}, b, patches) == id {
 			t.Errorf("%s change should change the hash", name)
 		}
 	}
-	if hashBuild(rc, base(), bctx(base()), map[string][]byte{"p": []byte("other diff")}) == id {
+	if hashOf(t, &Selection{Recipe: rc}, base(), map[string][]byte{"p": []byte("other diff")}) == id {
 		t.Error("patch content change should change the hash")
 	}
 	// The steps a build would run are part of its identity, so a recipe change rebuilds
@@ -154,13 +162,32 @@ func TestHashChangesWithInputs(t *testing.T) {
 	other.steps = func(b *recipes.Build) []recipes.Step {
 		return []recipes.Step{{Name: "two", Command: []string{"sh", "-c", "false"}}}
 	}
-	if hashBuild(other, base(), bctx(base()), patches) == id {
+	if hashOf(t, &Selection{Recipe: other}, base(), patches) == id {
 		t.Error("step change should change the hash")
 	}
 	other = rc
 	other.binary = "elsewhere"
-	if hashBuild(other, base(), bctx(base()), patches) == id {
+	if hashOf(t, &Selection{Recipe: other}, base(), patches) == id {
 		t.Error("binary change should change the hash")
+	}
+	// Whatever a request puts in place of the recipe's is part of the build's identity too, and its time limit is not
+	for name, s := range map[string]*Selection{
+		"repo":    {Recipe: rc, repo: "fork/r"},
+		"steps":   {Recipe: rc, Custom: []*v1.BuildStep{{Name: "one", Script: "false"}}},
+		"env":     {Recipe: rc, Env: map[string]string{"CC": "clang"}},
+		"outputs": {Recipe: rc, outputs: []string{"other"}},
+		"binary":  {Recipe: rc, binary: "elsewhere"},
+	} {
+		if hashOf(t, s, base(), patches) == id {
+			t.Errorf("a request's own %s should change the hash", name)
+		}
+	}
+	if hashOf(t, &Selection{Recipe: rc, timeout: time.Minute}, base(), patches) != id {
+		t.Error("a time limit builds nothing differently and should leave the hash alone")
+	}
+	// Steps a request spells out the way the recipe does are the build the recipe makes
+	if hashOf(t, &Selection{Recipe: rc, Custom: []*v1.BuildStep{{Name: "one", Script: "true"}}}, base(), patches) != id {
+		t.Error("a request's steps that match the recipe's should be the same build")
 	}
 }
 

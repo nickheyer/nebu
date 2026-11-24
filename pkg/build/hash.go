@@ -14,8 +14,10 @@ import (
 const idLength = 16
 
 // Hashes resolved build inputs: steps, outputs, binary, variant, ref, sandbox, image, variables,
-// facts, and patches.
-func hashBuild(rc recipes.Recipe, b *v1.Build, bctx *recipes.Build, patches map[string][]byte) string {
+// facts, and patches, each the request's own where it gave one, and the repository and environment
+// of a request that named any. A request that names neither hashes as it did before it could
+func hashBuild(s *Selection, b *v1.Build, bctx *recipes.Build, patches map[string][]byte) (string, error) {
+	rc := s.Recipe
 	h := sha256.New()
 	write := func(parts ...string) {
 		for _, p := range parts {
@@ -24,14 +26,25 @@ func hashBuild(rc recipes.Recipe, b *v1.Build, bctx *recipes.Build, patches map[
 		}
 	}
 	write("recipe", rc.ID(), rc.RuntimeID())
-	for _, st := range rc.Steps(bctx) {
+	steps, err := s.Steps(bctx)
+	if err != nil {
+		return "", err
+	}
+	for _, st := range steps {
 		write("step", st.Name, st.Dir)
 		write(st.Command...)
 		write(sortedPairs(st.Env)...)
 	}
 	write("outputs")
-	write(rc.Outputs()...)
-	write("binary", rc.Binary())
+	write(s.Outputs()...)
+	write("binary", s.Binary())
+	if s.repo != "" {
+		write("repo", s.repo)
+	}
+	if len(s.Env) > 0 {
+		write("env")
+		write(sortedPairs(s.Env)...)
+	}
 	write("variant", b.GetVariant(), "ref", b.GetRef(), "sandbox", text.Enum(b.GetSandbox()), "image", b.GetImage())
 	write("vars")
 	write(sortedPairs(b.GetVars())...)
@@ -42,7 +55,7 @@ func hashBuild(rc recipes.Recipe, b *v1.Build, bctx *recipes.Build, patches map[
 		write(id)
 		h.Write(patches[id])
 	}
-	return hex.EncodeToString(h.Sum(nil))[:idLength]
+	return hex.EncodeToString(h.Sum(nil))[:idLength], nil
 }
 
 func sortedPairs(m map[string]string) []string {

@@ -593,7 +593,8 @@ func Assume(rt Runtime, overrides map[string]string) (estimate.Params, error) {
 	return typed(rt, overrides, true)
 }
 
-// Converts the overrides a runtime knows, an empty or auto one counting as unset, over each param's default when assumed
+// Converts the overrides a runtime knows, an empty or auto one counting as unset, over each param's default when
+// assumed. An override named env.NAME is an environment variable of the server process, which any runtime takes
 func typed(rt Runtime, overrides map[string]string, assumed bool) (estimate.Params, error) {
 	params := rt.Params()
 	out := make(estimate.Params, len(params))
@@ -612,6 +613,15 @@ func typed(rt Runtime, overrides map[string]string, assumed bool) (estimate.Para
 	for name, raw := range overrides {
 		p, ok := byName[name]
 		if !ok {
+			if variable, named := envParam(name); named {
+				if err := checkEnv(variable, raw); err != nil {
+					return nil, err
+				}
+				if raw != "" {
+					out[name] = raw
+				}
+				continue
+			}
 			if r, retires := rt.(Retirer); retires && slices.Contains(r.Retired(), name) {
 				continue
 			}

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,12 +19,14 @@ import (
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/archs"
+	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/formats/all"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/precision"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/recipes"
 	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
@@ -117,6 +120,30 @@ func (carded) Card(_ context.Context, repo, _ string) (*v1.ModelCard, error) {
 	return &v1.ModelCard{Markdown: "# " + repo}, nil
 }
 
+// A recipe of the fake runtime that writes a script, with no source to fetch
+type scriptRecipe struct{}
+
+func (scriptRecipe) ID() string             { return "script" }
+func (scriptRecipe) RuntimeID() string      { return fake.RuntimeID }
+func (scriptRecipe) Description() string    { return "Writes a script" }
+func (scriptRecipe) Source() recipes.Source { return recipes.Source{} }
+func (scriptRecipe) Tools() []string        { return []string{"sh"} }
+func (scriptRecipe) Facts() []string        { return nil }
+func (scriptRecipe) Vars() []recipes.Var {
+	return []recipes.Var{{Name: "greeting", Label: "Greeting", Default: "hello", Description: "The word the script prints"}}
+}
+func (scriptRecipe) Variants() []recipes.Variant { return nil }
+func (scriptRecipe) Sandbox() recipes.Sandbox {
+	return recipes.Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST}
+}
+func (scriptRecipe) Outputs() []string        { return nil }
+func (scriptRecipe) Binary() string           { return "served" }
+func (scriptRecipe) Timeout() time.Duration   { return time.Minute }
+func (scriptRecipe) Patches() []recipes.Patch { return nil }
+func (scriptRecipe) Steps(b *recipes.Build) []recipes.Step {
+	return []recipes.Step{{Name: "write", Command: []string{"sh", "-c", "echo 'echo " + b.Vars["greeting"] + "' > " + b.Out + "/served"}}}
+}
+
 // Fills the deps a node's model, runtime, instance and slot tools need: a directory source holding one GGUF, the fake runtime installed with one stored model, and slots over both
 func node(t *testing.T) func(context.Context, *Deps) {
 	return func(ctx context.Context, d *Deps) {
@@ -175,7 +202,11 @@ func node(t *testing.T) func(context.Context, *Deps) {
 		prober := host.New([]host.Probe{cardProbe{}}, nil, time.Minute)
 		work := tasks.New(ctx, d.Log, database, d.Events)
 		insp := &inspect.Inspector{Sources: reg, Formats: fmts, Builder: &descriptor.Builder{Formats: fmts, Archs: families, Scale: precision.Bits{}}, Stored: blobs.ListManifests, Runtimes: rts, Host: prober, Cache: headers, Contexts: []uint32{8192}, Log: d.Log}
-		inst := &installs.Manager{DB: database, Runtimes: rts, Host: prober, Tasks: work, Events: d.Events, Log: d.Log}
+		book, err := build.New([]recipes.Recipe{scriptRecipe{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inst := &installs.Manager{DB: database, Runtimes: rts, Recipes: book, Engine: &build.Engine{Root: filepath.Join(dir, "builds"), Log: d.Log}, Defaults: &v1.Builds{}, Host: prober, Tasks: work, Events: d.Events, Log: d.Log}
 		launcher, registrar, traffic := fake.New(), fake.NewRegistrar(), fake.NewTraffic()
 		running := &instances.Manager{
 			DB: database, Dir: filepath.Join(dir, "instances"), Store: blobs, Runtimes: rts, Installs: inst, Inspector: insp, Launcher: launcher, Tasks: work, Host: prober, Registrar: registrar,
@@ -271,6 +302,74 @@ func TestSlotTools(t *testing.T) {
 	}
 }
 
+// A build is previewed with the steps its recipe would run, made from steps, an environment and a binary of the
+// caller's own, read back with the request it was made from, and removed with the install it made
+func TestBuildTools(t *testing.T) {
+	cs := poolSession(t, node(t))
+	recipe := call(t, cs, "list_recipes", map[string]any{"runtime_id": fake.RuntimeID}, "")["recipes"].([]any)[0].(map[string]any)["recipe"].(map[string]any)
+	if recipe["id"] != "script" || recipe["vars"].([]any)[0].(map[string]any)["name"] != "greeting" {
+		t.Fatalf("recipe %v", recipe)
+	}
+	preview := call(t, cs, "preview_build", map[string]any{"runtime_id": fake.RuntimeID, "vars": map[string]string{"greeting": "moon"}}, "")
+	steps := preview["steps"].([]any)
+	if command := steps[0].(map[string]any)["command"].([]any); len(steps) != 1 || preview["binary"] != "served" || command[2] != "echo 'echo moon' > {{.Out}}/served" {
+		t.Fatalf("preview %v", preview)
+	}
+	if listed := call(t, cs, "list_builds", map[string]any{}, ""); len(listed) != 0 {
+		t.Fatalf("a preview builds nothing: %v", listed)
+	}
+	call(t, cs, "preview_build", map[string]any{"runtime_id": fake.RuntimeID, "sandbox": "cloud"}, "host or oci")
+	call(t, cs, "build_runtime", map[string]any{"runtime_id": fake.RuntimeID, "steps": []map[string]any{{"name": "both", "command": []string{"true"}, "script": "true"}}}, "a command or a script")
+	call(t, cs, "build_runtime", map[string]any{"runtime_id": "nope"}, "unknown runtime")
+	// The steps the preview answered go back with one changed, beside an environment and a binary of the caller's own
+	steps[0] = map[string]any{"name": "write", "script": `echo "echo $WORD {{.Vars.greeting}} {{.Jobs}}" > {{.Out}}/tool`}
+	started := call(t, cs, "build_runtime", map[string]any{"runtime_id": fake.RuntimeID, "steps": steps, "env": map[string]string{"WORD": "built"}, "binary": "tool", "timeout_minutes": 2}, "")
+	id := started["build"].(map[string]any)["id"].(string)
+	task := started["task"].(map[string]any)["id"].(string)
+	if id == "" || id == preview["build"].(map[string]any)["id"] || task == "" {
+		t.Fatalf("started %v", started)
+	}
+	var made map[string]any
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		made = call(t, cs, "get_build", map[string]any{"id": id}, "")["build"].(map[string]any)
+		if made["state"] != "BUILD_STATE_RUNNING" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the build never ended")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	request := made["request"].(map[string]any)
+	if made["state"] != "BUILD_STATE_SUCCEEDED" || !strings.HasSuffix(made["binary"].(string), filepath.Join("out", "tool")) || request["binary"] != "tool" || request["env"].(map[string]any)["WORD"] != "built" || request["timeout_ms"] != float64(120_000) {
+		t.Fatalf("made %v", made)
+	}
+	if script, err := os.ReadFile(made["binary"].(string)); err != nil || !strings.HasPrefix(string(script), "echo built hello ") {
+		t.Fatalf("the caller's step wrote %q %v", script, err)
+	}
+	log := call(t, cs, "get_task", map[string]any{"id": task}, "")["logs"].([]any)
+	if tail := call(t, cs, "get_task", map[string]any{"id": task, "tail": 1}, "")["logs"].([]any); len(log) < 2 || len(tail) != 1 || tail[0] != log[len(log)-1] {
+		t.Fatalf("log %v", log)
+	}
+	if listed := call(t, cs, "list_builds", map[string]any{"runtime_id": fake.RuntimeID}, "")["builds"].([]any); len(listed) != 1 {
+		t.Fatalf("builds %v", listed)
+	}
+	// The install the build made launches like any other, with words and environment variables of the caller's own
+	install := made["install_id"].(string)
+	run := call(t, cs, "preview_run", map[string]any{"source_id": "src", "repo": "org/stored", "group": "q4", "install_id": install, "args": "--extra {{.Name}}", "params": map[string]string{"env.WORD": "served"}}, "")
+	command := run["command"].([]any)
+	if n := len(command); n < 2 || command[n-2] != "--extra" || command[n-1] != "stored:q4" || run["params"].(map[string]any)["env.WORD"] != "served" {
+		t.Fatalf("previewed run %v", run)
+	}
+	call(t, cs, "preview_run", map[string]any{"source_id": "src", "repo": "org/stored", "group": "q4", "params": map[string]string{"env.NOT A NAME": "x"}}, "no name for an environment variable")
+	if gone := call(t, cs, "remove_install", map[string]any{"id": install}, "")["install"].(map[string]any); gone["id"] != install {
+		t.Fatalf("removed %v", gone)
+	}
+	call(t, cs, "get_build", map[string]any{"id": id}, "unknown build")
+	call(t, cs, "remove_build", map[string]any{"id": id}, "unknown build")
+}
+
 // The new tools say which of them read, which change, and which destroy
 func TestToolAnnotations(t *testing.T) {
 	cs := poolSession(t)
@@ -282,17 +381,19 @@ func TestToolAnnotations(t *testing.T) {
 	for _, tool := range res.Tools {
 		hints[tool.Name] = tool.Annotations
 	}
-	for _, name := range []string{"get_model_card", "resolve_model", "inspect_model", "get_runtime", "instance_logs"} {
+	for _, name := range []string{"get_model_card", "resolve_model", "inspect_model", "get_runtime", "instance_logs", "list_recipes", "preview_build", "list_builds", "get_build", "preview_run"} {
 		if a, ok := hints[name]; !ok || a == nil || !a.ReadOnlyHint {
 			t.Fatalf("%s is not listed as read only: %v", name, a)
 		}
 	}
-	for _, name := range []string{"create_slot", "update_slot", "install_runtime"} {
+	for _, name := range []string{"create_slot", "update_slot", "install_runtime", "build_runtime", "relaunch_slot"} {
 		if a, ok := hints[name]; !ok || a != nil {
 			t.Fatalf("%s is not listed as a plain change: %v", name, a)
 		}
 	}
-	if a := hints["delete_slot"]; a == nil || a.DestructiveHint == nil || !*a.DestructiveHint || a.ReadOnlyHint {
-		t.Fatalf("delete_slot is not listed as destructive: %v", a)
+	for _, name := range []string{"delete_slot", "remove_build", "remove_install"} {
+		if a := hints[name]; a == nil || a.DestructiveHint == nil || !*a.DestructiveHint || a.ReadOnlyHint {
+			t.Fatalf("%s is not listed as destructive: %v", name, a)
+		}
 	}
 }

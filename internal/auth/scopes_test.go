@@ -56,6 +56,7 @@ var wantClass = map[string]string{
 	nebuv1connect.BuildServiceListRecipesProcedure:             "read",
 	nebuv1connect.BuildServiceListBuildsProcedure:              "read",
 	nebuv1connect.BuildServiceGetBuildProcedure:                "read",
+	nebuv1connect.BuildServicePreviewBuildProcedure:            "read",
 	nebuv1connect.BuildServiceBuildProcedure:                   "operate",
 	nebuv1connect.BuildServiceRemoveBuildProcedure:             "operate",
 	nebuv1connect.ChatServiceListConversationsProcedure:        "inference",

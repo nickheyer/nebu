@@ -226,7 +226,8 @@ CREATE TABLE builds (
   state TEXT NOT NULL,
   error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  finished_at TEXT
+  finished_at TEXT,
+  request TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX builds_by_runtime ON builds (runtime_id, created_at);
 

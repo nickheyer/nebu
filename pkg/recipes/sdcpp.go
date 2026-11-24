@@ -1,7 +1,6 @@
 package recipes
 
 import (
-	"strconv"
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/host"
@@ -29,7 +28,8 @@ func (SDCpp) Facts() []string {
 func (SDCpp) Vars() []Var {
 	return []Var{
 		{Name: "build_type", Label: "Build type", Default: "Release", Description: "The cmake build type", Choices: []string{"Release", "RelWithDebInfo", "Debug", "MinSizeRel"}},
-		{Name: "extra", Label: "Extra cmake flags", Description: "Space-separated CMake flags, such as -DGGML_CUDA_F16=ON"},
+		{Name: "extra", Label: "Extra cmake flags", Description: "Space-separated CMake flags, such as -DGGML_CUDA_F16=ON, which come last and so win over the recipe's own"},
+		{Name: "targets", Label: "Targets", Description: "Space-separated CMake targets to build, such as sd-server, every target when empty"},
 	}
 }
 
@@ -90,7 +90,7 @@ func (SDCpp) Steps(b *Build) []Step {
 	return []Step{
 		{Name: "submodules", Command: command("git", "submodule", "update", "--init", "--recursive", "--depth", "1")},
 		{Name: "configure", Command: configure},
-		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "-j", strconv.Itoa(b.Jobs))},
+		{Name: "compile", Command: cmakeBuild(b)},
 	}
 }
 

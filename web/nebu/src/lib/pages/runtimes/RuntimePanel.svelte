@@ -4,10 +4,10 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { capitalize, duration, enumLabel, factLabel, shortId, when } from '#lib/format.js';
+	import { capitalize, duration, elapsed, enumLabel, factLabel, shortId, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
-	import { SandboxKind, SandboxKindSchema, type Build, type RecipeStatus, type Var } from '#lib/proto/nebu/v1/recipe_pb.js';
+	import { SandboxKind, SandboxKindSchema, type Build, type BuildStep, type PreviewBuildResponse, type RecipeStatus, type Var } from '#lib/proto/nebu/v1/recipe_pb.js';
 	import { InstallKind, type Install, type InstallOption, type RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { RuntimeDefaultsSchema, SettingsSchema } from '#lib/proto/nebu/v1/settings_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
@@ -23,15 +23,21 @@
 	import PageTabs from '#lib/ui/PageTabs.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import Str from '#lib/ui/Str.svelte';
+	import Chips from '#lib/ui/fields/Chips.svelte';
+	import Duration from '#lib/ui/fields/Duration.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
+	import KeyValues from '#lib/ui/fields/KeyValues.svelte';
 	import Path from '#lib/ui/fields/Path.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
+	import Textarea from '#lib/ui/fields/Textarea.svelte';
+	import Cell from '#lib/ui/layout/Cell.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
+	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { reveal } from '#lib/ui/motion.svelte.js';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
@@ -39,9 +45,13 @@
 	import ConfigFields from '#lib/pages/runtimes/ConfigFields.svelte';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import { installLabel } from '#lib/pages/serve/serve.js';
+	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
+	import ArrowUpIcon from 'phosphor-svelte/lib/ArrowUpIcon';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import HammerIcon from 'phosphor-svelte/lib/HammerIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 
 	let { status, tab = 'installs', ontab, onclose }: { status: RuntimeStatus; tab?: string; ontab: (id: string) => void; onclose: () => void } = $props();
 
@@ -93,6 +103,22 @@
 	let force = $state(false);
 	// Recipe patches the build leaves out, every patch applied until switched off
 	let skipPatches = $state<string[]>([]);
+	// A repository cloned in place of the recipe's source, the recipe's own when empty
+	let repo = $state('');
+	// Addresses of unified diffs applied after the recipe's patches
+	let extraPatches = $state<string[]>([]);
+	// Variables every step runs with
+	let env = $state<Record<string, string>>({});
+	// Runs the steps of the editor in place of the recipe's while switched on
+	let ownSteps = $state(false);
+	let steps = $state<StepRow[]>([]);
+	let previewing = $state(false);
+	// What the recipe would run for the form's choices, asked for when its steps are taken into the editor
+	let preview = $state<PreviewBuildResponse | undefined>(undefined);
+	// Paths copied out of the source tree, the binary installed among them and the longest the build may run, each the recipe's own when empty
+	let outputs = $state<string[]>([]);
+	let binary = $state('');
+	let timeout = $state(0);
 	let busy = $state(false);
 
 	const recipe = $derived(option?.recipe ?? recipes.find((r) => r.recipe?.runtimeId === id));
@@ -114,12 +140,14 @@
 		return `Needs ${list}, which this host lacks`;
 	}
 
-	type BuildField = { kind: 'variant' | 'sandbox' | 'image' | 'ref' | 'force' } | { kind: 'var'; v: Var };
+	type BuildField = { kind: 'variant' | 'sandbox' | 'image' | 'ref' | 'repo' | 'force' } | { kind: 'var'; v: Var };
+	// The fields of a source build two to a row, the ref beside the repository it is of
 	const buildFields = $derived<BuildField[]>([
 		{ kind: 'variant' },
 		{ kind: 'sandbox' },
-		...(sandbox === SandboxKind.OCI ? [{ kind: 'image' as const }] : []),
 		{ kind: 'ref' },
+		{ kind: 'repo' },
+		...(sandbox === SandboxKind.OCI ? [{ kind: 'image' as const }] : []),
 		{ kind: 'force' },
 		...(recipe?.recipe?.vars ?? []).map((v) => ({ kind: 'var' as const, v }))
 	]);
@@ -161,6 +189,73 @@
 		skipPatches = on ? skipPatches.filter((x) => x !== id) : [...skipPatches.filter((x) => x !== id), id];
 	}
 
+	// One step of the editor, its command a line sh runs
+	type StepRow = { name: string; line: string };
+
+	// The placeholders a step's words take, filled in at build time
+	const placeholders = '{{.Src}}, {{.Out}}, {{.Jobs}} and {{.Vars.name}}';
+
+	// A word as sh reads it back, single quoted unless it holds only characters the shell takes as they are
+	function shellWord(word: string): string {
+		return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+	}
+
+	// A step as one shell line, the directory it runs in and the variables it sets ahead of its command
+	function stepLine(s: BuildStep): string {
+		const ahead = [...(s.dir ? [`cd ${shellWord(s.dir)}`] : []), ...Object.entries(s.env).map(([k, v]) => `export ${k}=${shellWord(v)}`)];
+		return [...ahead, s.script.trim() || s.command.map(shellWord).join(' ')].join(' && ');
+	}
+
+	// The build the form asks for, everything left empty taken from the recipe
+	function request() {
+		return {
+			runtimeId: id,
+			recipeId: recipe?.recipe?.id ?? '',
+			variant,
+			vars,
+			sandbox,
+			image,
+			force,
+			ref,
+			repo: repo.trim(),
+			skipPatches: skipPatches.filter((x) => patches.some((p) => p.id === x)),
+			patches: extraPatches.map((url) => ({ url })),
+			env,
+			steps: ownSteps ? steps.map((s) => ({ name: s.name.trim(), script: s.line.trim() })) : [],
+			outputs,
+			binary: binary.trim(),
+			timeoutMs: timeout
+		};
+	}
+
+	// Fills the editor with the steps the recipe runs for the form's choices, or hands the build back to the recipe's own
+	async function switchSteps(on: boolean) {
+		steps = [];
+		if (!on) return;
+		previewing = true;
+		try {
+			// Asked without the outputs, binary and time limit the form sets, so the answer holds the recipe's own
+			preview = await rpc.build.previewBuild({ build: { ...request(), steps: [], outputs: [], binary: '', timeoutMs: 0 } });
+			steps = preview.steps.map((s) => ({ name: s.name, line: stepLine(s) }));
+		} catch (err) {
+			ownSteps = false;
+			toast.error('Steps failed to load', reason(err));
+		} finally {
+			previewing = false;
+		}
+	}
+
+	function addStep() {
+		steps = [...steps, { name: '', line: '' }];
+	}
+
+	// Moves a step one place earlier or later
+	function moveStep(i: number, by: number) {
+		const next = [...steps];
+		next.splice(i + by, 0, ...next.splice(i, 1));
+		steps = next;
+	}
+
 	// An existing binary nebu did not find on PATH has to be pointed at
 	const needsPath = $derived(option?.method?.kind === InstallKind.ADOPTED && option.unmet.length > 0);
 	// What the form still needs before it can run
@@ -169,6 +264,9 @@
 		if (kind === InstallKind.ADOPTED && needsPath && adoptPath.trim() === '') return 'Give the path of the binary';
 		if (kind === InstallKind.BUILT && !variant) return 'Pick a variant';
 		if (kind === InstallKind.BUILT && missing.length > 0) return missingText(missing);
+		if (kind === InstallKind.BUILT && previewing) return "Reading the recipe's steps";
+		if (kind === InstallKind.BUILT && ownSteps && steps.length === 0) return 'Add a step';
+		if (kind === InstallKind.BUILT && ownSteps && steps.some((s) => s.line.trim() === '')) return 'Give every step a command';
 		return '';
 	});
 
@@ -210,7 +308,7 @@
 	async function build() {
 		busy = true;
 		try {
-			const res = await rpc.build.build({ runtimeId: id, recipeId: recipe?.recipe?.id ?? '', variant, vars, sandbox, image, force, ref, skipPatches: skipPatches.filter((x) => patches.some((p) => p.id === x)) });
+			const res = await rpc.build.build(request());
 			if (!res.task) throw new Error('the daemon answered without a task');
 			followTask(res.task, `Build ${rt?.name}`);
 			ontab('installs');
@@ -308,8 +406,9 @@
 			.sort();
 	}
 
-	// What a build was made from, where it ran, the options it was given and the host it was built for
+	// What a build was made from, where it ran, the options it was given, what it set in place of the recipe's and the host it was built for
 	function buildGroups(b: Build): Group[] {
+		const own = b.request;
 		return [
 			{
 				title: 'Build',
@@ -324,9 +423,21 @@
 					{ label: 'directory', value: b.dir, mono: true, copy: true }
 				]
 			},
+			{
+				title: "In place of the recipe's",
+				rows: [
+					{ label: 'repository', value: own?.repo ?? '', mono: true, copy: true },
+					{ label: 'outputs', value: (own?.outputs ?? []).join(', '), mono: true },
+					{ label: 'binary', value: own?.binary ?? '', mono: true },
+					{ label: 'timeout', value: own?.timeoutMs ? elapsed(own.timeoutMs) : '' }
+				]
+			},
 			{ title: 'Options', rows: Object.entries(b.vars).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })) },
+			{ title: 'Environment', rows: Object.entries(own?.env ?? {}).map(([k, v]) => ({ label: k, value: v, mono: true })) },
+			{ title: 'Steps', rows: (own?.steps ?? []).map((s, n) => ({ label: s.name || `step ${n + 1}`, value: stepLine(s), mono: true })) },
 			{ title: 'Built for', rows: Object.entries(b.facts).map(([k, v]) => ({ label: factLabel(k), value: v.split(',').join(', '), mono: true })) },
-			{ title: 'Patches', rows: b.patches.map((p, n) => ({ label: String(n + 1), value: p, mono: true })) }
+			{ title: 'Patches', rows: b.patches.map((p, n) => ({ label: String(n + 1), value: p, mono: true })) },
+			{ title: 'Extra patches', rows: (own?.patches ?? []).map((p, n) => ({ label: String(n + 1), value: p.url || p.description || p.id, mono: true })) }
 		].filter((g) => g.rows.some((r) => r.value !== ''));
 	}
 
@@ -375,6 +486,8 @@
 		<Text bind:value={image} label="Container image" mono />
 	{:else if f.kind === 'ref'}
 		<Text bind:value={ref} label="Branch, tag or commit" max={64} mono />
+	{:else if f.kind === 'repo'}
+		<Text bind:value={repo} label="Repository" placeholder="owner/name or a git URL" unset={recipe?.recipe?.source || undefined} max={256} mono />
 	{:else if f.kind === 'force'}
 		<Switch bind:checked={force} label="Rebuild when already built" />
 	{:else if f.kind === 'var'}
@@ -385,6 +498,37 @@
 			<Text value={vars[v.name] ?? ''} label={v.label || v.name} info={v.description || undefined} unset={v.default || undefined} onchange={(x) => (vars[v.name] = x)} />
 		{/if}
 	{/if}
+{/snippet}
+
+{#snippet stepEditor()}
+	<Stack gap={8}>
+		{#each steps as s, i (s)}
+			<Row gap={8} wrap={false} align="flex-start">
+				<Cell min="7rem" max="11rem"><Text bind:value={s.name} placeholder="Name" aria="Step name" max={64} /></Cell>
+				<Cell min="12rem"><Textarea bind:value={s.line} placeholder="Command" rows={1} maxRows={8} mono /></Cell>
+				<Cell grow={false}>
+					<span class="trail">
+						<NeoButton text aria-label="Move step up" title="Move up" disabled={i === 0} onclick={() => moveStep(i, -1)}>
+							{#snippet icon()}<ArrowUpIcon size={16} />{/snippet}
+						</NeoButton>
+						<NeoButton text aria-label="Move step down" title="Move down" disabled={i === steps.length - 1} onclick={() => moveStep(i, 1)}>
+							{#snippet icon()}<ArrowDownIcon size={16} />{/snippet}
+						</NeoButton>
+						<NeoButton text aria-label="Remove step" title="Remove" onclick={() => (steps = steps.filter((_, j) => j !== i))}>
+							{#snippet icon()}<XIcon size={16} />{/snippet}
+						</NeoButton>
+					</span>
+				</Cell>
+			</Row>
+		{/each}
+		<Row>
+			<NeoButton text onclick={addStep}>
+				{#snippet icon()}<PlusIcon size={16} />{/snippet}
+				Step
+			</NeoButton>
+		</Row>
+		<p class="secondary">{placeholders} are filled in at build time</p>
+	</Stack>
 {/snippet}
 
 {#snippet groups(list: Group[])}
@@ -422,6 +566,21 @@
 							{#each pair as f (f.kind === 'var' ? `var:${f.v.name}` : f.kind)}{@render buildField(f)}{/each}
 						</FieldRow>
 					{/each}
+					{#snippet advanced()}
+						<Chips bind:value={extraPatches} label="Extra patches" info="Patches fetched from these addresses and applied after the recipe's own" placeholder="https://" />
+						<KeyValues bind:value={env} label="Environment" info="Variables every step runs with" keyLabel="Name" addLabel="Variable" />
+						<Switch bind:checked={ownSteps} label="Replace the recipe's steps" info="Starts from the steps the recipe runs for these choices" disabled={previewing} onchange={switchSteps} />
+						{#if previewing}
+							<Skeleton rows={2} kind="bars" />
+						{:else if ownSteps}
+							{@render stepEditor()}
+						{/if}
+						<Chips bind:value={outputs} label="Outputs" info="Paths in the source tree copied out after the steps, such as build/bin/*" unset={preview?.outputs.join(', ') || "the recipe's own"} />
+						<FieldRow wide>
+							<Text bind:value={binary} label="Binary" info="The file the install runs, relative to what was copied out" unset={preview?.binary || "the recipe's own"} mono />
+							<Duration bind:value={timeout} smallest="min" max={86_400_000} label="Timeout" emptyZero fallback={recipe?.recipe?.timeoutMs || undefined} unset="the recipe's limit" />
+						</FieldRow>
+					{/snippet}
 				</FormSection>
 				{#if patches.length}
 					<FormSection title="Patches">

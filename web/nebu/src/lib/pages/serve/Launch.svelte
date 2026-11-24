@@ -32,6 +32,7 @@
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import KeyValues from '#lib/ui/fields/KeyValues.svelte';
 	import Percent from '#lib/ui/fields/Percent.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
@@ -45,7 +46,7 @@
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import RuntimeFields from '#lib/pages/serve/RuntimeFields.svelte';
-	import { keySplits, modelPhrase } from '#lib/pages/serve/serve.js';
+	import { isEnvParam, keySplits, modelPhrase, paramsEnv, withEnv } from '#lib/pages/serve/serve.js';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
 
@@ -123,6 +124,8 @@
 	let planAbort: AbortController | undefined;
 	// The slot whose defaults the form last took
 	let seeded = '';
+	// Counts the times the form took a slot's params, the environment editor reading its rows again each time
+	let paramsTaken = $state(0);
 
 	const title = $derived(swap ? `Swap ${slot?.name ?? ''}`.trim() : planOnly ? 'Plan a formation' : 'Launch');
 	const inMesh = $derived(live.inMesh);
@@ -311,6 +314,7 @@
 		seeded = s.id;
 		untrack(() => {
 			params = { ...s.params, ...(init.params ?? {}) };
+			paramsTaken++;
 			args = s.args;
 			if (s.runtimeId && !init.runtimeId) {
 				runtimeId = s.runtimeId;
@@ -332,7 +336,7 @@
 		}
 	});
 
-	// Parameters of another runtime leave with it, so a launch never hands one runtime another's
+	// Parameters of another runtime leave with it, the environment staying, so a launch never hands one runtime another's
 	let paramsOf = '';
 	$effect(() => {
 		const rt = runtime?.runtime;
@@ -340,10 +344,17 @@
 		paramsOf = rt.id;
 		const known = new Set(rt.params.map((p) => p.name));
 		untrack(() => {
-			const kept = Object.fromEntries(Object.entries(params).filter(([k]) => known.has(k)));
+			const kept = Object.fromEntries(Object.entries(params).filter(([k]) => known.has(k) || isEnvParam(k)));
 			if (Object.keys(kept).length !== Object.keys(params).length) params = kept;
 		});
 	});
+
+	// Takes the environment editor's variables back into the params as env.NAME, the params left alone when nothing changed
+	function setEnv(env: Record<string, string>) {
+		untrack(() => {
+			if (JSON.stringify(env) !== JSON.stringify(paramsEnv(params))) params = withEnv(params, env);
+		});
+	}
 
 	// The files the model needs that this host lacks, read again whenever the store changes
 	$effect(() => {
@@ -609,6 +620,9 @@
 						<Stack gap={24}>
 							<ParamsForm params={runtimeParams} bind:values={params} supplied={plan?.params} states={paramStates} />
 							<Text bind:value={args} label="Extra arguments" max={512} mono />
+							{#key paramsTaken}
+								<KeyValues bind:value={() => paramsEnv(params), (env) => setEnv(env)} label="Environment" info="Variables the server runs with" keyLabel="Name" addLabel="Variable" />
+							{/key}
 						</Stack>
 					</Collapse>
 				{/if}

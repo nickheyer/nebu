@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -160,6 +161,13 @@ func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*buil
 		Image:       req.GetImage(),
 		Ref:         req.GetRef(),
 		SkipPatches: req.GetSkipPatches(),
+		Repo:        req.GetRepo(),
+		Steps:       req.GetSteps(),
+		Env:         req.GetEnv(),
+		Outputs:     req.GetOutputs(),
+		Binary:      req.GetBinary(),
+		Patches:     req.GetPatches(),
+		Timeout:     time.Duration(req.GetTimeoutMs()) * time.Millisecond,
 		Defaults:    m.Defaults,
 	})
 	if err != nil {
@@ -169,10 +177,25 @@ func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*buil
 		return nil, nil, err
 	}
 	b := sel.Build()
+	b.Request = proto.Clone(req).(*v1.BuildRequest)
 	if err := m.Engine.Resolve(ctx, sel, b); err != nil {
 		return nil, nil, err
 	}
 	return sel, b, nil
+}
+
+// Resolves a request to the build it would make and what that build would run, building nothing. The build answered
+// is the one already made when this exact build exists
+func (m *Manager) Preview(ctx context.Context, req *v1.BuildRequest) (*v1.PreviewBuildResponse, error) {
+	sel, b, err := m.resolveBuild(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out := m.Engine.Preview(sel, b)
+	if existing, _ := m.cached(ctx, b.GetId()); existing != nil {
+		out.Build = existing
+	}
+	return out, nil
 }
 
 // Runs a build in the caller's task, reusing completed builds and waiting for active ones.

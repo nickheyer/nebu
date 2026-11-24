@@ -10,6 +10,25 @@ import { ParamType, type Install, type Param } from '#lib/proto/nebu/v1/runtime_
 import type { ParamState } from '#lib/proto/nebu/v1/estimate_pb.js';
 import { curveOf, type Span } from '#lib/ui/fields/scale.js';
 
+// The prefix of a param that sets an environment variable of the server, env.NAME setting NAME, which any runtime takes
+const envPrefix = 'env.';
+
+// Whether a param sets an environment variable of the server rather than one the runtime declares
+export function isEnvParam(name: string): boolean {
+	return name.startsWith(envPrefix);
+}
+
+// The environment variables params set, by name without the prefix
+export function paramsEnv(params: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(Object.entries(params).flatMap(([k, v]) => (isEnvParam(k) ? [[k.slice(envPrefix.length), v]] : [])));
+}
+
+// The params with their environment variables replaced by these, every other param kept as it is
+export function withEnv(params: Record<string, string>, env: Record<string, string>): Record<string, string> {
+	const rest = Object.entries(params).filter(([k]) => !isEnvParam(k));
+	return Object.fromEntries([...rest, ...Object.entries(env).map(([k, v]) => [envPrefix + k, v])]);
+}
+
 // The burst an empty box resolves to, the gateway's own or the rate in effect rounded up
 export function burstFallback(policy: Policy | undefined, gateway: Policy | undefined): number | undefined {
 	return gateway?.burst || Math.ceil(policy?.requestsPerSecond || gateway?.requestsPerSecond || 0) || undefined;

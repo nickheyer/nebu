@@ -323,9 +323,7 @@ func (m *Manager) launchSeat(ctx context.Context, h *tasks.Handle, in *instance,
 			if p.role.Helper {
 				return nil
 			}
-			extra, err := runtimes.RenderArgs(seat.GetArgs(), runtimes.ScopeOf(in, cmd))
-			cmd.Args = append(cmd.Args, extra...)
-			return err
+			return runtimes.Extend(in, cmd, seat.GetArgs())
 		})
 		if err != nil {
 			m.release(in)
