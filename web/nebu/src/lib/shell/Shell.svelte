@@ -1,18 +1,25 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { session } from '#lib/auth/session.svelte.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import { motion } from '#lib/ui/motion.svelte.js';
 	import BottomBar from '#lib/shell/BottomBar.svelte';
 	import { immersion } from '#lib/shell/chrome.svelte.js';
+	import Morpheus from '#lib/shell/Morpheus.svelte';
+	import { morpheus } from '#lib/shell/morpheus.svelte.js';
 	import Rail from '#lib/shell/Rail.svelte';
 	import TopBar from '#lib/shell/TopBar.svelte';
 
 	let { children }: { children: Snippet } = $props();
+
+	// The shell width from which Morpheus takes a column of its own and the page narrows beside it, a sheet over the page below it
+	const roomy = 1360;
+	let width = $state(0);
 </script>
 
 <!-- A page that takes the whole window keeps the shell mounted and out of view, so leaving it changes nothing else -->
-<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} class:immersive={immersion.on} data-motion={motion.enabled ? 'on' : 'off'}>
+<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} class:immersive={immersion.on} data-motion={motion.enabled ? 'on' : 'off'} bind:clientWidth={width}>
 	{#if !viewport.mobile}
 		<div class="chrome"><Rail /></div>
 	{/if}
@@ -27,6 +34,9 @@
 			<div class="chrome foot"><BottomBar /></div>
 		{/if}
 	</div>
+	{#if session.reads && morpheus.here}
+		<div class="chrome"><Morpheus docked={width >= roomy} /></div>
+	{/if}
 </div>
 
 <style>

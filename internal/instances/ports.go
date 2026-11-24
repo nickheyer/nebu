@@ -2,6 +2,7 @@ package instances
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/nickheyer/nebu/pkg/proc"
 )
@@ -51,6 +52,19 @@ func (m *Manager) reserve(in *instance, host string, span int) (int, error) {
 	in.held = append(in.held, reservation{host: host, port: port})
 	in.mu.Unlock()
 	return port, nil
+}
+
+// Binds one port on host for a listener of this process, the port bound from here until the listener closes
+func (m *Manager) listen(host string) (net.Listener, error) {
+	rng, err := m.portRange()
+	if err != nil {
+		return nil, err
+	}
+	ln, err := m.book(host).Listen(rng)
+	if err != nil {
+		return nil, fmt.Errorf("bind a port on %s: %w", host, err)
+	}
+	return ln, nil
 }
 
 // Unbinds every span the instance holds so the process about to launch may bind them

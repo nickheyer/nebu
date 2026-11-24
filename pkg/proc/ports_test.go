@@ -65,6 +65,38 @@ func TestReserveSkipsBoundPorts(t *testing.T) {
 	}
 }
 
+// A listened port stays bound from the moment it is handed over, skips a pending span, and leaves no reservation behind
+func TestListenHandsOverBoundPort(t *testing.T) {
+	r := NewReservations("127.0.0.1")
+	p := freeTestPort(t)
+	if _, err := r.Reserve(Range{p, p}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := r.Listen(Range{p, p}); err == nil {
+		ln.Close()
+		t.Fatal("a pending port was listened on")
+	}
+	r.Release(p)
+	ln, err := r.Listen(Range{p, p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ln.Addr().(*net.TCPAddr).Port; got != p {
+		t.Fatalf("listening on %d, want %d", got, p)
+	}
+	if other, err := net.Listen("tcp", ln.Addr().String()); err == nil {
+		other.Close()
+		t.Fatal("the port was unbound after the handover")
+	}
+	if err := r.Confirm(p); err == nil {
+		t.Fatal("a listened port left a pending reservation")
+	}
+	ln.Close()
+	if got, err := r.Reserve(Range{p, p}, 1); err != nil || got != p {
+		t.Fatalf("a closed listener frees its port %d %v", got, err)
+	}
+}
+
 func TestReserveValidates(t *testing.T) {
 	r := NewReservations("127.0.0.1")
 	for _, c := range []struct {

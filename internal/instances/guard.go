@@ -46,6 +46,11 @@ func newForwarder(bind, target string, admit []string, single bool, name string,
 	if err != nil {
 		return nil, fmt.Errorf("guard listener %s: %w", bind, err)
 	}
+	return guardOn(ln, target, admit, single, name, log)
+}
+
+// Serves the guard on a listener already bound, closing it when the guard cannot start
+func guardOn(ln net.Listener, target string, admit []string, single bool, name string, log *slog.Logger) (*forwarder, error) {
 	f := &forwarder{ln: ln, single: single, log: log, name: name, conns: map[net.Conn]struct{}{}}
 	f.target.Store(target)
 	for _, a := range admit {

@@ -40,15 +40,39 @@ func NewReservations(host string) *Reservations {
 
 // Returns the first of span consecutive ports, each bound here on the host and outside every pending span
 func (r *Reservations) Reserve(rng Range, span int) (int, error) {
-	if err := rng.validate(); err != nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	port, listeners, err := r.find(rng, span)
+	if err != nil {
 		return 0, err
+	}
+	r.pending[port] = &bound{size: span, listeners: listeners}
+	for p := port; p < port+span; p++ {
+		r.held[p] = true
+	}
+	return port, nil
+}
+
+// Binds one port of the range outside every pending span and hands over its listener, for a port this process serves itself and so never unbinds
+func (r *Reservations) Listen(rng Range) (net.Listener, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, listeners, err := r.find(rng, 1)
+	if err != nil {
+		return nil, err
+	}
+	return listeners[0], nil
+}
+
+// Finds span consecutive ports of the range free to bind and outside every pending span, answering the first with all of them bound
+func (r *Reservations) find(rng Range, span int) (int, []net.Listener, error) {
+	if err := rng.validate(); err != nil {
+		return 0, nil, err
 	}
 	size := rng.High - rng.Low + 1
 	if span < 1 || span > size {
-		return 0, fmt.Errorf("a span of %d ports does not fit the range %d-%d", span, rng.Low, rng.High)
+		return 0, nil, fmt.Errorf("a span of %d ports does not fit the range %d-%d", span, rng.Low, rng.High)
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	starts := size - span + 1
 	if r.cursor == 0 {
 		r.cursor = rng.Low + rand.IntN(size)
@@ -63,14 +87,10 @@ func (r *Reservations) Reserve(rng Range, span int) (int, error) {
 		if !ok {
 			continue
 		}
-		r.pending[port] = &bound{size: span, listeners: listeners}
-		for p := port; p < port+span; p++ {
-			r.held[p] = true
-		}
 		r.cursor = port + span
-		return port, nil
+		return port, listeners, nil
 	}
-	return 0, fmt.Errorf("no %d consecutive ports free on %s in %d-%d", span, r.host, rng.Low, rng.High)
+	return 0, nil, fmt.Errorf("no %d consecutive ports free on %s in %d-%d", span, r.host, rng.Low, rng.High)
 }
 
 // Binds every port of the span on the host, closing what it bound when one is held or taken

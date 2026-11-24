@@ -4,6 +4,7 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -77,6 +78,7 @@ type nebu struct {
 	runtimes *services.RuntimeService
 	store    *services.StoreService
 	instance *services.InstanceService
+	estimate *services.EstimateService
 	slots    *services.SlotService
 	gateway  *services.GatewayService
 	imports  *services.PoolImportService
@@ -86,12 +88,17 @@ type nebu struct {
 	client   *http.Client
 }
 
-// The streamable HTTP handler of nebu's MCP server, one server for every session
-func Handler(d Deps) http.Handler { return streamable(New(d), d.Log) }
+// What every MCP client is told at initialize about using nebu's tools
+//
+//go:embed instructions.md
+var instructions string
 
-// Serves one server over streamable HTTP with localhost protection, refusing loopback requests naming another host
-func streamable(server *mcp.Server, log *slog.Logger) http.Handler {
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Logger: log})
+// The streamable HTTP handler of nebu's MCP server, one server for every session
+func Handler(d Deps) http.Handler { return streamable(New(d), d.Guard.Enabled(), d.Log) }
+
+// Serves one server over streamable HTTP, refusing loopback requests naming another host unless every request has already shown a credential
+func streamable(server *mcp.Server, credentialed bool, log *slog.Logger) http.Handler {
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Logger: log, DisableLocalhostProtection: credentialed})
 }
 
 // Builds the server with every tool and resource
@@ -103,6 +110,7 @@ func New(d Deps) *mcp.Server {
 		runtimes: services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats),
 		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo, d.Runtimes),
 		instance: services.NewInstanceService(d.Instances),
+		estimate: services.NewEstimateService(d.Inspector),
 		slots:    services.NewSlotService(d.Slots),
 		gateway:  services.NewGatewayService(d.Gateway, d.Pools, d.Guard),
 		imports:  services.NewPoolImportService(d.Mesh, d.Events),
@@ -112,7 +120,7 @@ func New(d Deps) *mcp.Server {
 		client:   d.Gateway.Client("mcp"),
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "nebu", Title: "Nebu", Version: d.Version, Description: "Model weights, inference runtimes, routes, and the mesh they run on"}, &mcp.ServerOptions{
-		Instructions: "Nebu manages model weights and inference runtimes. List what is stored and running before changing anything, pull and run models by source, repo, and group, and read traces to see what the gateway served.",
+		Instructions: instructions,
 		Logger:       d.Log,
 	})
 	// The services are called in process, past the interceptor that signs calls over the API, so each is signed here
@@ -147,25 +155,40 @@ type listModelsIn struct{}
 
 type searchModelsIn struct {
 	Query    string `json:"query" jsonschema:"what to search for"`
-	SourceID string `json:"source_id,omitempty" jsonschema:"the source to search, every source when empty"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"results to return, 20 when unset"`
+	SourceID string `json:"source_id,omitempty" jsonschema:"source to search"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"max results (default 20)"`
 }
 
 type modelRef struct {
-	SourceID string `json:"source_id" jsonschema:"the source the repo lives on, such as huggingface"`
-	Repo     string `json:"repo" jsonschema:"the repository, such as Qwen/Qwen3-8B"`
-	Group    string `json:"group,omitempty" jsonschema:"the weight group within the repo, the default group when empty"`
+	SourceID string `json:"source_id" jsonschema:"model source, such as huggingface"`
+	Repo     string `json:"repo" jsonschema:"repository, such as Qwen/Qwen3-8B"`
+	Group    string `json:"group,omitempty" jsonschema:"weight group in the repo"`
+}
+
+type repoIn struct {
+	SourceID string `json:"source_id" jsonschema:"model source, such as huggingface"`
+	Repo     string `json:"repo" jsonschema:"repository, such as Qwen/Qwen3-8B"`
+	Revision string `json:"revision,omitempty" jsonschema:"branch, tag, or commit"`
+}
+
+type inspectModelIn struct {
+	repoIn
+	Groups     []string          `json:"groups,omitempty" jsonschema:"weight groups to plan"`
+	RuntimeIDs []string          `json:"runtime_ids,omitempty" jsonschema:"runtimes to plan on"`
+	Contexts   []uint32          `json:"contexts,omitempty" jsonschema:"context lengths to plan at"`
+	Params     map[string]string `json:"params,omitempty" jsonschema:"runtime parameters to plan with"`
+	SlotID     string            `json:"slot_id,omitempty" jsonschema:"slot to plan for"`
 }
 
 type pullModelIn struct {
 	modelRef
 	Revision string `json:"revision,omitempty"`
-	NodeID   string `json:"node_id,omitempty" jsonschema:"the mesh member to pull onto, this node when empty"`
+	NodeID   string `json:"node_id,omitempty" jsonschema:"mesh member to pull onto"`
 }
 
 type removeModelIn struct {
 	modelRef
-	Gc bool `json:"gc,omitempty" jsonschema:"whether to collect the blobs nothing else refers to"`
+	Gc bool `json:"gc,omitempty" jsonschema:"also delete blobs nothing else uses"`
 }
 
 type runtimeIn struct {
@@ -173,8 +196,9 @@ type runtimeIn struct {
 }
 
 type installRuntimeIn struct {
-	RuntimeID string `json:"runtime_id" jsonschema:"llamacpp, vllm, sglang, nemo, sdcpp, or diffusers"`
-	Method    string `json:"method" jsonschema:"an install method the runtime lists, such as adopt, release, or source"`
+	RuntimeID string            `json:"runtime_id" jsonschema:"llamacpp, vllm, sglang, nemo, or sdcpp"`
+	Method    string            `json:"method" jsonschema:"install method, such as adopt, release, or source"`
+	Settings  map[string]string `json:"settings,omitempty" jsonschema:"values for the method's fields, by field name"`
 }
 
 type listInstancesIn struct {
@@ -183,25 +207,30 @@ type listInstancesIn struct {
 
 type runModelIn struct {
 	modelRef
-	RuntimeID string            `json:"runtime_id,omitempty" jsonschema:"the runtime to serve with, the first installed one that takes the format when empty"`
+	RuntimeID string            `json:"runtime_id,omitempty" jsonschema:"runtime to serve with"`
 	InstallID string            `json:"install_id,omitempty"`
-	Name      string            `json:"name,omitempty" jsonschema:"the model name clients send, the repo name when empty"`
-	SlotID    string            `json:"slot_id,omitempty" jsonschema:"the slot to run in, outside any slot when empty"`
+	Name      string            `json:"name,omitempty" jsonschema:"model name clients send"`
+	SlotID    string            `json:"slot_id,omitempty" jsonschema:"slot to run in"`
 	Params    map[string]string `json:"params,omitempty" jsonschema:"runtime parameters by name, such as n_ctx"`
-	Span      []string          `json:"span,omitempty" jsonschema:"mesh nodes or node/device ids the run may use, this node alone when empty"`
-	Shape     string            `json:"shape,omitempty" jsonschema:"solo, chain, lockstep, relay, replicas, draft, or stages, chosen by the planner when empty"`
+	Span      []string          `json:"span,omitempty" jsonschema:"mesh nodes or node/device ids the run may use"`
+	Shape     string            `json:"shape,omitempty" jsonschema:"solo, chain, lockstep, relay, replicas, draft, or stages"`
 }
 
 type idIn struct {
 	ID string `json:"id"`
 }
 
+type instanceLogsIn struct {
+	ID   string `json:"id" jsonschema:"instance id or name"`
+	Tail uint32 `json:"tail,omitempty" jsonschema:"lines from the end of the log (default 200)"`
+}
+
 type swapSlotIn struct {
-	SlotID string `json:"slot_id" jsonschema:"the slot by id or name"`
+	SlotID string `json:"slot_id" jsonschema:"slot id or name"`
 	modelRef
 	RuntimeID  string            `json:"runtime_id,omitempty"`
 	Params     map[string]string `json:"params,omitempty"`
-	DrainFirst bool              `json:"drain_first,omitempty" jsonschema:"whether to let the occupant finish its requests before it stops"`
+	DrainFirst bool              `json:"drain_first,omitempty" jsonschema:"finish in-flight requests before stopping the current model"`
 }
 
 type nameIn struct {
@@ -210,11 +239,11 @@ type nameIn struct {
 
 type listTracesIn struct {
 	Route string `json:"route,omitempty"`
-	Limit int    `json:"limit,omitempty" jsonschema:"traces to return, 50 when unset"`
+	Limit int    `json:"limit,omitempty" jsonschema:"max traces (default 50)"`
 }
 
 type hostProfileIn struct {
-	Refresh bool `json:"refresh,omitempty" jsonschema:"whether to probe the host again instead of answering from the last probe"`
+	Refresh bool `json:"refresh,omitempty" jsonschema:"probe the host again instead of using the last probe"`
 }
 
 type emptyIn struct{}
@@ -227,8 +256,8 @@ type formationIn struct {
 	modelRef
 	RuntimeID string            `json:"runtime_id,omitempty"`
 	Params    map[string]string `json:"params,omitempty"`
-	Span      []string          `json:"span,omitempty" jsonschema:"mesh nodes or node/device ids the formation may use, every member when empty"`
-	Shape     string            `json:"shape,omitempty" jsonschema:"chain, lockstep, relay, replicas, draft, or stages, chosen by the planner when empty"`
+	Span      []string          `json:"span,omitempty" jsonschema:"mesh nodes or node/device ids the formation may use"`
+	Shape     string            `json:"shape,omitempty" jsonschema:"chain, lockstep, relay, replicas, draft, or stages"`
 }
 
 type listFormationsIn struct {
@@ -236,25 +265,25 @@ type listFormationsIn struct {
 }
 
 type chatIn struct {
-	Model     string `json:"model" jsonschema:"a route name the gateway serves"`
+	Model     string `json:"model" jsonschema:"route name"`
 	Prompt    string `json:"prompt"`
 	System    string `json:"system,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
 type imageIn struct {
-	Model  string `json:"model" jsonschema:"an image route name the gateway serves"`
+	Model  string `json:"model" jsonschema:"image route name"`
 	Prompt string `json:"prompt"`
-	Size   string `json:"size,omitempty" jsonschema:"WIDTHxHEIGHT, the model's default when empty"`
-	N      int    `json:"n,omitempty" jsonschema:"images to make, 1 when unset"`
+	Size   string `json:"size,omitempty" jsonschema:"WIDTHxHEIGHT"`
+	N      int    `json:"n,omitempty" jsonschema:"number of images (default 1)"`
 }
 
 type listToolServersIn struct {
-	Mesh bool `json:"mesh,omitempty" jsonschema:"whether to list every member's servers too"`
+	Mesh bool `json:"mesh,omitempty" jsonschema:"include every mesh member's servers"`
 }
 
 type callToolIn struct {
-	Name      string          `json:"name" jsonschema:"the tool as a model calls it, such as web_search"`
+	Name      string          `json:"name" jsonschema:"tool name, such as web_search"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	NodeID    string          `json:"node_id,omitempty"`
 }
@@ -274,7 +303,19 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.sources.Search(ctx, connect.NewRequest(&v1.SearchRequest{Query: in.Query, SourceId: in.SourceID, Limit: limit}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "pull_model", Description: "Downloads a model into the store and answers with the task to watch"}, func(ctx context.Context, _ *mcp.CallToolRequest, in pullModelIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "get_model_card", Description: "Gets a repository's model card, tags, license, and README", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in repoIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.sources.GetModelCard(ctx, connect.NewRequest(&v1.GetModelCardRequest{SourceId: in.SourceID, Repo: in.Repo, Revision: in.Revision}))
+		return answer(r, err)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "resolve_model", Description: "Lists a repository's weight groups with their formats and sizes", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in repoIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.sources.Resolve(ctx, connect.NewRequest(&v1.ResolveRequest{SourceId: in.SourceID, Repo: in.Repo, Revision: in.Revision}))
+		return answer(r, err)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "inspect_model", Description: "Checks which of a repository's weight groups fit this host's memory, per runtime and context length", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in inspectModelIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.estimate.Inspect(ctx, connect.NewRequest(&v1.InspectRequest{SourceId: in.SourceID, Repo: in.Repo, Revision: in.Revision, Groups: in.Groups, RuntimeIds: in.RuntimeIDs, Contexts: in.Contexts, Params: in.Params, SlotId: in.SlotID}))
+		return answer(r, err)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "pull_model", Description: "Downloads a model and returns its task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in pullModelIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: in.SourceID, Repo: in.Repo, Group: in.Group, Revision: in.Revision, NodeId: in.NodeID}))
 		return answer(r, err)
 	})
@@ -282,23 +323,27 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.store.RemoveModel(ctx, connect.NewRequest(&v1.RemoveModelRequest{SourceId: in.SourceID, Repo: in.Repo, Group: in.Group, Gc: in.Gc}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "list_runtimes", Description: "Lists the runtimes, their install methods, and what the host lacks for each", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "list_runtimes", Description: "Lists every runtime with its install methods and unmet requirements", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.runtimes.ListRuntimes(ctx, connect.NewRequest(&v1.ListRuntimesRequest{}))
+		return answer(r, err)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_runtime", Description: "Gets one runtime's parameters, unmet requirements, and install methods", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.runtimes.GetRuntime(ctx, connect.NewRequest(&v1.GetRuntimeRequest{Id: in.ID}))
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_installs", Description: "Lists installed runtimes with their versions and facts", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in runtimeIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.runtimes.ListInstalls(ctx, connect.NewRequest(&v1.ListInstallsRequest{RuntimeId: in.RuntimeID}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "install_runtime", Description: "Installs a runtime by one of its methods and answers with the task to watch"}, func(ctx context.Context, _ *mcp.CallToolRequest, in installRuntimeIn) (*mcp.CallToolResult, any, error) {
-		r, err := n.runtimes.Install(ctx, connect.NewRequest(&v1.InstallRequest{RuntimeId: in.RuntimeID, Method: in.Method}))
+	mcp.AddTool(s, &mcp.Tool{Name: "install_runtime", Description: "Installs a runtime and returns its task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in installRuntimeIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.runtimes.Install(ctx, connect.NewRequest(&v1.InstallRequest{RuntimeId: in.RuntimeID, Method: in.Method, Settings: in.Settings}))
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_instances", Description: "Lists running and past model instances with their states and endpoints", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInstancesIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.instance.ListInstances(ctx, connect.NewRequest(&v1.ListInstancesRequest{RunningOnly: in.RunningOnly}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "run_model", Description: "Starts a stored model on a runtime and answers with the instance and its startup task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in runModelIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "run_model", Description: "Starts a stored model and returns the instance and its startup task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in runModelIn) (*mcp.CallToolResult, any, error) {
 		shape, err := shapeOf(in.Shape)
 		if err != nil {
 			return nil, nil, err
@@ -310,18 +355,34 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.instance.StopInstance(ctx, connect.NewRequest(&v1.StopInstanceRequest{Id: in.ID}))
 		return answer(r, err)
 	})
+	mcp.AddTool(s, &mcp.Tool{Name: "instance_logs", Description: "Gets the last lines of an instance's log", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in instanceLogsIn) (*mcp.CallToolResult, any, error) {
+		tail := in.Tail
+		if tail == 0 {
+			tail = 200
+		}
+		out := &v1.LogsResponse{}
+		err := n.d.Instances.Logs(ctx, in.ID, false, int(tail), func(lines []string) error {
+			out.Lines = lines
+			return nil
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return text(out), nil, nil
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_slots", Description: "Lists slots, the device and memory reservations models run in", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.slots.ListSlots(ctx, connect.NewRequest(&v1.ListSlotsRequest{}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "swap_slot", Description: "Puts a model into a slot, replacing its occupant, and answers with the slot, the instance, and the task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in swapSlotIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "swap_slot", Description: "Replaces the model in a slot and returns the slot, instance, and task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in swapSlotIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.slots.Swap(ctx, connect.NewRequest(&v1.SwapRequest{SlotId: in.SlotID, DrainFirst: in.DrainFirst, Run: &v1.RunRequest{SourceId: in.SourceID, Repo: in.Repo, Group: in.Group, RuntimeId: in.RuntimeID, Params: in.Params}}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "evict_slot", Description: "Stops the occupant of a slot, keeping the slot"}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "evict_slot", Description: "Stops the model in a slot and keeps the slot"}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.slots.EvictSlot(ctx, connect.NewRequest(&v1.EvictSlotRequest{Id: in.ID}))
 		return answer(r, err)
 	})
+	n.addSlotTools(s)
 	mcp.AddTool(s, &mcp.Tool{Name: "list_routes", Description: "Lists the model names the gateway serves, what each maps to, and how each takes tools", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
 		return answer(r, err)
@@ -330,7 +391,7 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.gateway.GetRoute(ctx, connect.NewRequest(&v1.GetRouteRequest{Name: in.Name}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "put_route", Description: "Creates or replaces a route splitting a model name over weighted pool targets or trying them in order, or sets policy, tools, objective and balance over a route a slot or instance owns"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putRouteIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "put_route", Description: "Creates or replaces a route that splits a model name across weighted pools or tries them in order. On a route owned by a slot or instance, sets its policy, tools, objective, and balance"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putRouteIn) (*mcp.CallToolResult, any, error) {
 		spec, err := n.routeSpec(ctx, in)
 		if err != nil {
 			return nil, nil, err
@@ -363,7 +424,7 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{Refresh: in.Refresh}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "doctor", Description: "Probes the host and checks its dependencies, answering with the task whose log lists each check"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "doctor", Description: "Probes the host and checks its dependencies. Returns a task whose log lists each check"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.host.Doctor(ctx, connect.NewRequest(&v1.DoctorRequest{}))
 		return answer(r, err)
 	})
@@ -379,7 +440,7 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.tasks.CancelTask(ctx, connect.NewRequest(&v1.CancelTaskRequest{Id: in.ID}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "mesh_status", Description: "Reads the mesh this node belongs to, what is nearby, and admissions under way", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "mesh_status", Description: "Reads this node's mesh, nearby nodes, and pending admissions", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.mesh.GetMesh(ctx, connect.NewRequest(&v1.GetMeshRequest{}))
 		return answer(r, err)
 	})
@@ -387,7 +448,7 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.mesh.ListNodes(ctx, connect.NewRequest(&v1.ListNodesRequest{}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "plan_formation", Description: "Plans how a model would run across mesh members, answering every candidate with its numbers", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in formationIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "plan_formation", Description: "Plans how a model would run across mesh members and returns every candidate", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in formationIn) (*mcp.CallToolResult, any, error) {
 		run, err := formationRun(in)
 		if err != nil {
 			return nil, nil, err
@@ -395,7 +456,7 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.mesh.PlanFormation(ctx, connect.NewRequest(&v1.PlanFormationRequest{Run: run}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "run_formation", Description: "Plans and launches a model across mesh members, answering with the formation and its task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in formationIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "run_formation", Description: "Plans and launches a model across mesh members and returns the formation and its task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in formationIn) (*mcp.CallToolResult, any, error) {
 		run, err := formationRun(in)
 		if err != nil {
 			return nil, nil, err
@@ -411,9 +472,9 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.mesh.ListFormations(ctx, connect.NewRequest(&v1.ListFormationsRequest{RunningOnly: in.RunningOnly}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "chat", Description: "Sends a prompt to a model the gateway serves and answers with its reply", Annotations: ro}, n.chat)
+	mcp.AddTool(s, &mcp.Tool{Name: "chat", Description: "Sends a prompt to a model and returns its reply", Annotations: ro}, n.chat)
 	mcp.AddTool(s, &mcp.Tool{Name: "generate_image", Description: "Makes images with a diffusion model the gateway serves"}, n.image)
-	mcp.AddTool(s, &mcp.Tool{Name: "list_tool_servers", Description: "Lists the tool servers Settings hold, their states, and the tools each offers", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in listToolServersIn) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "list_tool_servers", Description: "Lists the configured tool servers with their states and tools", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in listToolServersIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.tools.ListToolServers(ctx, connect.NewRequest(&v1.ListToolServersRequest{Mesh: in.Mesh}))
 		return answer(r, err)
 	})

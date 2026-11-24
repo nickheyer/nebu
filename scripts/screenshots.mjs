@@ -105,6 +105,7 @@ const allScenes = [
     { id: 'profile', path: '/profile' },
     { id: 'profile-token-new', path: '/profile', press: 'Token' },
     { id: 'account-menu', path: '/profile', press: 'Account' },
+    { id: 'morpheus', path: '/runtimes', press: 'Morpheus' },
     { id: 'login', path: '/login', signedOut: true }
 ];
 const chosen = process.env.SCENES ? process.env.SCENES.split(',') : allScenes.map((s) => s.id);

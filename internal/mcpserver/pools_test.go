@@ -47,8 +47,8 @@ func (noInstances) Template(string) (*chattemplate.Template, error) {
 	return nil, errors.New("no templates in this test")
 }
 
-// An MCP client session on a server whose pool tools run over a real pools manager and gateway
-func poolSession(t *testing.T) *mcp.ClientSession {
+// An MCP client session on a server whose pool tools run over a real pools manager and gateway, with whatever else each fill adds
+func poolSession(t *testing.T, fill ...func(context.Context, *Deps)) *mcp.ClientSession {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	store, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"))
@@ -90,7 +90,11 @@ func poolSession(t *testing.T) *mcp.ClientSession {
 		defer close(done)
 		gw.Run(ctx)
 	}()
-	server := New(Deps{Pools: mgr, Gateway: gw, Guard: guard, Events: bus, Version: "test", Log: log})
+	deps := Deps{Pools: mgr, Gateway: gw, Guard: guard, Events: bus, Version: "test", Log: log}
+	for _, f := range fill {
+		f(ctx, &deps)
+	}
+	server := New(deps)
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {

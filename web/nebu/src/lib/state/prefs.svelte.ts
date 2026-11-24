@@ -30,6 +30,11 @@ class Prefs {
 	trafficWindow = $state(read('traffic.window', '5m'));
 	trafficTimeline = $state(read('traffic.timeline', false));
 	serveDismissed = $state<string[]>(read('serve.dismissed', []));
+	morpheusOpen = $state(read('morpheus.open', false));
+	// The route Morpheus talks to, the first ready text route while empty
+	morpheusModel = $state(read('morpheus.model', ''));
+	// Whether Morpheus waits for the person before a call that changes something
+	morpheusAsks = $state(read('morpheus.asks', true));
 
 	constructor() {
 		$effect.root(() => {
@@ -42,6 +47,9 @@ class Prefs {
 			$effect(() => write('traffic.window', this.trafficWindow));
 			$effect(() => write('traffic.timeline', this.trafficTimeline));
 			$effect(() => write('serve.dismissed', this.serveDismissed));
+			$effect(() => write('morpheus.open', this.morpheusOpen));
+			$effect(() => write('morpheus.model', this.morpheusModel));
+			$effect(() => write('morpheus.asks', this.morpheusAsks));
 		});
 	}
 }

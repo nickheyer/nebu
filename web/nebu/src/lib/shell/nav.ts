@@ -18,18 +18,20 @@ export type NavPage = {
 	roles: Role[];
 	match: string[];
 	bottom?: boolean;
+	// Whether Morpheus is offered here, on the pages whose records its tools reach
+	morpheus?: boolean;
 };
 
 const operators: Role[] = ['operator', 'admin'];
 const everyone: Role[] = ['inference', 'operator', 'admin'];
 
 export const pages: NavPage[] = [
-	{ id: 'host', path: '/', label: 'Host', icon: HardDrivesIcon, roles: operators, match: ['/', '/logs', '/tasks'], bottom: true },
+	{ id: 'host', path: '/', label: 'Host', icon: HardDrivesIcon, roles: operators, match: ['/', '/logs', '/tasks'], bottom: true, morpheus: true },
 	{ id: 'chat', path: '/chat', label: 'Chat', icon: ChatsCircleIcon, roles: everyone, match: ['/chat'], bottom: true },
-	{ id: 'models', path: '/models', label: 'Models', icon: CubeIcon, roles: operators, match: ['/models', '/discover'] },
-	{ id: 'serve', path: '/serve', label: 'Serve', icon: PlayIcon, roles: operators, match: ['/serve', '/runtimes'], bottom: true },
-	{ id: 'gateway', path: '/traffic', label: 'Gateway', icon: TreeStructureIcon, roles: operators, match: ['/gateway', '/traffic'], bottom: true },
-	{ id: 'mesh', path: '/mesh', label: 'Mesh', icon: ShareNetworkIcon, roles: operators, match: ['/mesh'] },
+	{ id: 'models', path: '/models', label: 'Models', icon: CubeIcon, roles: operators, match: ['/models', '/discover'], morpheus: true },
+	{ id: 'serve', path: '/serve', label: 'Serve', icon: PlayIcon, roles: operators, match: ['/serve', '/runtimes'], bottom: true, morpheus: true },
+	{ id: 'gateway', path: '/traffic', label: 'Gateway', icon: TreeStructureIcon, roles: operators, match: ['/gateway', '/traffic'], bottom: true, morpheus: true },
+	{ id: 'mesh', path: '/mesh', label: 'Mesh', icon: ShareNetworkIcon, roles: operators, match: ['/mesh'], morpheus: true },
 	{ id: 'bots', path: '/bots', label: 'Bots', icon: RobotIcon, roles: operators, match: ['/bots'] },
 	{ id: 'settings', path: '/settings', label: 'Settings', icon: GearIcon, roles: ['admin'], match: ['/settings'] }
 ];

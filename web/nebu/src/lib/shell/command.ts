@@ -7,10 +7,12 @@ import { InstanceStateSchema } from '#lib/proto/nebu/v1/instance_pb.js';
 import { SlotStateSchema } from '#lib/proto/nebu/v1/slot_pb.js';
 import { RouteStateSchema } from '#lib/proto/nebu/v1/gateway_pb.js';
 import { TaskStateSchema } from '#lib/proto/nebu/v1/task_pb.js';
+import { morpheus } from '#lib/shell/morpheus.svelte.js';
 import { allowed, type NavPage } from '#lib/shell/nav.js';
 import { modelPath } from '#lib/pages/models/models.js';
 import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
+import EyeIcon from 'phosphor-svelte/lib/EyeIcon';
 import FlowArrowIcon from 'phosphor-svelte/lib/FlowArrowIcon';
 import LightningIcon from 'phosphor-svelte/lib/LightningIcon';
 import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
@@ -105,6 +107,7 @@ export function actionEntries(reads: boolean, query: string, toggleTheme: () => 
 		out.push({ id: 'act:route', group: 'Actions', label: 'New route', detail: 'Gateway', icon: LightningIcon, href: '/gateway/routes/new' });
 		out.push({ id: 'act:pool', group: 'Actions', label: 'New pool', detail: 'Gateway', icon: LightningIcon, href: '/gateway/pools/new' });
 		if (query.trim()) out.push({ id: 'act:discover', group: 'Actions', label: `Search sources for ${query.trim()}`, detail: 'Discover', icon: MagnifyingGlassIcon, href: `/discover?q=${encodeURIComponent(query.trim())}` });
+		if (morpheus.here) out.push({ id: 'act:morpheus', group: 'Actions', label: query.trim() ? `Ask Morpheus: ${query.trim()}` : 'Ask Morpheus', icon: EyeIcon, run: () => void morpheus.ask(query.trim()) });
 	}
 	out.push({ id: 'act:theme', group: 'Actions', label: 'Switch theme', detail: 'Appearance', icon: LightningIcon, run: toggleTheme });
 	return out;

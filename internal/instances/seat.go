@@ -222,7 +222,7 @@ func (m *Manager) seatGuards(in *instance, p *prepared, seat *v1.SeatSpec, ranks
 		return err
 	}
 	for rank := range ranks {
-		guardPort, err := m.reserve(in, guardHost, 1)
+		ln, err := m.listen(guardHost)
 		if err != nil {
 			return fail(err)
 		}
@@ -230,9 +230,7 @@ func (m *Manager) seatGuards(in *instance, p *prepared, seat *v1.SeatSpec, ranks
 		if ranks > 1 {
 			name = fmt.Sprintf("%s rank %d", p.name, rank)
 		}
-		m.yield(in)
-		guard, err := newForwarder(net.JoinHostPort(guardHost, strconv.Itoa(guardPort)), "", seat.GetAdmit(), p.role.Single, name, m.Log)
-		m.confirm(in)
+		guard, err := guardOn(ln, "", seat.GetAdmit(), p.role.Single, name, m.Log)
 		if err != nil {
 			return fail(err)
 		}

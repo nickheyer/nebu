@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { NeoBadge } from '#lib/neo/badge/index.js';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
+	import { NeoIconWatch } from '#lib/neo/icons/index.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { session } from '#lib/auth/session.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
@@ -10,6 +11,7 @@
 	import Brand from '#lib/shell/Brand.svelte';
 	import Command from '#lib/shell/Command.svelte';
 	import { chrome, type HeaderTab } from '#lib/shell/chrome.svelte.js';
+	import { morpheus } from '#lib/shell/morpheus.svelte.js';
 	import { pageOf } from '#lib/shell/nav.js';
 	import OriginLink from '#lib/ui/OriginLink.svelte';
 	import CaretLeftIcon from 'phosphor-svelte/lib/CaretLeftIcon';
@@ -19,6 +21,7 @@
 	const title = $derived(head?.title ?? pageOf(page.url.pathname)?.label ?? '');
 	const tabs = $derived(head?.tabs ?? []);
 	const active = $derived(live.activeTasks.length);
+	const waiting = $derived(morpheus.waiting.length);
 
 	let height = $state(0);
 	$effect(() => {
@@ -63,6 +66,12 @@
 	</NeoButton>
 {/snippet}
 
+{#snippet eye()}
+	<NeoButton text aria-label="Morpheus" title="Morpheus" aria-pressed={morpheus.open} color={morpheus.open ? 'primary' : undefined} onclick={() => (morpheus.open = !morpheus.open)}>
+		{#snippet icon()}<NeoIconWatch size="20px" enter={false} />{/snippet}
+	</NeoButton>
+{/snippet}
+
 <header class="top" class:mobile={viewport.mobile} bind:clientHeight={height}>
 	<div class="frame">
 		<div class="titlerow">
@@ -91,6 +100,13 @@
 						</NeoBadge>
 					{:else}
 						{@render tasks()}
+					{/if}
+					{#if morpheus.here && waiting > 0}
+						<NeoBadge value={String(waiting)} placement="top-right" size="small" color="primary">
+							{@render eye()}
+						</NeoBadge>
+					{:else if morpheus.here}
+						{@render eye()}
 					{/if}
 				{/if}
 				<AccountMenu />

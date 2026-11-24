@@ -48,7 +48,7 @@ export class GatewayError extends Error {
 	}
 }
 
-async function failure(res: Response): Promise<GatewayError> {
+export async function failure(res: Response): Promise<GatewayError> {
 	const text = await res.text();
 	try {
 		const body = JSON.parse(text) as { error?: { message?: string } | string };
@@ -179,7 +179,7 @@ async function* lines(res: Response, signal: AbortSignal): AsyncGenerator<string
 	if (buffer) yield buffer;
 }
 
-async function* sse(res: Response, signal: AbortSignal): AsyncGenerator<{ event: string; data: string }> {
+export async function* sse(res: Response, signal: AbortSignal): AsyncGenerator<{ event: string; data: string }> {
 	let event = '';
 	let data: string[] = [];
 	for await (const line of lines(res, signal)) {

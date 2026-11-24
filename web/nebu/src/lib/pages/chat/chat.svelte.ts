@@ -19,6 +19,16 @@ export const videoFps = [8, 12, 16, 24, 30];
 // A tool call waiting for the person to run or skip it
 export type PendingCall = { id: string; name: string; arguments: string; server?: ToolServerStatus };
 
+// What a session does differently from the chat page's, every one unset there
+export type ChatOptions = {
+	// False for a conversation never saved through ChatService
+	kept?: boolean;
+	// Answers a call the page runs itself, nothing for one the daemon's tool servers run
+	runs?: (call: PendingCall, signal?: AbortSignal) => Promise<{ text: string; failed: boolean } | undefined>;
+	// Whether a call the model made runs without waiting for the person
+	auto?: (call: PendingCall) => boolean;
+};
+
 function dialectOf(s: string): Dialect {
 	return s === 'anthropic' || s === 'ollama' ? s : 'openai';
 }
@@ -65,6 +75,11 @@ export class ChatSession {
 	media = $state<MediaSettings>({ imageSize: '1024x1024', imageSteps: 20, imageCount: 1, videoSeconds: 4, videoFps: 16 });
 	#abort: AbortController | undefined;
 	#saved = $state('');
+	#options: ChatOptions;
+
+	constructor(options: ChatOptions = {}) {
+		this.#options = options;
+	}
 
 	get settings(): ChatSettings {
 		return this.conversation.settings ?? (this.conversation.settings = create(ChatSettingsSchema, { dialect: 'openai', stream: true }));
@@ -124,7 +139,7 @@ export class ChatSession {
 	}
 
 	async save(): Promise<void> {
-		if (this.conversation.turns.length === 0) return;
+		if (this.#options.kept === false || this.conversation.turns.length === 0) return;
 		this.conversation.model = this.model;
 		const res = await rpc.chat.putConversation({ conversation: this.conversation });
 		if (res.conversation) {
@@ -264,6 +279,8 @@ export class ChatSession {
 		this.#abort = abort;
 		const assistant = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'assistant', startedAt: timestampNow(), dialect: params.dialect });
 		const conv = this.conversation;
+		// Set once the answer has joined the turns, nothing that fails after it being a failure of the answer
+		let joined = false;
 		try {
 			const calls: PendingCall[] = [];
 			for await (const ev of chat(params, this.#messages(), this.settings.approveTools, abort.signal)) {
@@ -295,10 +312,16 @@ export class ChatSession {
 			assistant.finishedAt = timestampNow();
 			this.#takeRan(assistant);
 			this.conversation.turns = [...this.turns, assistant];
+			joined = true;
 			this.draft = '';
 			await this.#persist();
 			if (calls.length) this.pending = calls;
+			for (const call of calls) {
+				if (abort.signal.aborted) break;
+				if (this.#options.auto?.(call)) await this.runCall(call, servers, abort.signal);
+			}
 		} catch (err) {
+			if (joined) throw err;
 			if (this.conversation !== conv) {
 				this.draft = '';
 				this.draftCalls = [];
@@ -346,18 +369,26 @@ export class ChatSession {
 		return servers.find((s) => s.tools.some((t) => t.name === tool));
 	}
 
-	// Runs an approved call through the daemon, appends its tool turn, and continues once every call is settled
-	async runCall(call: PendingCall, servers: ToolServerStatus[]): Promise<void> {
+	// Runs an approved call through the page or the daemon, appends its tool turn, and continues once every call is settled, a stopped call left waiting
+	async runCall(call: PendingCall, servers: ToolServerStatus[], signal?: AbortSignal): Promise<void> {
 		let text = '';
 		let failed = false;
 		let took = 0;
 		const started = Date.now();
 		try {
-			const res = await rpc.tools.callTool({ name: call.name, arguments: call.arguments, nodeId: call.server?.nodeId ?? '' });
-			text = res.parts.map((p) => (p.type === 'image' ? `[image ${p.mediaType}]` : p.text)).join('\n');
-			failed = res.failed;
-			took = res.tookMs;
+			const own = await this.#options.runs?.(call, signal);
+			if (own) {
+				text = own.text;
+				failed = own.failed;
+				took = Date.now() - started;
+			} else {
+				const res = await rpc.tools.callTool({ name: call.name, arguments: call.arguments, nodeId: call.server?.nodeId ?? '' }, { signal });
+				text = res.parts.map((p) => (p.type === 'image' ? `[image ${p.mediaType}]` : p.text)).join('\n');
+				failed = res.failed;
+				took = res.tookMs;
+			}
 		} catch (err) {
+			if (signal?.aborted) return;
 			text = reason(err);
 			failed = true;
 			took = Date.now() - started;
@@ -367,8 +398,7 @@ export class ChatSession {
 
 	// Records a call's answer as a tool turn and continues once every pending call is settled
 	async settle(call: PendingCall, text: string, failed: boolean, servers: ToolServerStatus[], took = 0): Promise<void> {
-		const last = this.turns[this.turns.length - 1];
-		const record = last?.toolCalls.find((c) => c.id === call.id);
+		const record = this.turns.findLast((t) => t.role === 'assistant')?.toolCalls.find((c) => c.id === call.id);
 		if (record) {
 			record.result = text;
 			record.failed = failed;

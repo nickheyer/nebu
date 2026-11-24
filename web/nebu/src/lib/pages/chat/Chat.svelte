@@ -409,7 +409,7 @@
 			<NeoButton text aria-label="Conversations" title="Conversations" onclick={() => (listOpen = true)}>{#snippet icon()}<ChatsIcon size={20} />{/snippet}</NeoButton>
 		{/if}
 		<span class="model">
-			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} label="Model" placeholder={noRoute ? 'None is being served' : 'Pick one'} compact disabled={noRoute} current={session.model} />
+			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} label="Model" placeholder={noRoute ? 'No models running' : 'Choose a model'} compact disabled={noRoute} current={session.model} />
 		</span>
 		<span class="tools">
 			<NeoButton text aria-label={theater ? 'Leave theater mode' : 'Theater mode'} title={theater ? 'Leave theater mode (t)' : 'Theater mode (t)'} aria-pressed={theater} color={theater ? 'primary' : undefined} onclick={() => (prefs.chatTheater = !theater)}>
@@ -439,9 +439,9 @@
 		<Empty icon={PlayIcon} text="Models failed to list" hint={modelsError} action="Retry" onclick={loadModels} />
 	{:else if quiet && !anyReady}
 		{#if account.reads}
-			<Empty icon={PlayIcon} text="No model is being served" hint="Chat talks to a model once one is launched and ready" action={launchEntry(live).long} href={launchEntry(live).href} primary />
+			<Empty icon={PlayIcon} text="No models are running" hint="Chat needs a running model" action={launchEntry(live).long} href={launchEntry(live).href} primary />
 		{:else}
-			<Empty icon={PlayIcon} text="No model is being served" hint="Chat talks to a model once one is launched and ready" />
+			<Empty icon={PlayIcon} text="No models are running" hint="Chat needs a running model" />
 		{/if}
 	{:else if quiet}
 		{@render hero()}
@@ -519,14 +519,14 @@
 			{/if}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="box" bind:this={box} {onkeydown}>
-				<Textarea bind:value={text} placeholder={session.model === '' ? 'No model to write to' : media ? `Describe what ${assistantName} should make` : `Write to ${assistantName}`} rows={1} maxRows={10} disabled={session.model === ''} />
+				<Textarea bind:value={text} placeholder={session.model === '' ? 'No models running' : media ? `Describe what ${assistantName} should make` : `Message ${assistantName}`} rows={1} maxRows={10} disabled={session.model === ''} />
 			</div>
 			<span class="beside">{@render sendButton()}</span>
 		</div>
 		<div class="under">
 			<span class="hint">Enter sends, Shift and Enter starts a new line</span>
 			{#if contextUsed > 0 && contextMax > 0}
-				<span class="gauge" title="{num(contextUsed)} of {num(contextMax)} tokens of context in use">
+				<span class="gauge" title="{num(contextUsed)} of {num(contextMax)} context tokens used">
 					<span class="meter"><NeoProgressBar value={Math.min(100, (contextUsed / contextMax) * 100)} elevation={-1} height="6px" width="100%" color={contextUsed / contextMax > 0.85 ? 'warning' : 'primary'} immediate /></span>
 					<span class="num">{pct((contextUsed / contextMax) * 100)} of context</span>
 				</span>
