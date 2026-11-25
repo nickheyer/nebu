@@ -157,8 +157,7 @@ func TestReserveConcurrentSpans(t *testing.T) {
 // A reserved span stays bound against other binders until it is yielded, and pending until confirmed
 func TestReserveHoldsPortsUntilYield(t *testing.T) {
 	r := NewReservations("127.0.0.1")
-	p := freeTestPort(t)
-	got, err := r.Reserve(Range{p, p + 1}, 2)
+	got, err := r.Reserve(Range{20000, 20999}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
