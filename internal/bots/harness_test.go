@@ -386,6 +386,9 @@ func (f fakeInstances) ToolSupport(string) v1.ToolSupport {
 }
 func (fakeInstances) StripsBillingHeader(string) bool { return true }
 func (f fakeInstances) Modes(id string) []string      { return f[id] }
+func (f fakeInstances) Efforts(string) ([]string, map[string]string, string) {
+	return nil, nil, ""
+}
 func (fakeInstances) LoadAdapter(context.Context, string, string, string) error {
 	return errors.New("no adapter loads in this test")
 }

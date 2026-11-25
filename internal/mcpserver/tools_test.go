@@ -254,9 +254,25 @@ func TestRuntimeTools(t *testing.T) {
 	if method := status["installs"].([]any)[0].(map[string]any); method["method"].(map[string]any)["id"] != "adopt" || method["fields"].([]any)[0].(map[string]any)["name"] != "path" {
 		t.Fatalf("installs %v", status["installs"])
 	}
-	if params := status["runtime"].(map[string]any)["params"].([]any); len(params) != len(fake.Runtime{}.Params()) {
+	// The launch params are a tool of their own, so a runtime answers without them unless it is asked whole
+	if params, held := status["runtime"].(map[string]any)["params"]; held {
+		t.Fatalf("a runtime answered its params unasked: %v", params)
+	}
+	whole := call(t, cs, "get_runtime", map[string]any{"id": fake.RuntimeID, "full": true}, "")["runtime"].(map[string]any)
+	if params := whole["runtime"].(map[string]any)["params"].([]any); len(params) != len(fake.Runtime{}.Params()) {
 		t.Fatalf("params %v", params)
 	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_params", Arguments: map[string]any{"runtime_id": "llamacpp", "search": "moe"}})
+	if err != nil || res.IsError {
+		t.Fatalf("list_params: %v %v", res, err)
+	}
+	if lines := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(lines, "\nmoe_cache_mib (--moe-cache-mib, default 0): ") || !strings.Contains(lines, "\nn_cpu_moe (--n-cpu-moe, default auto): ") || strings.Contains(lines, "\nn_ctx ") {
+		t.Fatalf("params holding moe: %s", lines)
+	}
+	if named := call(t, cs, "list_params", map[string]any{"runtime_id": "llamacpp", "names": []string{"n_ubatch"}}, "")["params"].([]any); len(named) != 1 || named[0].(map[string]any)["flag"] != "--ubatch-size" {
+		t.Fatalf("a named param whole: %v", named)
+	}
+	call(t, cs, "list_params", map[string]any{"runtime_id": "llamacpp", "search": "no such thing"}, "goes in args")
 	call(t, cs, "get_runtime", map[string]any{"id": "nope"}, "unknown runtime")
 	call(t, cs, "install_runtime", map[string]any{"runtime_id": fake.RuntimeID, "method": "adopt", "settings": map[string]string{"speed": "fast"}}, `takes no setting "speed"`)
 }
@@ -275,11 +291,24 @@ func TestSlotTools(t *testing.T) {
 	if slot["description"] != "the first slot" || slot["runtime_id"] != fake.RuntimeID || slot["placement"] != "PLACEMENT_DEVICE" || slot["params"].(map[string]any)[fake.ParamMaxSeqs] != "4" || slot["device_ids"].([]any)[0] != "g0" || slot["policy"].(map[string]any)["max_in_flight"] != float64(2) || len(slot["aliases"].([]any)) != 1 {
 		t.Fatalf("updated %v", slot)
 	}
+	// A param named is set beside the ones held, one named empty is removed, and the record answers without what the UI alone reads
+	slot = call(t, cs, "update_slot", map[string]any{"id": "main", "params": map[string]string{fake.ParamTransport: "tcp"}}, "")["slot"].(map[string]any)
+	if held := slot["params"].(map[string]any); held[fake.ParamMaxSeqs] != "4" || held[fake.ParamTransport] != "tcp" || slot["conditions"] != nil || slot["meta"] != nil {
+		t.Fatalf("one param set %v", slot)
+	}
+	slot = call(t, cs, "update_slot", map[string]any{"id": "main", "params": map[string]string{fake.ParamTransport: ""}}, "")["slot"].(map[string]any)
+	if held := slot["params"].(map[string]any); len(held) != 1 || held[fake.ParamMaxSeqs] != "4" {
+		t.Fatalf("one param removed %v", slot)
+	}
+	if whole := call(t, cs, "get_slot", map[string]any{"id": "main", "full": true}, "")["slot"].(map[string]any); whole["conditions"] == nil {
+		t.Fatalf("a slot asked for whole %v", whole)
+	}
 	// A setting named empty is cleared, and a name renames
-	slot = call(t, cs, "update_slot", map[string]any{"id": "main", "name": "first", "description": "", "placement": "auto", "aliases": []any{}, "params": map[string]string{}}, "")["slot"].(map[string]any)
+	slot = call(t, cs, "update_slot", map[string]any{"id": "main", "name": "first", "description": "", "placement": "auto", "aliases": []any{}, "reset_params": true}, "")["slot"].(map[string]any)
 	if slot["name"] != "first" || slot["description"] != nil || slot["placement"] != nil || slot["aliases"] != nil || slot["params"] != nil || slot["runtime_id"] != fake.RuntimeID {
 		t.Fatalf("cleared %v", slot)
 	}
+	call(t, cs, "relaunch_slot", map[string]any{"id": "first"}, "holds no model")
 	call(t, cs, "update_slot", map[string]any{"id": "nope", "description": "x"}, "nope")
 	call(t, cs, "instance_logs", map[string]any{"id": "first"}, `unknown instance "first"`)
 	call(t, cs, "run_model", map[string]any{"source_id": "src", "repo": "org/stored", "group": "q4", "slot_id": "first"}, "")
@@ -292,6 +321,42 @@ func TestSlotTools(t *testing.T) {
 	}
 	if lines := call(t, cs, "instance_logs", map[string]any{"id": "first", "tail": 1}, "")["lines"].([]any); len(lines) != 1 {
 		t.Fatalf("log tail %v", lines)
+	}
+	if lines := call(t, cs, "instance_logs", map[string]any{"id": "first", "match": "WEIGHTS="}, "")["lines"].([]any); len(lines) != 1 || lines[0] != "weights=1000" {
+		t.Fatalf("log lines holding a text %v", lines)
+	}
+	// One instance answers what a reader acts on, with the end of its log when asked, and its own server answers past the gateway
+	got := call(t, cs, "get_instance", map[string]any{"id": "first", "logs": 5}, "")
+	rec := got["instance"].(map[string]any)
+	if rec["state"] != "INSTANCE_STATE_READY" || rec["command"] == nil || rec["conditions"] != nil || rec["request"] != nil || len(got["logs"].([]any)) == 0 {
+		t.Fatalf("instance %v", got)
+	}
+	if whole := call(t, cs, "get_instance", map[string]any{"id": "first", "full": true}, "")["instance"].(map[string]any); whole["conditions"] == nil || whole["request"] == nil {
+		t.Fatalf("an instance asked for whole %v", whole)
+	}
+	if listed := call(t, cs, "list_instances", map[string]any{}, "")["instances"].([]any); len(listed) != 1 || listed[0].(map[string]any)["conditions"] != nil {
+		t.Fatalf("instances %v", listed)
+	}
+	if metrics := call(t, cs, "instance_get", map[string]any{"id": "first", "path": "metrics"}, ""); metrics["status"] != float64(200) || !strings.Contains(metrics["body"].(string), "vllm:num_requests_running") {
+		t.Fatalf("the instance's own metrics %v", metrics)
+	}
+	if missing := call(t, cs, "instance_request", map[string]any{"id": "first", "path": "/nowhere", "body": "{}"}, ""); missing["status"] != float64(404) {
+		t.Fatalf("a path the instance lacks %v", missing)
+	}
+	// A setting changed with relaunch starts the model again with it, the one serving replaced
+	before := rec["id"]
+	again := call(t, cs, "update_slot", map[string]any{"id": "first", "params": map[string]string{fake.ParamTransport: "tcp"}, "relaunch": true}, "")
+	if again["task"].(map[string]any)["id"] == "" {
+		t.Fatalf("a relaunch answers its task %v", again)
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		now := call(t, cs, "get_slot", map[string]any{"id": "first"}, "")
+		if in, _ := now["instance"].(map[string]any); now["slot"].(map[string]any)["state"] == "SLOT_STATE_READY" && in["id"] != before && in["params"].(map[string]any)[fake.ParamTransport] == "tcp" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the slot never served the relaunch: %v", now)
+		}
 	}
 	call(t, cs, "delete_slot", map[string]any{"id": "first"}, "evict it")
 	if gone := call(t, cs, "delete_slot", map[string]any{"id": "first", "force": true}, "")["slot"].(map[string]any); gone["name"] != "first" {
@@ -381,12 +446,12 @@ func TestToolAnnotations(t *testing.T) {
 	for _, tool := range res.Tools {
 		hints[tool.Name] = tool.Annotations
 	}
-	for _, name := range []string{"get_model_card", "resolve_model", "inspect_model", "get_runtime", "instance_logs", "list_recipes", "preview_build", "list_builds", "get_build", "preview_run"} {
+	for _, name := range []string{"get_model_card", "resolve_model", "inspect_model", "get_runtime", "instance_logs", "list_recipes", "preview_build", "list_builds", "get_build", "preview_run", "get_instance", "get_slot", "get_model", "list_params", "instance_get", "chat"} {
 		if a, ok := hints[name]; !ok || a == nil || !a.ReadOnlyHint {
 			t.Fatalf("%s is not listed as read only: %v", name, a)
 		}
 	}
-	for _, name := range []string{"create_slot", "update_slot", "install_runtime", "build_runtime", "relaunch_slot"} {
+	for _, name := range []string{"create_slot", "update_slot", "install_runtime", "build_runtime", "relaunch_slot", "instance_request"} {
 		if a, ok := hints[name]; !ok || a != nil {
 			t.Fatalf("%s is not listed as a plain change: %v", name, a)
 		}

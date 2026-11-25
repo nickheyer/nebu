@@ -52,6 +52,8 @@ const (
 	ParamExtraPart = "extra_part"
 	// A solo run that goes boom at every start
 	ParamFail = "fail"
+	// A solo run that exits at every start with a line triage reads nothing in
+	ParamFailQuiet = "fail_quiet"
 	// Launches of a run that find their port taken before one binds
 	ParamPortTaken = "port_taken"
 	// A run that serves gRPC on the port after its HTTP port
@@ -112,6 +114,7 @@ func (Runtime) Params() []*v1.Param {
 		{Name: ParamTransport, Type: v1.ParamType_PARAM_TYPE_STRING, Label: "Transport line"},
 		{Name: ParamExtraPart, Type: v1.ParamType_PARAM_TYPE_PATH, Label: "Extra part"},
 		{Name: ParamFail, Type: v1.ParamType_PARAM_TYPE_BOOL, Label: "Fails at start"},
+		{Name: ParamFailQuiet, Type: v1.ParamType_PARAM_TYPE_BOOL, Label: "Fails at start without a word"},
 		{Name: ParamPortTaken, Type: v1.ParamType_PARAM_TYPE_INT, Label: "Launches finding the port taken"},
 		{Name: ParamGRPC, Type: v1.ParamType_PARAM_TYPE_BOOL, Label: "Serves gRPC"},
 		{Name: ParamLoRA, Type: v1.ParamType_PARAM_TYPE_BOOL, Label: "Adapters at runtime"},
@@ -188,6 +191,9 @@ func (Runtime) Launch(in runtimes.Launch) (*runtimes.Command, error) {
 	}
 	if in.Params.Bool(ParamFail) {
 		args = append(args, "--fail")
+	}
+	if in.Params.Bool(ParamFailQuiet) {
+		args = append(args, "--fail-quiet")
 	}
 	if n, _ := in.Params[ParamPortTaken].(int64); n > 0 {
 		args = append(args, "--port-taken", strconv.FormatInt(n, 10))
@@ -778,6 +784,11 @@ func (l *Launcher) Launch(ctx context.Context, spec launch.Spec) (launch.Handle,
 	}
 	if hasArg(spec.Args, "--fail") {
 		p.write(BoomLine)
+		p.crash()
+		return p, nil
+	}
+	if hasArg(spec.Args, "--fail-quiet") {
+		p.write("the fake process stopped")
 		p.crash()
 		return p, nil
 	}

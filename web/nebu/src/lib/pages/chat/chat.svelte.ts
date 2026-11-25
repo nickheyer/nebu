@@ -27,6 +27,8 @@ export type ChatOptions = {
 	runs?: (call: PendingCall, signal?: AbortSignal) => Promise<{ text: string; failed: boolean } | undefined>;
 	// Whether a call the model made runs without waiting for the person
 	auto?: (call: PendingCall) => boolean;
+	// The reasoning effort every request asks for, empty for the route's own default
+	effort?: () => string;
 };
 
 function dialectOf(s: string): Dialect {
@@ -248,7 +250,8 @@ export class ChatSession {
 			seed: numOr(s.seed),
 			tools: approved,
 			toolServers: s.approveTools ? [] : s.toolServers,
-			mutatingTools: s.mutatingTools
+			mutatingTools: s.mutatingTools,
+			effort: this.#options.effort?.() || undefined
 		};
 	}
 

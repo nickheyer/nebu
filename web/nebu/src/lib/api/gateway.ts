@@ -29,6 +29,8 @@ export type ChatParams = {
 	// Tool servers the gateway runs itself, by name
 	toolServers: string[];
 	mutatingTools: boolean;
+	// How hard the model is asked to reason before it answers, the route's own default when empty
+	effort?: string;
 };
 
 export type StreamEvent =
@@ -38,7 +40,14 @@ export type StreamEvent =
 	| { type: 'stop'; reason: string }
 	| { type: 'trace'; id: string };
 
-export type ModelEntry = { id: string; ready: boolean; capabilities: string[]; inventory: { context_length: number; quantization: string; accelerator: string; modalities: string[]; throughput_class: string } };
+export type ModelEntry = {
+	id: string;
+	ready: boolean;
+	capabilities: string[];
+	inventory: { context_length: number; quantization: string; accelerator: string; modalities: string[]; throughput_class: string };
+	// The reasoning effort levels the model takes, highest first, the level its provider lists as its default, and its provider's word on a level. Absent for a model that takes none
+	reasoning?: { supported_efforts: string[]; default_effort?: string; descriptions?: Record<string, string> };
+};
 
 export class GatewayError extends Error {
 	constructor(
@@ -144,6 +153,7 @@ function body(p: ChatParams, messages: ChatMessage[]): { path: string; body: Rec
 					system: p.system || undefined,
 					messages: msgs,
 					max_tokens: p.maxTokens ?? 4096,
+					output_config: p.effort ? { effort: p.effort } : undefined,
 					stream: p.stream,
 					temperature: p.temperature,
 					top_p: p.topP,
@@ -186,6 +196,7 @@ function body(p: ChatParams, messages: ChatMessage[]): { path: string; body: Rec
 					max_tokens: p.maxTokens,
 					stop: p.stop.length ? p.stop : undefined,
 					seed: p.seed,
+					reasoning_effort: p.effort || undefined,
 					tools: p.tools.length ? p.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: parseSchema(t.schema) } })) : undefined
 				}
 			};

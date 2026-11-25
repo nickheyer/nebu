@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -133,8 +134,8 @@ func TestCrashRestartsOnPinnedInstall(t *testing.T) {
 	}
 }
 
-// Five launches in a row that never reach ready fail the instance with the reason and drop its route
-func TestFailsAfterFiveLaunches(t *testing.T) {
+// A launch triage reads the same way twice in a row is not tried a third time, and the log keeps the launch before the last
+func TestFailsAfterTwoLaunchesFailingTheSameWay(t *testing.T) {
 	quickBackoff(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -145,10 +146,42 @@ func TestFailsAfterFiveLaunches(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_FAILED)
+	if got := n.launcher.Launches("solo"); got != 2 {
+		t.Fatalf("%d launches before failing, want 2", got)
+	}
+	if !strings.Contains(failed.GetError(), "2 launches in a row failed the same way") || !strings.Contains(failed.GetError(), "boom") {
+		t.Fatalf("error %q", failed.GetError())
+	}
+	var lines []string
+	if err := m.Logs(ctx, in.GetId(), false, 0, func(l []string) error { lines = l; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	first, mark, second := slices.Index(lines, "weights=1000"), slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "==== launch 1 failed: ") }), slices.Index(lines, "weights=2000")
+	if first < 0 || mark < first || second < mark || lines[len(lines)-1] != fake.BoomLine {
+		t.Fatalf("the log of both launches, the first closed by how it ended: %q", lines)
+	}
+	var last []string
+	if err := m.Logs(ctx, in.GetId(), false, 1, func(l []string) error { last = l; return nil }); err != nil || len(last) != 1 || last[0] != fake.BoomLine {
+		t.Fatalf("a tail the last launch fills reads none of the first: %q %v", last, err)
+	}
+}
+
+// Five launches in a row that never reach ready fail the instance with the reason and drop its route
+func TestFailsAfterFiveLaunches(t *testing.T) {
+	quickBackoff(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSeatNode(t, ctx)
+	m := n.manager(t, ctx, nil)
+	in, _, err := m.Run(ctx, soloRun(map[string]string{fake.ParamFailQuiet: "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_FAILED)
 	if got := n.launcher.Launches("solo"); got != maxFailedLaunches {
 		t.Fatalf("%d launches before failing, want %d", got, maxFailedLaunches)
 	}
-	if !strings.Contains(failed.GetError(), "5 launches in a row failed") || !strings.Contains(failed.GetError(), "boom") {
+	if !strings.Contains(failed.GetError(), "5 launches in a row failed, the last") {
 		t.Fatalf("error %q", failed.GetError())
 	}
 	if c := ConditionOf(failed.GetConditions(), CondLaunched); c == nil || c.GetReason() != ReasonFailedLaunches {
@@ -556,7 +589,7 @@ func TestAdoptMatchesRecordedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	ready := waitState(t, first, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
-	if !running(int(ready.GetPid()), ready.GetCommand()) {
+	if !proc.Running(int(ready.GetPid()), ready.GetCommand()) {
 		t.Fatal("the recorded command matches its own process")
 	}
 	second := n.manager(t, ctx, nil)

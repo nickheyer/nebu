@@ -4,6 +4,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 
 	"github.com/nickheyer/nebu/pkg/formats"
@@ -18,7 +19,19 @@ const (
 	KeyAPI      = "relay.api"
 	KeyModel    = "relay.model"
 	KeyContext  = "relay.context"
+	// The reasoning effort levels the model takes as the JSON the reference holds them in, and its default among them
+	KeyEfforts = "relay.efforts"
+	KeyEffort  = "relay.effort"
 )
+
+// The reasoning effort levels a stored reference's metadata names, lowest first, and the default among them, none when it names none
+func Efforts(meta map[string]string) ([]sources.Effort, string) {
+	var levels []sources.Effort
+	if json.Unmarshal([]byte(meta[KeyEfforts]), &levels) != nil {
+		return nil, ""
+	}
+	return levels, meta[KeyEffort]
+}
 
 // Largest reference file read
 const maxReference = 64 << 10
@@ -78,6 +91,16 @@ func (Format) Read(ctx context.Context, open formats.Opener, g *formats.Group) (
 	if ref.Context > 0 {
 		raw.Metadata[KeyContext] = strconv.FormatUint(ref.Context, 10)
 	}
+	if len(ref.Efforts) > 0 {
+		levels, err := json.Marshal(ref.Efforts)
+		if err != nil {
+			return nil, err
+		}
+		raw.Metadata[KeyEfforts] = string(levels)
+		if ref.Effort != "" {
+			raw.Metadata[KeyEffort] = ref.Effort
+		}
+	}
 	return raw, nil
 }
 
@@ -97,7 +120,7 @@ func (Format) Precision(*v1.RawModel, string) formats.Words { return formats.Wor
 
 func (Format) Metadata(raw *v1.RawModel) map[string]string {
 	out := map[string]string{}
-	for _, k := range []string{KeyEndpoint, KeyAPI, KeyModel, KeyContext} {
+	for _, k := range []string{KeyEndpoint, KeyAPI, KeyModel, KeyContext, KeyEfforts, KeyEffort} {
 		if v := raw.GetMetadata()[k]; v != "" {
 			out[k] = v
 		}

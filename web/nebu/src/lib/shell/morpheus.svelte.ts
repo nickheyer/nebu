@@ -9,6 +9,7 @@ import { session as account } from '#lib/auth/session.svelte.js';
 import { enumLabel, plural } from '#lib/format.js';
 import { live } from '#lib/live/events.svelte.js';
 import { ChatSession, modelMode, type PendingCall } from '#lib/pages/chat/chat.svelte.js';
+import { effortOf } from '#lib/pages/chat/effort.svelte.js';
 import { ChatTurnSchema, ConversationSchema, type ChatTurn } from '#lib/proto/nebu/v1/chat_pb.js';
 import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 import { RouteState } from '#lib/proto/nebu/v1/gateway_pb.js';
@@ -27,10 +28,13 @@ const own = 'nebu';
 const kept = 'nebu.morpheus';
 // Names of one kind the context lists at most
 const most = 20;
+// Lines of a launch's log the model is told when its task ends
+const logged = 30;
 // What the model is told before the lines about the open page
 const lead = [
 	"You are Morpheus, the assistant built into nebu's web UI. You act on behalf of the signed-in user through these tools. The lines below describe what they are looking at in their browser right now. Use the tools to look up anything else.",
-	"When a tool starts a task, you will be told when it finishes, so don't poll it with get_task."
+	'A call that changes something waits in the panel for the person to run or skip it whenever they have asked for that.',
+	"When a tool starts a task, you are told when it ends, with how the launch went, what it measured, and the end of its log, so don't poll it with get_task."
 ].join('\n');
 
 // The asks offered on an empty thread, by the route of the open page
@@ -56,8 +60,15 @@ let following = $state<string[]>([]);
 let notes = $state<Record<string, TaskState>>({});
 // The account the kept thread belongs to, another one in the same tab starting without it
 let owner = $state('');
+// Whether what an ended task left behind is being read, no other one told meanwhile
+let telling = $state(false);
 
-const session = new ChatSession({ kept: false, runs, auto });
+const session = new ChatSession({ kept: false, runs, auto, effort: () => effortOf(entry()) });
+
+// The chosen route as the gateway lists it, with the reasoning effort levels its model takes
+function entry(): ModelEntry | undefined {
+	return models.find((m) => m.id === session.model);
+}
 
 // Nebu's own tools as one more tool server, then every ready search and fetch server
 const servers = $derived<ToolServerStatus[]>([
@@ -159,14 +170,42 @@ async function load(): Promise<void> {
 	}
 }
 
-// Tells the model a followed task ended, in a turn the panel draws as a line of its own
+// What a task left behind, for the model to read without asking: the instance of a launch with what triage read, what it measured against what was planned, and the end of its log, or the end of the task's own log when it failed
+async function outcome(task: Task): Promise<string> {
+	const instance = task.labels['instance'] || (task.labels['slot'] ? task.labels['name'] : '');
+	try {
+		if (instance) {
+			const res = await call('get_instance', JSON.stringify({ id: instance, logs: logged }));
+			if (res.failed) return '';
+			const got = JSON.parse(res.text) as { instance?: Record<string, unknown> & { plan?: { pools?: Record<string, unknown>[] } }; logs?: string[] };
+			const rec = got.instance ?? {};
+			const planned = rec.plan?.pools?.map((p) => ({ pool_id: p['pool_id'], used_bytes: p['used_bytes'], capacity_bytes: p['capacity_bytes'] }));
+			return JSON.stringify({ instance: rec['id'], state: rec['state'], error: rec['error'], params: rec['params'], triage: rec['triage'], measurements: rec['measurements'], planned, log: got.logs });
+		}
+		if (task.state !== TaskState.FAILED) return '';
+		const res = await call('get_task', JSON.stringify({ id: task.id, tail: logged }));
+		return res.failed ? '' : JSON.stringify({ log: (JSON.parse(res.text) as { logs?: string[] }).logs });
+	} catch {
+		return '';
+	}
+}
+
+// Tells the model a followed task ended, in a turn whose first line the panel draws as a line of its own. A message sent while what the task left was being read goes first, and the task is told after it
 async function tell(task: Task): Promise<void> {
-	following = following.filter((id) => id !== task.id);
-	const turn = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'user', text: `${task.title} ${enumLabel(TaskStateSchema, task.state)}${task.error ? `: ${task.error}` : ''}`, startedAt: timestampNow() });
-	notes[turn.id] = task.state;
-	session.conversation.turns = [...session.turns, turn];
-	arm();
-	await session.answer(servers);
+	telling = true;
+	try {
+		const said = `${task.title} ${enumLabel(TaskStateSchema, task.state)}${task.error ? `: ${task.error}` : ''}`;
+		const left = await outcome(task);
+		if (session.busy || session.pending.length > 0 || !following.includes(task.id)) return;
+		following = following.filter((id) => id !== task.id);
+		const turn = create(ChatTurnSchema, { id: crypto.randomUUID(), role: 'user', text: left ? `${said}\n${left}` : said, startedAt: timestampNow() });
+		notes[turn.id] = task.state;
+		session.conversation.turns = [...session.turns, turn];
+		arm();
+		await session.answer(servers);
+	} finally {
+		telling = false;
+	}
 }
 
 // Reads the thread the tab kept, the calls of its last answer nothing answered waiting for the person again
@@ -220,7 +259,7 @@ $effect.root(() => {
 	});
 	// One followed task that has ended is told once the session is idle
 	$effect(() => {
-		if (!loaded || session.busy || session.pending.length > 0 || session.model === '') return;
+		if (!loaded || telling || session.busy || session.pending.length > 0 || session.model === '') return;
 		const task = following.map((id) => live.tasks.get(id)).find((t) => ended(t?.state));
 		if (task) untrack(() => void tell(task));
 	});
@@ -251,6 +290,10 @@ export const morpheus = {
 	get models(): ModelEntry[] {
 		return models;
 	},
+	// The chosen route as the gateway lists it, nothing until the routes are listed
+	get entry(): ModelEntry | undefined {
+		return entry();
+	},
 	get loaded(): boolean {
 		return loaded;
 	},
@@ -275,6 +318,10 @@ export const morpheus = {
 	// The state a followed task ended in when the turn is the panel's word of it
 	note(turn: ChatTurn): TaskState | undefined {
 		return notes[turn.id];
+	},
+	// The line of such a turn the panel draws, what follows it being for the model alone
+	noteLine(turn: ChatTurn): string {
+		return turn.text.split('\n', 1)[0] ?? '';
 	},
 	// Lists the tools and the routes the first time the panel is shown, and the routes again as they change
 	start(): Promise<void> {

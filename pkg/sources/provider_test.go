@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,75 @@ func withKey(id, key string) context.Context {
 		}
 		return http.Header{"Authorization": {"Bearer " + key}}
 	})
+}
+
+// The reference of a model holds the reasoning effort levels its provider lists for it, lowest first, with the provider's word on
+// each and its default: ChatGPT's own listing, OpenRouter's, and Anthropic's, which names no default. A listing with another
+// thing under those names says nothing, and a model the listing is silent on takes the levels its provider's API names
+func TestReferenceHoldsListedEfforts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"models":[
+			{"slug":"plan","display_name":"Plan","visibility":"list","context_window":400000,"default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"xhigh","description":"Extra depth"},{"effort":"low","description":"Quick work"},{"effort":"medium","description":"Balanced"},{"effort":"later","description":"Not named yet"}]},
+			{"slug":"hidden","visibility":"hide","supported_reasoning_levels":[{"effort":"low","description":""}]}],
+		"data":[
+			{"id":"routed","context_length":128000,"reasoning":{"default_effort":"high","default_enabled":true,"mandatory":false,"supported_efforts":["high","medium","low","minimal"]}},
+			{"id":"claude","max_input_tokens":200000,"capabilities":{"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":null,"max":{"supported":false}},"thinking":{"supported":true}}},
+			{"id":"other","reasoning":true,"capabilities":["chat"],"supported_reasoning_levels":"all","default_reasoning_level":3},
+			{"id":"silent"}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	read := func(cat *Catalog, repo string) *Reference {
+		t.Helper()
+		c := testClient(t, cat, &v1.Source{Id: "lab", Kind: cat.Kind, Config: map[string]string{"endpoint": srv.URL + "/v1"}})
+		m, err := c.Resolve(withKey("lab", "k"), repo, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob, err := c.Open(context.Background(), m, m.Artifacts[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := make([]byte, blob.Size())
+		if _, err := blob.ReadAt(data, 0); err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		ref, err := ParseReference(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ref
+	}
+	levels := func(ref *Reference) string {
+		var out []string
+		for _, e := range ref.Efforts {
+			out = append(out, e.Level)
+		}
+		return strings.Join(out, " ")
+	}
+	plan := read(compatible, "plan")
+	if levels(plan) != "low medium xhigh later" || plan.Effort != "medium" || plan.Efforts[0].Description != "Quick work" || plan.Efforts[3].Description != "Not named yet" || plan.Context != 400000 {
+		t.Fatalf("ChatGPT's listing: %+v", plan)
+	}
+	if routed := read(compatible, "routed"); levels(routed) != "minimal low medium high" || routed.Effort != "high" {
+		t.Fatalf("OpenRouter's listing: %+v", routed)
+	}
+	if claude := read(compatible, "claude"); levels(claude) != "low medium high" || claude.Effort != "" {
+		t.Fatalf("Anthropic's listing: %+v", claude)
+	}
+	for _, repo := range []string{"other", "silent"} {
+		if ref := read(compatible, repo); len(ref.Efforts) != 0 || ref.Effort != "" {
+			t.Fatalf("%s names no levels: %+v", repo, ref)
+		}
+	}
+	if silent := read(openai, "silent"); levels(silent) != "none minimal low medium high xhigh max" || silent.Effort != "" {
+		t.Fatalf("a model OpenAI's listing says nothing of takes the levels its API names: %+v", silent)
+	}
+	if plan := read(openai, "plan"); levels(plan) != "low medium xhigh later" || plan.Effort != "medium" {
+		t.Fatalf("a model OpenAI's listing names levels for takes those: %+v", plan)
+	}
+	if _, err := testClient(t, compatible, &v1.Source{Id: "lab", Kind: compatible.Kind, Config: map[string]string{"endpoint": srv.URL + "/v1"}}).Resolve(withKey("lab", "k"), "hidden", ""); err == nil {
+		t.Fatal("a model the listing hides is not listed")
+	}
 }
 
 func TestModelsListResolveAndOpen(t *testing.T) {

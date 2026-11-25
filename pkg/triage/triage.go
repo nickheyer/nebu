@@ -14,6 +14,8 @@ type Rule struct {
 	Hint    string
 	// Matches a log line and extracts summary and hint variables.
 	Match func(line string) (map[string]string, bool)
+	// Rules of the same set whose hits this one stands in for, a narrower account of the same failure
+	Over []string
 }
 
 // Failure rules for one runtime.
@@ -23,23 +25,33 @@ type Set interface {
 	Rules() []Rule
 }
 
-// Reports the first matching log line for each rule.
+// Reports the first matching log line for each rule, in rule order, without the hits a narrower rule of the set stands in for.
 func Scan(sets []Set, lines []string) []*v1.TriageHit {
 	var hits []*v1.TriageHit
 	for _, set := range sets {
+		var found []*v1.TriageHit
+		over := map[string]bool{}
 		for _, r := range set.Rules() {
 			for _, line := range lines {
 				names, ok := r.Match(line)
 				if !ok {
 					continue
 				}
-				hits = append(hits, &v1.TriageHit{
+				found = append(found, &v1.TriageHit{
 					Id:      r.ID,
 					Summary: fill(r.Summary, names),
 					Hint:    fill(r.Hint, names),
 					Line:    line,
 				})
+				for _, id := range r.Over {
+					over[id] = true
+				}
 				break
+			}
+		}
+		for _, h := range found {
+			if !over[h.GetId()] {
+				hits = append(hits, h)
 			}
 		}
 	}

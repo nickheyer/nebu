@@ -5,6 +5,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/formats/relay"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
 )
@@ -34,6 +35,37 @@ func (m *Manager) Modes(id string) []string {
 		return nil
 	}
 	return in.modesOf()
+}
+
+// Reasoning effort levels
+func (m *Manager) Efforts(id string) (levels []string, about map[string]string, standard string) {
+	in, err := m.find(id)
+	if err != nil {
+		return nil, nil, ""
+	}
+	rec := in.snapshot()
+	if tpl := rec.GetTemplate(); tpl != nil {
+		if !tpl.GetReadsEffort() {
+			return nil, nil, ""
+		}
+		return tpl.GetEfforts(), nil, ""
+	}
+	if m.Store == nil {
+		return nil, nil, ""
+	}
+	stored, err := m.Store.ReadManifest(rec.GetSourceId(), rec.GetRepo(), rec.GetGroup())
+	if err != nil {
+		return nil, nil, ""
+	}
+	listed, standard := relay.Efforts(stored.GetDescriptor_().GetMetadata())
+	about = map[string]string{}
+	for _, l := range listed {
+		levels = append(levels, l.Level)
+		if l.Description != "" {
+			about[l.Level] = l.Description
+		}
+	}
+	return levels, about, standard
 }
 
 // The chat template the instance's launch runs

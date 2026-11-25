@@ -172,6 +172,8 @@ type Policy struct {
 	Stated map[string]func(lines []string) (string, bool)
 	// Cache a group outside the layers keeps beside its weights, such as a draft context's
 	GroupCache func(s *Scope, g *v1.TensorGroup) (uint64, error)
+	// Whether the resolved params keep the layers' cache in host memory wherever the layers sit, nil when it always follows them
+	CacheOnHost func(s *Scope) bool
 	// Device count parameter. Limits capacity to the largest selected pools. Empty uses all devices.
 	DevicesParam string
 	// Data parallel rank count parameter, each rank taking DevicesParam devices of its own, one rank when empty
@@ -697,7 +699,15 @@ func (p *Policy) planRank(in Input, s *Scope, primary, host []*v1.MemoryPool, ra
 			indexed = true
 		}
 	}
+	// A cache the runtime was told to keep off the device is host memory's whole, and no layer carries a share of it
+	hosted := p.CacheOnHost != nil && p.CacheOnHost(s) && !sv.hostOnly() && layers > 0
+	if hosted {
+		sv.pin(item{cache: cacheTotal}, true)
+	}
 	cacheOf := func(g *v1.TensorGroup) uint64 {
+		if hosted {
+			return 0
+		}
 		if !indexed {
 			return cacheTotal / uint64(layers)
 		}
@@ -962,7 +972,10 @@ func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
 		agg.add(it.kind, v1.PoolKind_POOL_KIND_DEVICE, it.weights, 1)
 	}
 	for _, it := range s.hosted {
-		agg.add(it.kind, v1.PoolKind_POOL_KIND_HOST, it.weights, 1)
+		// A cache held apart from its layers is bytes of the pool and no group of the model
+		if it.kind != v1.TensorGroupKind_TENSOR_GROUP_KIND_UNSPECIFIED {
+			agg.add(it.kind, v1.PoolKind_POOL_KIND_HOST, it.weights, 1)
+		}
 	}
 	for _, b := range s.buckets {
 		for i, it := range b.items {

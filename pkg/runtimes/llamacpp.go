@@ -287,9 +287,10 @@ func (LlamaCpp) Params() []*v1.Param {
 			Placeholder: "8192", Description: "fewest tokens between checkpoints, a smaller step costs memory and re-prefills less"},
 		{Name: "cache_reuse", Label: "Cache reuse chunk", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "tokens", Min: 0, Step: 32, Group: groupCache, Advanced: true, Flag: "--cache-reuse",
 			Names: []*v1.ParamName{{Value: "0", Label: "off"}}, Placeholder: "0", Description: "smallest chunk reused by shifting the KV cache, 0 off, no effect on hybrid and recurrent models"},
-		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: groupBatching, Advanced: true, Flag: "--batch-size"},
+		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: groupBatching, Advanced: true, Flag: "--batch-size",
+			Description: "most tokens of a prompt the server takes in one decode call, never less than n_ubatch"},
 		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: groupBatching, Advanced: true, Flag: "--ubatch-size",
-			Description: "tokens per forward pass, the chunk of one slot's prefill that every other slot's decoding waits behind"},
+			Description: "tokens per forward pass, the chunk of one slot's prefill that every other slot's decoding waits behind. The device's compute buffers are sized for n_ubatch times n_ctx, many times larger where flash attention does not apply, so lower it when they do not fit and raise it for faster prefill"},
 		placeholder("on", switchParam("cont_batching", "Continuous batching", groupBatching, "decode every slot's sequence in one batch")),
 		{Name: "alias", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: groupIdentity, Flag: "--alias", Placeholder: "the launch's name", Description: "model names the API answers to, comma separated"},
 		{Name: "mmproj", Label: "Projector", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupIdentity, Advanced: true, Flag: "--mmproj", Picks: "projector",
@@ -590,6 +591,8 @@ func (LlamaCpp) Probes() []Probe {
 // as of the latest print. The side is the process's own device, its host, or an rpc device
 func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 	var m measurements
+	// The bytes of the device allocation a backend last logged as refused
+	var refused uint64
 	for _, line := range lines {
 		for _, b := range llamaBuffers {
 			i := strings.Index(line, b.phrase)
@@ -608,13 +611,19 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 		}
 		if n, ok := bytesAfter(line, ": allocating "); ok && strings.Contains(line, " failed") {
 			m.add("device.failed", n, line)
+			refused = n
 		}
 		if i := strings.Index(line, "failed to allocate "); i >= 0 {
 			fields := strings.Fields(line[i+len("failed to allocate "):])
 			if len(fields) >= 5 && fields[1] == "buffer" && fields[2] == "of" && fields[3] == "size" {
-				if n, err := strconv.ParseUint(strings.TrimRight(fields[4], ",.;"), 10, 64); err == nil {
-					m.add(memorySide(fields[0])+".failed", n, line)
+				n, err := strconv.ParseUint(strings.TrimRight(fields[4], ",.;"), 10, 64)
+				side := memorySide(fields[0])
+				// The allocator names the buffer its backend just refused, the same bytes a second time
+				again := side == "device" && refused > 0 && max(n, refused)-min(n, refused) < 1<<20
+				if err == nil && !again {
+					m.add(side+".failed", n, line)
 				}
+				refused = 0
 			}
 		}
 		if side, numbers, ok := breakdownRow(line); ok {
@@ -796,6 +805,8 @@ func (LlamaCpp) Policy() *estimate.Policy {
 			}
 			return uint64(run.Context * s.CacheLayers[g.GetLayer()] * llamaDraftCacheBytes), nil
 		},
+		// The cache stays in system memory under --no-kv-offload, whichever layers the device holds
+		CacheOnHost: func(s *estimate.Scope) bool { return s.Params.Str("kv_offload") == "off" },
 		// Device context and compute buffer estimate, fitted to CUDA runs with flash attention.
 		OverheadBytes: func(s *estimate.Scope) uint64 {
 			ctx, ubatch := float64(s.Params.Int("n_ctx")), float64(s.Params.Int("n_ubatch"))

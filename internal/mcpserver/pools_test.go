@@ -37,6 +37,9 @@ type noInstances struct{}
 func (noInstances) ToolSupport(string) v1.ToolSupport { return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED }
 func (noInstances) StripsBillingHeader(string) bool   { return true }
 func (noInstances) Modes(string) []string             { return nil }
+func (noInstances) Efforts(string) ([]string, map[string]string, string) {
+	return nil, nil, ""
+}
 func (noInstances) LoadAdapter(context.Context, string, string, string) error {
 	return errors.New("no adapter loads in this test")
 }

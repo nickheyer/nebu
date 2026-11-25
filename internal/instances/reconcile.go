@@ -43,6 +43,8 @@ var (
 	backoffMax = time.Minute
 	// Ready this long before a crash, the next restart waits the first delay again
 	backoffReset = 5 * time.Minute
+	earlierTail  = 200
+	earlierMax   = 600
 )
 
 type instance struct {
@@ -91,6 +93,12 @@ type instance struct {
 	health runtimes.RoleHealth
 	// The crash a drain saw, recorded on the final state of a stop
 	drainCrash string
+	// The ends of the logs of launches that failed and processes that crashed before the one whose log is held, each closed by a line saying how it ended
+	earlier []string
+	// How the process of the held log ended, set while that log has not joined the earlier ones
+	ended string
+	// What triage read of the failed launch being counted and of the one before it, a second launch failing the same way being final
+	failedNow, failedAs string
 }
 
 func (m *Manager) newInstance(rec *v1.Instance, rt runtimes.Runtime) *instance {
@@ -177,8 +185,47 @@ func (in *instance) handle() launch.Handle {
 // Takes a new process or rank group, its ranks starting with no failed health probes
 func (in *instance) attach(h launch.Handle) {
 	in.mu.Lock()
+	in.keepLogLocked()
 	in.proc, in.log, in.healthFails = h, h.Log(), nil
 	in.mu.Unlock()
+}
+
+// Keeps the end of the held log
+func (in *instance) keepLogLocked() {
+	if in.ended == "" || in.log == nil {
+		return
+	}
+	in.earlier = append(append(in.earlier, in.log.Tail(earlierTail)...), "==== "+in.ended+" ====")
+	if over := len(in.earlier) - earlierMax; over > 0 {
+		in.earlier = append([]string(nil), in.earlier[over:]...)
+	}
+	in.ended = ""
+}
+
+// The kept ends of earlier logs that fit before lines of the held log when tail asks for more than it holds, all of them when tail is zero
+func (in *instance) earlierFor(tail, held int) []string {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if tail > 0 && held >= tail {
+		return nil
+	}
+	out := in.earlier
+	if tail > 0 && len(out) > tail-held {
+		out = out[len(out)-(tail-held):]
+	}
+	return append([]string(nil), out...)
+}
+
+// What triage read of a failure, the same for two launches that failed the same way and empty when it read nothing
+func failureOf(hits []*v1.TriageHit) string {
+	var b strings.Builder
+	for _, h := range hits {
+		b.WriteString(h.GetId())
+		b.WriteString(": ")
+		b.WriteString(h.GetSummary())
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // Records how the process is known healthy
@@ -433,11 +480,18 @@ func (in *instance) launchFailed(err error) bool {
 	in.mu.Lock()
 	in.failures++
 	failures := in.failures
+	same := in.failedNow != "" && in.failedNow == in.failedAs
+	in.failedAs, in.failedNow = in.failedNow, ""
+	in.ended = fmt.Sprintf("launch %d failed: %v", failures, err)
 	in.mu.Unlock()
 	gen := rec.GetGeneration()
-	if rec.GetSeat() != nil || failures >= maxFailedLaunches {
+	if rec.GetSeat() != nil || failures >= maxFailedLaunches || same {
 		reason := err.Error()
-		if rec.GetSeat() == nil {
+		switch {
+		case rec.GetSeat() != nil:
+		case same:
+			reason = fmt.Sprintf("%d launches in a row failed the same way: %v", failures, err)
+		default:
 			reason = fmt.Sprintf("%d launches in a row failed, the last: %v", failures, err)
 		}
 		m.unpublish(context.Background(), in)
@@ -880,6 +934,7 @@ func (in *instance) crashed(h launch.Handle) bool {
 		in.backoff = backoffMin
 	}
 	in.asleep = false
+	in.ended = detail
 	in.mu.Unlock()
 	in.scheduleRestart()
 	idle := rec.GetState() == v1.InstanceState_INSTANCE_STATE_IDLE
@@ -1143,6 +1198,9 @@ func (m *Manager) Close() {
 // Records a failed launch's triage and measurements and returns the error with its first hint
 func (m *Manager) launchError(in *instance, err error) error {
 	hits, measurements := in.scanLog()
+	in.mu.Lock()
+	in.failedNow = failureOf(hits)
+	in.mu.Unlock()
 	in.update(func(r *v1.Instance) {
 		r.Triage = hits
 		r.Measurements = mergeMeasurements(r.Measurements, measurements)

@@ -706,12 +706,18 @@ func (m *Manager) Logs(ctx context.Context, id string, follow bool, tail int, se
 	if log == nil {
 		return nil
 	}
+	lines := log.Tail(tail)
+	earlier := in.earlierFor(tail, len(lines))
 	if !follow {
-		lines := log.Tail(tail)
-		if len(lines) == 0 {
+		if lines = append(earlier, lines...); len(lines) == 0 {
 			return nil
 		}
 		return send(lines)
+	}
+	if len(earlier) > 0 {
+		if err := send(earlier); err != nil {
+			return err
+		}
 	}
 	return log.Follow(ctx, tail, send)
 }

@@ -81,9 +81,46 @@ func TestShippedRules(t *testing.T) {
 			t.Errorf("%s: %q should hit %s, got %v", c.set.ID(), c.line, c.id, hits)
 		}
 	}
-	unknown := LlamaCpp{}.Rules()[1]
-	if names, ok := unknown.Match("unknown model architecture: 'x'"); !ok || names["arch"] != "x" {
-		t.Fatalf("arch capture %v %v", names, ok)
+	for _, r := range (LlamaCpp{}).Rules() {
+		if r.ID != "unknown-arch" {
+			continue
+		}
+		if names, ok := r.Match("unknown model architecture: 'x'"); !ok || names["arch"] != "x" {
+			t.Fatalf("arch capture %v %v", names, ok)
+		}
+	}
+}
+
+// An allocation that failed is named by what was being allocated, the hint naming the settings that size it and the generic account giving way
+func TestLlamaCppNamesWhatDidNotFit(t *testing.T) {
+	compute := []string{
+		"0.01.114.178 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for better performance",
+		"0.16.151.840 E ggml_backend_cuda_buffer_type_alloc_buffer: allocating 301196.26 MiB on device 0: cudaMalloc failed: out of memory",
+		"0.16.151.846 E ggml_gallocr_reserve_n_impl: failed to allocate CUDA0 buffer of size 315827167360",
+		"0.16.151.847 E graph_reserve: failed to allocate compute buffers",
+		"0.16.493.571 E llama_init_from_model: failed to initialize the context: failed to allocate compute pp buffers",
+		"0.16.493.603 E srv    load_model: failed to create_context with model '/m/model.gguf'",
+		"0.16.508.452 E srv  server_run_i: exiting due to model loading error",
+	}
+	hits := Scan([]Set{LlamaCpp{}}, compute)
+	if len(hits) != 1 || hits[0].GetId() != "compute-oom" || !strings.Contains(hits[0].GetHint(), "n_ubatch") {
+		t.Fatalf("compute buffers: %v", hits)
+	}
+	weights := []string{
+		"0.00.536.830 E llama_init_from_model: model does not support a quantized V cache (q4_0)",
+		"0.00.579.032 E common_fit_params: encountered an error while trying to fit params to free device memory: failed to create llama_context from model",
+		"0.11.630.235 E ggml_backend_cuda_buffer_type_alloc_buffer: allocating 139689.51 MiB on device 0: cudaMalloc failed: out of memory",
+		"0.11.630.241 E ggml_backend_buft_alloc_buffer_n_default: failed to allocate CUDA0 buffer of size 146475068032",
+		"0.15.909.608 E llama_model_load: error loading model: unable to allocate CUDA0 buffer",
+		"0.15.909.620 E llama_model_load_from_file_impl: failed to load model",
+	}
+	hits = Scan([]Set{LlamaCpp{}}, weights)
+	if len(hits) != 2 || hits[0].GetId() != "cache-type-unsupported" || hits[0].GetSummary() != "this model cannot use a quantized V cache" || !strings.Contains(hits[0].GetHint(), "cache_type_v to f16") || hits[1].GetId() != "weights-oom" {
+		t.Fatalf("weights: %v", hits)
+	}
+	cache := Scan([]Set{LlamaCpp{}}, []string{"ggml_backend_cuda_buffer_type_alloc_buffer: allocating 9000.00 MiB on device 0: cudaMalloc failed: out of memory", "llama_kv_cache: failed to allocate buffer for kv cache"})
+	if len(cache) != 1 || cache[0].GetId() != "cache-oom" || !strings.Contains(cache[0].GetHint(), "kv_offload") {
+		t.Fatalf("cache: %v", cache)
 	}
 }
 

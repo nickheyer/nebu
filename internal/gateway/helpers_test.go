@@ -63,6 +63,22 @@ type fakeInstances struct {
 	load func(ctx context.Context, instanceID, name, path string) error
 	// Instances whose launch keeps Claude Code's billing header
 	keepBilling map[string]bool
+	// The reasoning effort levels of each instance, instances absent here taking none
+	efforts map[string]fakeEfforts
+}
+
+// The reasoning effort levels of a model, lowest first, the provider's word on some, and its default
+type fakeEfforts struct {
+	levels   []string
+	about    map[string]string
+	standard string
+}
+
+func (f *fakeInstances) Efforts(id string) ([]string, map[string]string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e := f.efforts[id]
+	return e.levels, e.about, e.standard
 }
 
 func (f *fakeInstances) StripsBillingHeader(id string) bool {

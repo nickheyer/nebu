@@ -58,6 +58,31 @@ func (g *Gateway) capabilities(rt *v1.Route) []string {
 	return out
 }
 
+// Reasoning notes: https://openrouter.ai/docs/api/api-reference/models/get-models
+func (g *Gateway) reasoning(rt *v1.Route) map[string]any {
+	pool, ok := g.routePool(rt)
+	if !ok {
+		return nil
+	}
+	for _, ep := range g.store.Endpoints(pool.ID, nil) {
+		levels, about, standard := g.instances.Efforts(ep.Labels()[datalayer.LabelInstance])
+		if len(levels) == 0 {
+			continue
+		}
+		levels = slices.Clone(levels)
+		slices.Reverse(levels)
+		out := map[string]any{"supported_efforts": levels}
+		if standard != "" {
+			out["default_effort"] = standard
+		}
+		if len(about) > 0 {
+			out["descriptions"] = about
+		}
+		return out
+	}
+	return nil
+}
+
 // The pooled output a launch generating no text reports alone, empty for every other launch
 func poolingOnly(inv *v1.RuntimeInventory) string {
 	if mods := inv.GetModalities(); len(mods) == 1 && slices.Contains(runtimes.PoolingModalities, mods[0]) {
@@ -114,7 +139,7 @@ func (g *Gateway) modelEntry(api v1.ApiFlavor, rt *v1.Route) map[string]any {
 	case v1.ApiFlavor_API_FLAVOR_ANTHROPIC:
 		return map[string]any{"id": rt.GetName(), "type": "model", "display_name": rt.GetName(), "created_at": created.UTC().Format(time.RFC3339), "inventory": inventoryEntry(inv)}
 	}
-	return map[string]any{
+	entry := map[string]any{
 		"id":           rt.GetName(),
 		"object":       "model",
 		"created":      created.Unix(),
@@ -123,6 +148,10 @@ func (g *Gateway) modelEntry(api v1.ApiFlavor, rt *v1.Route) map[string]any {
 		"capabilities": g.capabilities(rt),
 		"inventory":    inventoryEntry(inv),
 	}
+	if r := g.reasoning(rt); r != nil {
+		entry["reasoning"] = r
+	}
+	return entry
 }
 
 // Lists routes as models in the client's protocol, draining ones hidden and the Ollama ps list showing ready ones

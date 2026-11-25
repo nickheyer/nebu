@@ -43,6 +43,9 @@ func (plainInstances) ToolSupport(string) v1.ToolSupport {
 }
 func (plainInstances) StripsBillingHeader(string) bool { return true }
 func (plainInstances) Modes(string) []string           { return nil }
+func (plainInstances) Efforts(string) ([]string, map[string]string, string) {
+	return nil, nil, ""
+}
 func (plainInstances) LoadAdapter(context.Context, string, string, string) error {
 	return errors.New("no adapter loads in this test")
 }

@@ -45,6 +45,8 @@ type Catalog struct {
 	Transports []Use
 	// Set when downloads need a key
 	AuthRequired bool
+	// The reasoning effort levels the provider's API names, lowest first, for a model its listing names none for
+	Efforts []string
 	// Requires explicit configuration, as for directories and mirrors.
 	Configured bool
 	// Listing and search capability restrictions.

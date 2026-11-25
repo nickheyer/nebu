@@ -92,18 +92,10 @@ func (t *Tree) Terminate(ctx context.Context, grace time.Duration, done <-chan s
 
 // Whether pid runs the command line given, ignoring quotes the OS adds
 func Running(pid int, command []string) bool {
-	if len(command) == 0 {
+	if len(command) == 0 || pid <= 0 || !Exists(pid) {
 		return false
 	}
 	want := strings.ReplaceAll(strings.Join(command, " "), `"`, "")
-	return RunningMatch(pid, func(line string) bool { return strings.HasSuffix(line, want) })
-}
-
-// Whether pid is alive with a command line, quotes removed, that match accepts
-func RunningMatch(pid int, match func(line string) bool) bool {
-	if pid <= 0 || !Exists(pid) {
-		return false
-	}
 	deadline := time.Now().Add(settleWait)
 	for {
 		line, err := cmdline(pid)
@@ -111,9 +103,9 @@ func RunningMatch(pid int, match func(line string) bool) bool {
 			return false
 		}
 		if line != "" {
-			return match(strings.ReplaceAll(line, `"`, ""))
+			return strings.HasSuffix(strings.ReplaceAll(line, `"`, ""), want)
 		}
-		// An empty line comes right after exec or from a zombie, so look again unless it exits first
+		// An empty line comes from a child whose exec has yet to land or from a zombie, so look again unless it exits first
 		left := time.Until(deadline)
 		if left <= 0 {
 			return false

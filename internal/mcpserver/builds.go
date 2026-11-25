@@ -85,7 +85,7 @@ func (n *nebu) addBuildTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 	gone := &mcp.ToolAnnotations{DestructiveHint: ptr(true)}
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes", Description: "Lists the recipes runtimes build from source with, each with its variants, variables, patches, and what this host lacks for it", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in runtimeIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.builds.ListRecipes(ctx, connect.NewRequest(&v1.ListRecipesRequest{RuntimeId: in.RuntimeID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "preview_build", Description: "Resolves a build without running it: the commit its ref names, the steps it would run, what it keeps, and the build already made when this exact one exists. The steps answered are in the form build_runtime takes", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in buildIn) (*mcp.CallToolResult, any, error) {
 		build, err := in.request()
@@ -97,7 +97,7 @@ func (n *nebu) addBuildTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 			return nil, nil, err
 		}
 		r, err := n.builds.PreviewBuild(ctx, req)
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "build_runtime", Description: "Builds a runtime from source, installs what it built, and returns the build and its task. " + buildParts}, func(ctx context.Context, _ *mcp.CallToolRequest, in buildIn) (*mcp.CallToolResult, any, error) {
 		build, err := in.request()
@@ -109,22 +109,22 @@ func (n *nebu) addBuildTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 			return nil, nil, err
 		}
 		r, err := n.builds.Build(ctx, req)
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_builds", Description: "Lists builds newest first with their states, refs, commits, errors, and the requests they were made from", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in runtimeIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.builds.ListBuilds(ctx, connect.NewRequest(&v1.ListBuildsRequest{RuntimeId: in.RuntimeID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "get_build", Description: "Reads one build with its directory, task, install, and the request it was made from. Its log is its task's", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.builds.GetBuild(ctx, connect.NewRequest(&v1.GetBuildRequest{Id: in.ID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "remove_build", Description: "Removes a build, its tree, and the install it made", Annotations: gone}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.builds.RemoveBuild(ctx, connect.NewRequest(&v1.RemoveBuildRequest{Id: in.ID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "remove_install", Description: "Removes an installed runtime and the files it downloaded or built, refused while a slot or an instance uses it", Annotations: gone}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.runtimes.RemoveInstall(ctx, connect.NewRequest(&v1.RemoveInstallRequest{Id: in.ID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 }

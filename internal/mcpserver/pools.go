@@ -9,7 +9,6 @@ import (
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -201,11 +200,11 @@ func (n *nebu) addPoolTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 	destructive := &mcp.ToolAnnotations{DestructiveHint: ptr(true)}
 	mcp.AddTool(s, &mcp.Tool{Name: "list_pools", Description: "Lists pools, the groups of endpoints routes send to, with their endpoints, scraped load, readiness and conditions", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.ListPools(ctx, connect.NewRequest(&v1.ListPoolsRequest{}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "get_pool", Description: "Reads one pool with its spec, endpoints and conditions", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.GetPool(ctx, connect.NewRequest(&v1.GetPoolRequest{Id: in.ID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "put_pool", Description: "Creates or replaces a pool of servers nebu does not manage, or overrides the spec of a pool its instances publish"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putPoolIn) (*mcp.CallToolResult, any, error) {
 		spec, err := poolSpec(in)
@@ -217,19 +216,19 @@ func (n *nebu) addPoolTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 			return nil, nil, err
 		}
 		r, err := n.gateway.PutPool(ctx, req)
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_pool", Description: "Removes a pool a user authored", Annotations: destructive}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.DeletePool(ctx, connect.NewRequest(&v1.DeletePoolRequest{Id: in.ID}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_pool_imports", Description: "Lists the pools other mesh members export to this node with their exporters, endpoints and conditions", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.imports.ListPoolImports(ctx, connect.NewRequest(&v1.ListPoolImportsRequest{}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_objectives", Description: "Lists the named latency objectives and priority bands requests reference by header", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.ListObjectives(ctx, connect.NewRequest(&v1.ListObjectivesRequest{}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "put_objective", Description: "Creates or replaces a named objective with its priority band and time to first token and per output token targets"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putObjectiveIn) (*mcp.CallToolResult, any, error) {
 		req, err := checked(&v1.PutObjectiveRequest{Objective: &v1.Objective{Name: in.Name, Priority: in.Priority, TtftMs: in.TtftMs, TpotMs: in.TpotMs}})
@@ -237,15 +236,15 @@ func (n *nebu) addPoolTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 			return nil, nil, err
 		}
 		r, err := n.gateway.PutObjective(ctx, req)
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_objective", Description: "Removes an objective no route names", Annotations: destructive}, func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.DeleteObjective(ctx, connect.NewRequest(&v1.DeleteObjectiveRequest{Name: in.Name}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_scheduler_configs", Description: "Lists scheduler configurations with their YAML and whether each loads", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.ListSchedulerConfigs(ctx, connect.NewRequest(&v1.ListSchedulerConfigsRequest{}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "put_scheduler_config", Description: "Creates or replaces a scheduler configuration pools reference by name, or with validate_only loads it and answers whether it is accepted"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putSchedulerConfigIn) (*mcp.CallToolResult, any, error) {
 		req, err := checked(&v1.PutSchedulerConfigRequest{Config: &v1.SchedulerConfig{Name: in.Name, Spec: &v1.SchedulerConfigSpec{Yaml: in.YAML}}, ValidateOnly: in.ValidateOnly})
@@ -253,11 +252,11 @@ func (n *nebu) addPoolTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 			return nil, nil, err
 		}
 		r, err := n.gateway.PutSchedulerConfig(ctx, req)
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_scheduler_config", Description: "Removes a scheduler configuration that is not built in and no pool runs", Annotations: destructive}, func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.DeleteSchedulerConfig(ctx, connect.NewRequest(&v1.DeleteSchedulerConfigRequest{Name: in.Name}))
-		return answer(r, err)
+		return n.as(false)(msgOf(r, err))
 	})
 }
 
@@ -294,7 +293,6 @@ func (n *nebu) template(s *mcp.Server, uri, name, description string, fetch func
 			}
 			return nil, unwrap(err)
 		}
-		data, _ := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
-		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: req.Params.URI, MIMEType: "application/json", Text: string(data)}}}, nil
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: req.Params.URI, MIMEType: "application/json", Text: string(protoJSON(msg))}}}, nil
 	})
 }

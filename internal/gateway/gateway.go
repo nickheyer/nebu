@@ -74,6 +74,8 @@ type Instances interface {
 	StripsBillingHeader(instanceID string) bool
 	// The generation modes a media instance serves, img_gen and vid_gen
 	Modes(instanceID string) []string
+	// The reasoning effort levels the instance's model takes, lowest first, what its provider says of each, and the default its provider lists, none when it takes none
+	Efforts(instanceID string) (levels []string, about map[string]string, standard string)
 	// The chat template the instance's model carries, rendered for prompts sent over gRPC
 	Template(instanceID string) (*chattemplate.Template, error)
 	// Loads an adapter from its directory into a ready instance under the name requests use for it

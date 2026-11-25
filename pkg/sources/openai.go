@@ -42,5 +42,8 @@ func init() {
 	// A stream names its usage only when asked through stream_options,
 	// https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
 	openai.StreamUsage = true
+	// "Supported values are model-dependent and can include none, minimal, low, medium, high, xhigh, and max", and the
+	// listing names none of them for a model: https://developers.openai.com/api/docs/guides/reasoning
+	openai.Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 	register(openai)
 }

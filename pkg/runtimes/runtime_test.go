@@ -418,6 +418,14 @@ func TestLlamaCppMeasuresFailedAllocationsAndBreakdown(t *testing.T) {
 			t.Fatalf("%s is not in these lines: %v", key, got[key])
 		}
 	}
+	// One refused allocation the backend and the allocator both log counts once
+	once := (LlamaCpp{}).Measure([]string{
+		"0.16.151.840 E ggml_backend_cuda_buffer_type_alloc_buffer: allocating 301196.26 MiB on device 0: cudaMalloc failed: out of memory",
+		"0.16.151.846 E ggml_gallocr_reserve_n_impl: failed to allocate CUDA0 buffer of size 315827167360",
+	})
+	if len(once) != 1 || once[0].GetKey() != "device.failed" || once[0].GetBytes() != uint64(301196.26*mib) {
+		t.Fatalf("one refused allocation logged twice: %v", once)
+	}
 	if len(got) != 6 {
 		t.Fatalf("measurements %v", got)
 	}

@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -186,7 +188,20 @@ type Reference struct {
 	Model    string `json:"model"`
 	// Tokens of context the provider reports, zero when it reports none
 	Context uint64 `json:"context,omitempty"`
+	// The reasoning effort levels the model takes, lowest first: the ones the provider lists for it, or else the ones its API names, none when neither says
+	Efforts []Effort `json:"efforts,omitempty"`
+	// The level the provider lists as the model's default, empty when it lists none
+	Effort string `json:"effort,omitempty"`
 }
+
+// One reasoning effort level a model takes, with what its provider says of it
+type Effort struct {
+	Level       string `json:"effort"`
+	Description string `json:"description,omitempty"`
+}
+
+// The reasoning effort levels in rising order. One a provider lists that is none of these keeps its place after them
+var effortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // The name of the reference file for models served over an API
 func ReferenceFile(api v1.ApiFlavor) string { return "relay." + text.Enum(api) + ".json" }
@@ -225,6 +240,12 @@ type modelEntry struct {
 	ContextLength    uint64 `json:"context_length"`
 	MaxContextLength uint64 `json:"max_context_length"`
 	MaxInputTokens   uint64 `json:"max_input_tokens"`
+	// Reasoning effort levels: ChatGPT's own with its default, OpenRouter's under reasoning, Anthropic's under capabilities. Kept as
+	// sent, since another provider lists something of another shape under the same name
+	DefaultReasoningLevel    json.RawMessage `json:"default_reasoning_level"`
+	SupportedReasoningLevels json.RawMessage `json:"supported_reasoning_levels"`
+	Reasoning                json.RawMessage `json:"reasoning"`
+	Capabilities             json.RawMessage `json:"capabilities"`
 }
 
 // A listing page: data, ChatGPT's models, Anthropic's has_more and last_id, OpenRouter's next link
@@ -243,6 +264,61 @@ const modelPages = 20
 
 func (e modelEntry) context() uint64 {
 	return cmp.Or(e.ContextWindow, e.ContextLength, e.MaxContextLength, e.MaxInputTokens)
+}
+
+// The reasoning effort levels the listing says the model takes, lowest first, and the one it lists as the default, empty when it
+// lists none. ChatGPT lists supported_reasoning_levels, each with a description, and default_reasoning_level:
+// https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs. OpenRouter lists reasoning.supported_efforts
+// and reasoning.default_effort: https://openrouter.ai/docs/api/api-reference/models/get-models. Anthropic lists capabilities.effort
+// with each level supported or not and no default: https://platform.claude.com/docs/en/api/models/list
+func (e modelEntry) efforts() ([]Effort, string) {
+	var levels []Effort
+	var standard string
+	var own []Effort
+	if json.Unmarshal(e.SupportedReasoningLevels, &own) == nil {
+		levels = own
+		json.Unmarshal(e.DefaultReasoningLevel, &standard)
+	}
+	var router struct {
+		Default   string   `json:"default_effort"`
+		Supported []string `json:"supported_efforts"`
+	}
+	if json.Unmarshal(e.Reasoning, &router) == nil {
+		for _, l := range router.Supported {
+			levels = append(levels, Effort{Level: l})
+		}
+		standard = cmp.Or(standard, router.Default)
+	}
+	var caps struct {
+		Effort map[string]json.RawMessage `json:"effort"`
+	}
+	if json.Unmarshal(e.Capabilities, &caps) == nil {
+		for _, name := range slices.Sorted(maps.Keys(caps.Effort)) {
+			var level struct {
+				Supported bool `json:"supported"`
+			}
+			if name != "supported" && json.Unmarshal(caps.Effort[name], &level) == nil && level.Supported {
+				levels = append(levels, Effort{Level: name})
+			}
+		}
+	}
+	seen := map[string]bool{}
+	levels = slices.DeleteFunc(levels, func(l Effort) bool {
+		gone := l.Level == "" || seen[l.Level]
+		seen[l.Level] = true
+		return gone
+	})
+	rank := func(l Effort) int {
+		if at := slices.Index(effortLevels, l.Level); at >= 0 {
+			return at
+		}
+		return len(effortLevels)
+	}
+	slices.SortStableFunc(levels, func(a, b Effort) int { return rank(a) - rank(b) })
+	if !seen[standard] {
+		standard = ""
+	}
+	return levels, standard
 }
 
 // Every model the provider lists to the caller
@@ -325,7 +401,7 @@ func (modelsAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	return localPage(hits, req, sort, c.Limit(req)), nil
 }
 
-// One reference file naming the endpoint, the API and the model, with the context the listing reports when the caller can list
+// One reference file naming the endpoint, the API and the model, with the context and the reasoning effort levels the listing reports when the caller can list
 func (modelsAPI) Resolve(ctx context.Context, c *Client, repo, _ string) (*v1.Model, error) {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
@@ -341,11 +417,18 @@ func (modelsAPI) Resolve(ctx context.Context, c *Client, repo, _ string) (*v1.Mo
 		for _, e := range list {
 			if e.ID == repo {
 				found, ref.Context = true, e.context()
+				ref.Efforts, ref.Effort = e.efforts()
 				break
 			}
 		}
 		if !found {
 			return nil, fmt.Errorf("%s lists no model %q", c.cat.Name, repo)
+		}
+	}
+	// A model the listing names no levels for is offered the ones its provider's API names, with no default among them
+	if len(ref.Efforts) == 0 {
+		for _, level := range c.cat.Efforts {
+			ref.Efforts = append(ref.Efforts, Effort{Level: level})
 		}
 	}
 	data, err := json.MarshalIndent(ref, "", "  ")

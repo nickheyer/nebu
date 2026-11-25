@@ -11,9 +11,43 @@ func (LlamaCpp) Description() string { return "Failure patterns of llama-server"
 func (LlamaCpp) Rules() []Rule {
 	return []Rule{
 		{
+			ID:      "cache-type-unsupported",
+			Summary: "this model cannot use a quantized ${side} cache",
+			Hint:    "set ${param} to f16, every quantized type is refused, q8_0 too",
+			Match: func(line string) (map[string]string, bool) {
+				side, ok := tailAfter(line, "does not support a quantized ")
+				if !ok || side == "" {
+					return nil, false
+				}
+				side = strings.Fields(side)[0]
+				return map[string]string{"side": side, "param": "cache_type_" + strings.ToLower(side)}, true
+			},
+		},
+		{
+			ID:      "compute-oom",
+			Summary: "the compute buffers do not fit on the device",
+			Hint:    "lower n_ubatch, and n_batch to match. The buffers grow with n_ubatch and for some models with n_ctx, and neither n_cpu_moe nor the cache settings shrink them. log_verbosity 4 logs each buffer's size",
+			Match:   anyOf("failed to allocate compute"),
+			Over:    []string{"device-oom", "model-load"},
+		},
+		{
+			ID:      "cache-oom",
+			Summary: "the context cache does not fit on the device",
+			Hint:    "lower n_ctx, quantize the cache with cache_type_k and cache_type_v, or keep it in system memory with kv_offload off",
+			Match:   anyOf("failed to allocate buffer for kv cache"),
+			Over:    []string{"device-oom", "model-load"},
+		},
+		{
+			ID:      "weights-oom",
+			Summary: "the weights placed on the device do not fit in it",
+			Hint:    "put fewer layers on the device with n_gpu_layers, keep expert weights in system memory with n_cpu_moe, or leave both unset for the plan to place them",
+			Match:   allOf("error loading model", "unable to allocate", "buffer"),
+			Over:    []string{"device-oom", "model-load"},
+		},
+		{
 			ID:      "device-oom",
-			Summary: "device ran out of memory while loading",
-			Hint:    "lower n_ctx, quantize the cache with cache_type_k and cache_type_v q8_0, or keep experts on the host with n_cpu_moe",
+			Summary: "device ran out of memory",
+			Hint:    "the lines around it say what was being allocated: weights follow n_gpu_layers and n_cpu_moe, the cache follows n_ctx, cache_type_k, and cache_type_v, and compute buffers follow n_ubatch",
 			Match:   anyOf("out of memory", "failed to allocate", "cudaMalloc failed", "alloc_buffer: allocating", "not enough space in the buffer"),
 		},
 		{

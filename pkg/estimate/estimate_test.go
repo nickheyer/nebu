@@ -839,6 +839,40 @@ func TestCacheRatioScalesEveryCache(t *testing.T) {
 	}
 }
 
+// A llama.cpp cache kept off the device is planned in host memory whole, the layers on the device carrying none of it
+func TestLlamaCacheKeptOffTheDevice(t *testing.T) {
+	params := map[string]float64{"n_layer": 4, "n_head_kv": 8, "head_dim": 128, "head_dim_v": 128, "n_embd": 4096, "n_vocab": 32000}
+	d := &v1.Descriptor{Architecture: "llama", Family: "default", Params: params}
+	for i := int32(0); i < 4; i++ {
+		d.Groups = append(d.Groups, &v1.TensorGroup{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: i, Bytes: 100 * mib})
+	}
+	p, defaultsOf := policy(t, "llamacpp")
+	host := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "g", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 80 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 80 * gib}}}
+	plan := func(offload string) *v1.MemoryPlan {
+		out, err := p.Plan(estimate.Input{Descriptor: d, Family: archs.Default{}, Host: host, Params: defaults(defaultsOf, map[string]any{"n_ctx": int64(8192), "kv_offload": offload})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	on, off := plan("on"), plan("off")
+	cache := uint64(8192) * 4 * 8 * 256 * 2
+	if on.GetCacheBytes() != cache || off.GetCacheBytes() != cache || on.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || off.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("cache %s and %s, verdicts %s and %s", estimate.Human(on.GetCacheBytes()), estimate.Human(off.GetCacheBytes()), on.GetVerdict(), off.GetVerdict())
+	}
+	if moved := estimate.PlannedDevice(on) - estimate.PlannedDevice(off); moved != cache {
+		t.Fatalf("the device holds %s less with the cache off it, want %s", estimate.Human(moved), estimate.Human(cache))
+	}
+	if moved := usage(off, "h").GetUsedBytes() - usage(on, "h").GetUsedBytes(); moved != cache {
+		t.Fatalf("host memory holds %s more with the cache in it, want %s", estimate.Human(moved), estimate.Human(cache))
+	}
+	for _, pl := range off.GetPlacements() {
+		if pl.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_UNSPECIFIED {
+			t.Fatalf("the cache is no group of the model: %v", off.GetPlacements())
+		}
+	}
+}
+
 // A data parallel launch prices one rank per group of tensor parallel devices, the ranks sharing a mixture's experts
 func TestDataParallelRanksTakeTheirOwnDevices(t *testing.T) {
 	four := &v1.HostProfile{}

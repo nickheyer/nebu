@@ -10,6 +10,7 @@
 	import { num, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { modelMode, modelOptions, type PendingCall } from '#lib/pages/chat/chat.svelte.js';
+	import Effort from '#lib/pages/chat/Effort.svelte';
 	import Turn from '#lib/pages/chat/Turn.svelte';
 	import { launchEntry } from '#lib/pages/serve/serve.js';
 	import { ChatTurnSchema } from '#lib/proto/nebu/v1/chat_pb.js';
@@ -132,7 +133,7 @@
 	{#each shown as turn (turn.id || turn)}
 		{@const ended = morpheus.note(turn)}
 		{#if ended !== undefined}
-			<p class="note unmeasured"><Dot lamp={taskLamp(ended)} /><span>{turn.text}</span></p>
+			<p class="note unmeasured"><Dot lamp={taskLamp(ended)} /><span>{morpheus.noteLine(turn)}</span></p>
 		{:else}
 			<Turn
 				{turn}
@@ -183,6 +184,7 @@
 			</div>
 			<div class="under">
 				<Switch bind:checked={() => prefs.morpheusAsks, (v) => (prefs.morpheusAsks = v)} label="Ask before changes" compact />
+				<Effort model={morpheus.entry} />
 				{#if contextUsed > 0 && contextMax > 0}
 					<span class="gauge" title="{num(contextUsed)} of {num(contextMax)} context tokens used">
 						<span class="meter"><NeoProgressBar value={Math.min(100, (contextUsed / contextMax) * 100)} elevation={-1} height="6px" width="100%" color={contextUsed / contextMax > 0.85 ? 'warning' : 'primary'} immediate /></span>

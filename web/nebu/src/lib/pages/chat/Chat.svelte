@@ -41,6 +41,8 @@
 	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
 	import { byDay, ChatSession, chooseImages, imageSizes, modelMode, modelOptions, takesImages, videoFps, type PendingCall } from '#lib/pages/chat/chat.svelte.js';
 	import SettingsPanel from '#lib/pages/chat/SettingsPanel.svelte';
+	import Effort from '#lib/pages/chat/Effort.svelte';
+	import { effortOf } from '#lib/pages/chat/effort.svelte.js';
 	import Turn from '#lib/pages/chat/Turn.svelte';
 	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
 	import ArrowsInIcon from 'phosphor-svelte/lib/ArrowsInIcon';
@@ -57,8 +59,10 @@
 
 	let { id = '' }: { id?: string } = $props();
 
-	const session = new ChatSession();
+	const session = new ChatSession({ effort: (): string => effortOf(entry) });
 	let models = $state<ModelEntry[]>([]);
+	// The chosen model as the gateway lists it, with the reasoning effort levels it takes
+	const entry: ModelEntry | undefined = $derived(models.find((m) => m.id === session.model));
 	let modelsLoaded = $state(false);
 	let modelsError = $state('');
 	let servers = $state<ToolServerStatus[]>([]);
@@ -411,6 +415,7 @@
 		<span class="model">
 			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} label="Model" placeholder={noRoute ? 'No models running' : 'Choose a model'} compact disabled={noRoute} current={session.model} />
 		</span>
+		<Effort model={entry} />
 		<span class="tools">
 			<NeoButton text aria-label={theater ? 'Leave theater mode' : 'Theater mode'} title={theater ? 'Leave theater mode (t)' : 'Theater mode (t)'} aria-pressed={theater} color={theater ? 'primary' : undefined} onclick={() => (prefs.chatTheater = !theater)}>
 				{#snippet icon()}{#if theater}<ArrowsInIcon size={20} />{:else}<ArrowsOutIcon size={20} />{/if}{/snippet}

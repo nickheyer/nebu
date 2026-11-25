@@ -364,7 +364,7 @@ func (m *Manager) abandon(h *tasks.Handle, in *instance, handle launch.Handle, e
 func (m *Manager) ready(h *tasks.Handle, in *instance, gen uint64, measurements []*v1.Measurement, tpl *v1.ChatTemplate) {
 	now := time.Now()
 	in.mu.Lock()
-	in.failures, in.readyAt, in.healthWritten = 0, now, now
+	in.failures, in.failedAs, in.readyAt, in.healthWritten = 0, "", now, now
 	in.healthFails = make([]int, len(rankRefs(in.rec)))
 	in.mu.Unlock()
 	var rec *v1.Instance
@@ -429,6 +429,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	cmd.Stdout, cmd.Stderr = pw, pw
 	log := launch.NewLog(logCapacity)
 	in.mu.Lock()
+	in.keepLogLocked()
 	in.log = log
 	in.mu.Unlock()
 	done := make(chan error, 1)
@@ -644,21 +645,12 @@ func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	return out
 }
 
-// Whether pid runs the recorded command
-func running(pid int, command []string) bool {
-	if len(command) == 0 {
-		return false
-	}
-	joined := strings.ReplaceAll(strings.Join(command, " "), `"`, "")
-	return proc.RunningMatch(pid, func(line string) bool { return strings.HasSuffix(line, joined) })
-}
-
 // Whether every rank of a record runs its recorded command, and the pids of the ranks that do
 func liveRanks(rec *v1.Instance) (bool, []int) {
 	refs := rankRefs(rec)
 	var live []int
 	for _, ref := range refs {
-		if running(int(ref.pid), ref.command) {
+		if proc.Running(int(ref.pid), ref.command) {
 			live = append(live, int(ref.pid))
 		}
 	}
