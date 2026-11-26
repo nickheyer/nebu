@@ -29,6 +29,7 @@ export type ChatOptions = {
 	auto?: (call: PendingCall) => boolean;
 	// The reasoning effort every request asks for, empty for the route's own default
 	effort?: () => string;
+	answered?: (turn: ChatTurn) => void;
 };
 
 function dialectOf(s: string): Dialect {
@@ -130,7 +131,7 @@ export class ChatSession {
 		try {
 			const res = await rpc.chat.getChatFile({ id: f.id });
 			const blob = new Blob([new Uint8Array(res.data)], { type: f.mediaType });
-			this.files[f.id] = URL.createObjectURL(blob);
+			this.files[f.id] = f.mediaType.startsWith('video/') ? URL.createObjectURL(blob) : await dataUrl(blob);
 		} catch (err) {
 			toast.error(`${f.name || 'File'} failed to load`, reason(err));
 		}
@@ -223,10 +224,16 @@ export class ChatSession {
 		const answered = new Set(this.turns.filter((t) => t.role === 'tool').map((t) => t.toolCallId));
 		return this.turns.map((t) => {
 			const calls = t.toolCalls.filter((c) => answered.has(c.id));
+			const audio = t.images.filter(isAudio).map((f) => {
+				const url = this.fileUrl(f);
+				if (!url.startsWith('data:')) throw new Error(`${f.name || 'A recording'} has not loaded, so it cannot be sent`);
+				return url;
+			});
 			return {
 				role: t.role as ChatMessage['role'],
 				text: t.text,
-				images: t.images.map((f) => this.fileUrl(f)).filter((u) => u.startsWith('data:') || u.startsWith('blob:')),
+				images: t.images.filter((f) => !isAudio(f)).map((f) => this.fileUrl(f)).filter((u) => u.startsWith('data:') || u.startsWith('blob:')),
+				audio: audio.length ? audio : undefined,
 				toolCalls: calls.length ? calls.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments })) : undefined,
 				toolCallId: t.toolCallId || undefined
 			};
@@ -239,7 +246,7 @@ export class ChatSession {
 		const approved = s.approveTools ? servers.filter((x) => s.toolServers.includes(x.ref || x.server?.name || '')).flatMap((x) => x.tools.filter((t) => s.mutatingTools || t.readOnly).map((t) => ({ name: t.name, description: t.description, schema: t.schema }))) : [];
 		return {
 			model: this.model,
-			dialect: dialectOf(s.dialect),
+			dialect: this.carriesAudio ? 'openai' : dialectOf(s.dialect),
 			system: s.system,
 			stream: s.stream,
 			temperature: numOr(s.temperature),
@@ -253,6 +260,10 @@ export class ChatSession {
 			mutatingTools: s.mutatingTools,
 			effort: this.#options.effort?.() || undefined
 		};
+	}
+
+	get carriesAudio(): boolean {
+		return this.turns.some((t) => t.images.some(isAudio));
 	}
 
 	// Appends a user turn with its images and asks the model for the answer
@@ -318,6 +329,7 @@ export class ChatSession {
 			joined = true;
 			this.draft = '';
 			await this.#persist();
+			if (assistant.text && this.conversation === conv) this.#options.answered?.(assistant);
 			if (calls.length) this.pending = calls;
 			for (const call of calls) {
 				if (abort.signal.aborted) break;
@@ -514,6 +526,10 @@ function merge(turn: ChatTurn, calls: TraceToolCall[]): boolean {
 	return changed;
 }
 
+function isAudio(f: ChatFile): boolean {
+	return f.mediaType.startsWith('audio/');
+}
+
 // Whether a gateway model takes images, makes images, or makes videos
 export function modelMode(m: ModelEntry | undefined): Mode {
 	if (!m) return 'text';
@@ -527,10 +543,18 @@ export function takesImages(m: ModelEntry | undefined): boolean {
 	return (m?.inventory.modalities ?? []).includes('image') && modelMode(m) === 'text';
 }
 
+export function takesAudio(m: ModelEntry | undefined): boolean {
+	return (m?.inventory.modalities ?? []).includes('audio') && modelMode(m) === 'text';
+}
+
+export function voiceOnly(m: ModelEntry): boolean {
+	return modelMode(m) === 'other' && (m.capabilities.includes('speech') || m.capabilities.includes('transcription'));
+}
+
 // Ready routes holding every typed word, text routes first, context and quantization in each tooltip
 export function modelOptions(models: ModelEntry[], query: string): Option<string>[] {
 	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-	const ready = models.filter((m) => m.ready && words.every((w) => m.id.toLowerCase().includes(w)));
+	const ready = models.filter((m) => m.ready && !voiceOnly(m) && words.every((w) => m.id.toLowerCase().includes(w)));
 	const rank = (m: ModelEntry) => (modelMode(m) === 'text' ? 0 : 1);
 	return [...ready]
 		.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))
@@ -560,11 +584,11 @@ export function byDay(list: Conversation[], now = new Date()): DayGroup[] {
 }
 
 // Opens the browser's file chooser for images and answers the files picked
-export function chooseImages(): Promise<File[]> {
+export function chooseFiles(accept: string): Promise<File[]> {
 	return new Promise((resolve) => {
 		const chooser = document.createElement('input');
 		chooser.type = 'file';
-		chooser.accept = 'image/*';
+		chooser.accept = accept;
 		chooser.multiple = true;
 		chooser.addEventListener('change', () => resolve(Array.from(chooser.files ?? [])));
 		chooser.addEventListener('cancel', () => resolve([]));

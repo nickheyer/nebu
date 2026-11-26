@@ -127,7 +127,7 @@ func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, int,
 	if len(body) > relayMaxBody {
 		return s.fail(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body is over %d bytes", relayMaxBody))
 	}
-	body = s.renamed(body)
+	body, contentType := s.renamed(body, r.Header.Get("Content-Type"))
 	target := *s.upstream
 	target.Path = s.upstream.Path + strings.TrimPrefix(r.URL.Path, "/v1")
 	target.RawQuery = r.URL.RawQuery
@@ -139,6 +139,9 @@ func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, int,
 		if !relayHolds(k) {
 			out.Header[k] = v
 		}
+	}
+	if contentType != "" {
+		out.Header.Set("Content-Type", contentType)
 	}
 	resp, err := s.client.Do(out)
 	if err != nil {
@@ -176,21 +179,24 @@ func (s *relayServer) forward(w http.ResponseWriter, r *http.Request) (int, int,
 	}
 }
 
-// The body with its top-level model set to the provider's id, unchanged when it is no JSON object naming one
-func (s *relayServer) renamed(body []byte) []byte {
+// The body with its top-level model or form model field set to the provider's id, unchanged when it is no JSON object naming one or form
+func (s *relayServer) renamed(body []byte, contentType string) ([]byte, string) {
+	if out, ct, ok := gateway.RenameForm(contentType, body, s.model); ok {
+		return out, ct
+	}
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {
-		return body
+		return body, contentType
 	}
 	if _, ok := doc["model"]; !ok {
-		return body
+		return body, contentType
 	}
 	doc["model"], _ = json.Marshal(s.model)
 	out, err := json.Marshal(doc)
 	if err != nil {
-		return body
+		return body, contentType
 	}
-	return out
+	return out, contentType
 }
 
 // Answers a failure the relay itself met in the shape providers answer theirs, the provider not having answered

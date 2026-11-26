@@ -336,8 +336,8 @@ func (m *Manager) PutFile(ctx context.Context, owner db.ChatOwner, f *v1.ChatFil
 	if err := checkID(f.GetId(), "image"); err != nil {
 		return nil, err
 	}
-	if !strings.HasPrefix(f.GetMediaType(), "image/") && !strings.HasPrefix(f.GetMediaType(), "video/") {
-		return nil, fmt.Errorf("%w: media type %q is not an image or video", ErrChat, f.GetMediaType())
+	if kind, _, _ := strings.Cut(f.GetMediaType(), "/"); kind != "image" && kind != "video" && kind != "audio" {
+		return nil, fmt.Errorf("%w: media type %q is not an image, video or audio", ErrChat, f.GetMediaType())
 	}
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: file %s is empty", ErrChat, f.GetId())
@@ -426,10 +426,7 @@ func Title(turns []*v1.ChatTurn) string {
 			text = strings.TrimSpace(line)
 		}
 		if text == "" {
-			if len(t.GetImages()) > 1 {
-				return fmt.Sprintf("%d images", len(t.GetImages()))
-			}
-			return "Image"
+			return attached(t.GetImages())
 		}
 		if utf8.RuneCountInString(text) > titleChars {
 			runes := []rune(text)
@@ -438,6 +435,26 @@ func Title(turns []*v1.ChatTurn) string {
 		return text
 	}
 	return "New chat"
+}
+
+func attached(files []*v1.ChatFile) string {
+	audio := 0
+	for _, f := range files {
+		if strings.HasPrefix(f.GetMediaType(), "audio/") {
+			audio++
+		}
+	}
+	switch {
+	case audio == 0 && len(files) > 1:
+		return fmt.Sprintf("%d images", len(files))
+	case audio == 0:
+		return "Image"
+	case audio < len(files):
+		return fmt.Sprintf("%d attachments", len(files))
+	case audio > 1:
+		return fmt.Sprintf("%d audio clips", audio)
+	}
+	return "Audio"
 }
 
 func checkID(id, what string) error {

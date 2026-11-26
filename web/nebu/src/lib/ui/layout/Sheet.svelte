@@ -17,7 +17,8 @@
 		// A record holding a table, which takes the wider share of the page
 		wide = false,
 		// The edge a drawer slides in from, the one its trigger sits on
-		side = 'right'
+		side = 'right',
+		edge
 	}: {
 		open?: boolean;
 		onclose?: () => void;
@@ -27,6 +28,7 @@
 		width?: number;
 		wide?: boolean;
 		side?: 'left' | 'right';
+		edge?: Snippet;
 	} = $props();
 
 	const drawer = $derived(wide ? Math.max(width, 880) : width);
@@ -70,7 +72,7 @@
 				</NeoDialog>
 			{:else}
 				<NeoDrawer bind:open filled tabindex={-1} data-focus="self" placement={side} width="min({drawer}px, 96vw)" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
-					<div class="sheet" style:width="min({drawer}px, 96vw)">{@render record()}</div>
+					<div class="sheet" class:edged={edge !== undefined} style:width="min({drawer}px, 96vw)">{@render record()}{@render edge?.()}</div>
 				</NeoDrawer>
 			{/if}
 		{/if}
@@ -136,6 +138,9 @@
 		height: 100%;
 		min-height: 0;
 		overflow: hidden;
+	}
+	.sheet.edged {
+		position: relative;
 	}
 	.sheet.mobile {
 		--nebu-sheet-pad: var(--nebu-space-4);

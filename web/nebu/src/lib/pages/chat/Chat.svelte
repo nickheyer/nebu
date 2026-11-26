@@ -7,7 +7,7 @@
 	import { NeoPill } from '#lib/neo/pill/index.js';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { NeoSkeletonText } from '#lib/neo/skeletons/index.js';
-	import { listModels, type ModelEntry } from '#lib/api/gateway.js';
+	import { listModels, transcribe, type ModelEntry } from '#lib/api/gateway.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { session as account } from '#lib/auth/session.svelte.js';
@@ -39,7 +39,8 @@
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
 	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
-	import { byDay, ChatSession, chooseImages, imageSizes, modelMode, modelOptions, takesImages, videoFps, type PendingCall } from '#lib/pages/chat/chat.svelte.js';
+	import { byDay, ChatSession, chooseFiles, imageSizes, modelMode, modelOptions, takesAudio, takesImages, videoFps, voiceOnly, type PendingCall } from '#lib/pages/chat/chat.svelte.js';
+	import { canRecord, clock, kindOf, Recorder, sendable, speaks, toWav, transcribes, voice } from '#lib/pages/chat/voice.svelte.js';
 	import SettingsPanel from '#lib/pages/chat/SettingsPanel.svelte';
 	import Effort from '#lib/pages/chat/Effort.svelte';
 	import { effortOf } from '#lib/pages/chat/effort.svelte.js';
@@ -49,6 +50,7 @@
 	import ArrowsOutIcon from 'phosphor-svelte/lib/ArrowsOutIcon';
 	import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
 	import ChatsIcon from 'phosphor-svelte/lib/ChatsIcon';
+	import MicrophoneIcon from 'phosphor-svelte/lib/MicrophoneIcon';
 	import PaperclipIcon from 'phosphor-svelte/lib/PaperclipIcon';
 	import PaperPlaneRightIcon from 'phosphor-svelte/lib/PaperPlaneRightIcon';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
@@ -56,10 +58,18 @@
 	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
 	import SparkleIcon from 'phosphor-svelte/lib/SparkleIcon';
 	import StopIcon from 'phosphor-svelte/lib/StopIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 
 	let { id = '' }: { id?: string } = $props();
 
-	const session = new ChatSession({ effort: (): string => effortOf(entry) });
+	const session = new ChatSession({
+		effort: (): string => effortOf(entry),
+		answered: (turn) => {
+			if (voice.auto) void voice.read(turn);
+		}
+	});
+	const recorder = new Recorder();
+	let hearing = $state(false);
 	let models = $state<ModelEntry[]>([]);
 	// The chosen model as the gateway lists it, with the reasoning effort levels it takes
 	const entry: ModelEntry | undefined = $derived(models.find((m) => m.id === session.model));
@@ -113,6 +123,8 @@
 			clearTimeout(routeTimer);
 			clearTimeout(toolTimer);
 			stops.forEach((stop) => stop());
+			recorder.cancel();
+			voice.stop();
 		};
 	});
 
@@ -121,8 +133,9 @@
 		try {
 			models = await listModels();
 			modelsError = '';
-			if (!models.some((m) => m.ready && m.id === session.model)) {
-				const ready = models.filter((m) => m.ready);
+			voice.routes = models.filter(speaks).map((m) => m.id);
+			if (!models.some((m) => m.ready && !voiceOnly(m) && m.id === session.model)) {
+				const ready = models.filter((m) => m.ready && !voiceOnly(m));
 				session.model = (ready.find((m) => modelMode(m) === 'text') ?? ready[0])?.id ?? '';
 			}
 		} catch (err) {
@@ -152,10 +165,14 @@
 			openError = '';
 			pinned = true;
 			if (!want) {
-				if (!session.isNew) session.newConversation();
+				if (!session.isNew) {
+					voice.stop();
+					session.newConversation();
+				}
 				return;
 			}
 			if (session.conversation.id === want) return;
+			voice.stop();
 			session.open(want).catch((err) => {
 				openError = reason(err);
 				toast.error('Conversation failed to open', openError);
@@ -171,9 +188,21 @@
 	const current = $derived(models.find((m) => m.id === session.model));
 	const mode = $derived(modelMode(current));
 	const media = $derived(mode === 'image' || mode === 'video');
-	const attach = $derived(takesImages(current));
-	const anyReady = $derived(models.some((m) => m.ready));
-	const canSend = $derived(text.trim() !== '' && session.model !== '' && !session.busy && !session.opening);
+	const reads = $derived({ image: takesImages(current), audio: takesAudio(current) });
+	const attach = $derived(reads.image || reads.audio);
+	const attachLabel = $derived(reads.image && reads.audio ? 'Attach images or audio' : reads.audio ? 'Attach audio' : 'Attach images');
+	const transcriber = $derived(models.find(transcribes));
+	const mic = $derived(session.model === '' ? '' : !media && reads.audio ? 'attach' : transcriber ? 'transcribe' : '');
+	const micLabel = $derived(!canRecord ? 'The microphone needs the page served over https or from localhost' : recorder.on ? 'Stop recording' : mic === 'attach' ? 'Record a voice message' : `Dictate, written out by ${transcriber?.id ?? ''}`);
+	const unread = $derived(media ? [] : attachments.filter((f) => !reads[kindOf(f) ?? 'image']));
+	const note = $derived.by(() => {
+		if (unread.length) return `${session.model} reads no ${[...new Set(unread.map((f) => (kindOf(f) === 'audio' ? 'audio' : 'images')))].join(' or ')}, remove ${unread.length === 1 ? 'that attachment' : 'those attachments'} or pick a model that does`;
+		const audio = session.carriesAudio || (!media && attachments.some((f) => kindOf(f) === 'audio'));
+		if (audio && (session.settings.dialect === 'anthropic' || session.settings.dialect === 'ollama')) return 'Audio goes over the OpenAI API, the only one of the three that carries it';
+		return '';
+	});
+	const anyReady = $derived(models.some((m) => m.ready && !voiceOnly(m)));
+	const canSend = $derived((text.trim() !== '' || (!media && attachments.length > 0)) && unread.length === 0 && !recorder.on && !hearing && session.model !== '' && !session.busy && !session.opening);
 	const shown = $derived(session.turns.filter((t) => t.role !== 'tool'));
 	const lastAssistant = $derived(session.turns.findLast((t) => t.role === 'assistant'));
 	const userFallback = $derived(account.displayName || 'You');
@@ -196,7 +225,7 @@
 	// Tokens the last answer left in the context and the most the route holds, both known only after an answer
 	const contextUsed = $derived(lastAssistant ? lastAssistant.promptTokens + lastAssistant.completionTokens : 0);
 	const contextMax = $derived(current?.inventory.context_length ?? 0);
-	const facts = $derived(current ? [contextMax ? `${num(contextMax)} tokens of context` : '', current.inventory.quantization, ...(current.inventory.modalities ?? []).filter((m) => m !== 'text').map((m) => `reads ${m}s`)].filter(Boolean) : []);
+	const facts = $derived(current ? [contextMax ? `${num(contextMax)} tokens of context` : '', current.inventory.quantization, ...(current.inventory.modalities ?? []).filter((m) => m !== 'text').map((m) => (m === 'audio' ? 'reads audio' : `reads ${m}s`))].filter(Boolean) : []);
 
 	$effect(() => {
 		if (!theater) return;
@@ -208,7 +237,10 @@
 	function theaterKey(e: KeyboardEvent) {
 		const el = e.target as HTMLElement | null;
 		const typing = el?.closest('input, textarea, select, [contenteditable], [role=dialog], dialog') !== null;
-		if (e.key === 'Escape' && theater && !typing && !e.defaultPrevented) prefs.chatTheater = false;
+		if (e.key === 'Escape' && recorder.on && !e.defaultPrevented) {
+			e.preventDefault();
+			recorder.cancel();
+		} else if (e.key === 'Escape' && theater && !typing && !e.defaultPrevented) prefs.chatTheater = false;
 		else if ((e.key === 't' || e.key === 'T') && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) prefs.chatTheater = !theater;
 	}
 	const sizeOptions = imageSizes.map((s) => ({ value: s, label: s }));
@@ -241,7 +273,7 @@
 	async function send() {
 		if (!canSend) return;
 		const prompt = text.trim();
-		const files = attach ? attachments : [];
+		const files = media ? [] : attachments;
 		text = '';
 		attachments = [];
 		pinned = true;
@@ -275,8 +307,58 @@
 		void send();
 	}
 
-	async function attachImages() {
-		attachments = [...attachments, ...(await chooseImages())].slice(0, 8);
+	async function attachFiles() {
+		const picked = await chooseFiles([reads.image ? 'image/*' : '', reads.audio ? 'audio/*' : ''].filter(Boolean).join(','));
+		const kept: File[] = [];
+		hearing = picked.some((f) => kindOf(f) === 'audio');
+		try {
+			for (const f of picked) {
+				const kind = kindOf(f);
+				if (!kind || !reads[kind]) {
+					toast.error(`${f.name} was not attached`, `${session.model} reads ${reads.image && reads.audio ? 'images and audio' : reads.audio ? 'audio' : 'images'}`);
+					continue;
+				}
+				try {
+					kept.push(kind === 'audio' ? await sendable(f) : f);
+				} catch (err) {
+					toast.error(`${f.name} could not be read as audio`, reason(err));
+				}
+			}
+		} finally {
+			hearing = false;
+		}
+		attachments = [...attachments, ...kept].slice(0, 8);
+	}
+
+	async function record() {
+		if (!canRecord) return void toast.error('Microphone unavailable', 'The browser lends the microphone only to a page served over https or from localhost');
+		if (recorder.on) return recorder.stop();
+		let clip: Blob | undefined;
+		try {
+			clip = await recorder.record();
+		} catch (err) {
+			toast.error('Recording failed', reason(err));
+			return;
+		}
+		if (!clip) return;
+		const seconds = recorder.seconds;
+		const into = mic;
+		hearing = true;
+		try {
+			const wav = await toWav(clip);
+			if (into === 'transcribe' && transcriber) {
+				const heard = await transcribe(transcriber.id, wav, 'recording.wav');
+				if (heard) text = text.trim() ? `${text.trimEnd()} ${heard}` : heard;
+				else toast.info('Nothing was heard in the recording');
+			} else {
+				attachments = [...attachments, new File([wav], `Recording ${clock(seconds)}.wav`, { type: 'audio/wav' })].slice(0, 8);
+			}
+		} catch (err) {
+			toast.error(into === 'transcribe' ? 'Transcription failed' : 'Recording failed', reason(err));
+		} finally {
+			hearing = false;
+			focusBox();
+		}
 	}
 
 	function toggleSettings() {
@@ -511,16 +593,39 @@
 					<Select value={session.media.videoFps} options={fpsOptions} label="Frames per second" onchange={(v) => v && (session.media.videoFps = v)} />
 				{/if}
 			</FieldRow>
-		{:else if attach && attachments.length}
+		{:else if attachments.length}
 			<div class="pills">
 				{#each attachments as f, i (i)}
-					<NeoPill size="small" close label={f.name} onClose={() => (attachments = attachments.filter((_, j) => j !== i))} />
+					<NeoPill size="small" close label={f.name} color={unread.includes(f) ? 'warning' : undefined} onClose={() => (attachments = attachments.filter((_, j) => j !== i))} />
 				{/each}
+			</div>
+		{/if}
+		{#if recorder.on || hearing}
+			<div class="rec" role="status">
+				<span class="led" class:live={recorder.on} aria-hidden="true"></span>
+				{#if recorder.on}
+					<span>Recording</span>
+					<span class="num">{clock(recorder.seconds)}</span>
+					<span class="secondary">{mic === 'transcribe' ? 'Stop writes it into the message' : 'Stop attaches it'}</span>
+					<span class="recacts">
+						<NeoButton text onclick={() => recorder.cancel()}>{#snippet icon()}<XIcon size={16} />{/snippet}Cancel</NeoButton>
+						<NeoButton text color="error" onclick={() => recorder.stop()}>{#snippet icon()}<StopIcon size={16} weight="fill" />{/snippet}Stop</NeoButton>
+					</span>
+				{:else}
+					<span>{mic === 'transcribe' ? 'Writing out what was said' : 'Reading the audio'}</span>
+				{/if}
 			</div>
 		{/if}
 		<div class="line">
 			{#if attach && !media}
-				<span class="beside"><NeoButton text aria-label="Attach images" title="Attach images" onclick={attachImages}>{#snippet icon()}<PaperclipIcon size={20} />{/snippet}</NeoButton></span>
+				<span class="beside"><NeoButton text aria-label={attachLabel} title={attachLabel} disabled={hearing} onclick={attachFiles}>{#snippet icon()}<PaperclipIcon size={20} />{/snippet}</NeoButton></span>
+			{/if}
+			{#if mic}
+				<span class="beside">
+					<NeoButton text aria-label={micLabel} title={micLabel} aria-pressed={recorder.on} color={recorder.on ? 'error' : undefined} disabled={hearing} onclick={record}>
+						{#snippet icon()}{#if recorder.on}<StopIcon size={20} weight="fill" />{:else}<MicrophoneIcon size={20} />{/if}{/snippet}
+					</NeoButton>
+				</span>
 			{/if}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="box" bind:this={box} {onkeydown}>
@@ -529,7 +634,11 @@
 			<span class="beside">{@render sendButton()}</span>
 		</div>
 		<div class="under">
-			<span class="hint">Enter sends, Shift and Enter starts a new line</span>
+			{#if note}
+				<span class="note">{note}</span>
+			{:else}
+				<span class="hint">{recorder.on ? 'Escape cancels the recording' : 'Enter sends, Shift and Enter starts a new line'}</span>
+			{/if}
 			{#if contextUsed > 0 && contextMax > 0}
 				<span class="gauge" title="{num(contextUsed)} of {num(contextMax)} context tokens used">
 					<span class="meter"><NeoProgressBar value={Math.min(100, (contextUsed / contextMax) * 100)} elevation={-1} height="6px" width="100%" color={contextUsed / contextMax > 0.85 ? 'warning' : 'primary'} immediate /></span>
@@ -780,6 +889,38 @@
 		flex-wrap: wrap;
 		gap: var(--nebu-space-1);
 	}
+	.rec {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-2);
+		align-items: center;
+		min-height: 32px;
+		font-size: var(--nebu-text-secondary);
+	}
+	.led {
+		width: 10px;
+		height: 10px;
+		background: var(--neo-shadow-color-dark);
+		border-radius: 50%;
+	}
+	.led.live {
+		background: var(--neo-color-error);
+		box-shadow: 0 0 8px color-mix(in srgb, var(--neo-color-error) 70%, transparent);
+		animation: led-live 1.2s ease-in-out infinite;
+	}
+	@keyframes led-live {
+		50% {
+			opacity: 0.35;
+		}
+	}
+	.recacts {
+		display: inline-flex;
+		gap: var(--nebu-space-1);
+		margin-left: auto;
+	}
+	.note {
+		color: var(--neo-color-warning);
+	}
 	.line {
 		display: flex;
 		gap: var(--nebu-space-2);
@@ -852,7 +993,7 @@
 		.hint {
 			display: none;
 		}
-		.under:not(:has(.gauge)) {
+		.under:not(:has(.gauge, .note)) {
 			display: none;
 		}
 	}

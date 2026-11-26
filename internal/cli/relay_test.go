@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -92,5 +95,57 @@ func TestRelayAnswersAProviderRefusalAsBadGateway(t *testing.T) {
 	// The log says what the provider itself answered beside the status the gateway was given in its place
 	if !strings.Contains(logs.String(), "status=502") || !strings.Contains(logs.String(), "provider_status=401") {
 		t.Fatalf("the provider's own status is missing from the log: %s", logs)
+	}
+}
+
+func TestRelayRenamesFormModel(t *testing.T) {
+	var mu sync.Mutex
+	var gotType string
+	var gotBody []byte
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotType, gotBody = r.Header.Get("Content-Type"), body
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"text":"hi"}`)
+	}))
+	t.Cleanup(provider.Close)
+	base, _ := url.Parse(provider.URL + "/v1")
+	rs := &relayServer{upstream: base, model: "whisper-1", served: "stt", client: provider.Client(), log: slog.New(slog.DiscardHandler)}
+	srv := httptest.NewServer(rs)
+	t.Cleanup(srv.Close)
+	clip := []byte{'R', 'I', 'F', 'F', 0xff, 0x00, 0xc3, 0x28}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("model", "stt")
+	fw, _ := mw.CreateFormFile("file", "clip.wav")
+	fw.Write(clip)
+	mw.WriteField("language", "en")
+	mw.Close()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != `{"text":"hi"}` {
+		t.Fatalf("relayed %d %s", resp.StatusCode, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	_, params, err := mime.ParseMediaType(gotType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := multipart.NewReader(bytes.NewReader(gotBody), params["boundary"]).ReadForm(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := form.File["file"][0].Open()
+	data, _ := io.ReadAll(f)
+	if form.Value["model"][0] != "whisper-1" || form.Value["language"][0] != "en" || !bytes.Equal(data, clip) {
+		t.Fatalf("provider got %v file %q", form.Value, data)
 	}
 }

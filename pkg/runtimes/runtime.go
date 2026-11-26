@@ -664,6 +664,12 @@ type TemplateOverrider interface {
 	TemplateOverride(params map[string]string) (text, file string)
 }
 
+const CapabilityTranscription = "transcription"
+
+type AudioServer interface {
+	Audio(params map[string]string, inv *v1.RuntimeInventory) (caps []string, chats bool)
+}
+
 // A runtime that refuses resolved values its params' types and bounds cannot rule out
 type Checker interface {
 	Check(estimate.Params) error

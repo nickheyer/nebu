@@ -12,6 +12,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"slices"
 	"sort"
 	"strconv"
@@ -110,8 +111,17 @@ type sampleParams struct {
 
 // Multipart fields and files by name
 type form struct {
-	fields map[string][]string
-	files  map[string][][]byte
+	fields   map[string][]string
+	files    map[string][][]byte
+	boundary string
+	parts    []formPart
+}
+
+type formPart struct {
+	name   string
+	file   bool
+	header textproto.MIMEHeader
+	data   []byte
 }
 
 func (f *form) value(name string) string {
@@ -122,13 +132,13 @@ func (f *form) value(name string) string {
 }
 
 // Reads a multipart body into fields and files, refusing anything else
-func parseForm(r *http.Request, body []byte) (*form, error) {
-	mt, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+func parseForm(contentType string, body []byte) (*form, error) {
+	mt, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mt != "multipart/form-data" || params["boundary"] == "" {
 		return nil, errors.New("not a multipart form")
 	}
 	mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
-	out := &form{fields: map[string][]string{}, files: map[string][][]byte{}}
+	out := &form{fields: map[string][]string{}, files: map[string][][]byte{}, boundary: params["boundary"]}
 	for {
 		part, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
@@ -142,13 +152,43 @@ func parseForm(r *http.Request, body []byte) (*form, error) {
 		if err != nil {
 			return nil, err
 		}
-		name := strings.TrimSuffix(part.FormName(), "[]")
-		if part.FileName() != "" {
+		name, file := strings.TrimSuffix(part.FormName(), "[]"), part.FileName() != ""
+		if file {
 			out.files[name] = append(out.files[name], data)
 		} else {
 			out.fields[name] = append(out.fields[name], string(data))
 		}
+		out.parts = append(out.parts, formPart{name: name, file: file, header: part.Header, data: data})
 	}
+}
+
+func (f *form) with(name, value string) ([]byte, string) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.SetBoundary(f.boundary)
+	set := false
+	for _, p := range f.parts {
+		data := p.data
+		if p.name == name && !p.file {
+			data, set = []byte(value), true
+		}
+		w, _ := mw.CreatePart(p.header)
+		w.Write(data)
+	}
+	if !set {
+		mw.WriteField(name, value)
+	}
+	mw.Close()
+	return buf.Bytes(), mw.FormDataContentType()
+}
+
+func RenameForm(contentType string, body []byte, model string) ([]byte, string, bool) {
+	f, err := parseForm(contentType, body)
+	if err != nil || f.value("model") == model {
+		return body, contentType, false
+	}
+	out, ct := f.with("model", model)
+	return out, ct, true
 }
 
 // Reads a media request from the multipart form parsed on arrival, or from the JSON body when there is none

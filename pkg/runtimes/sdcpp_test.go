@@ -81,12 +81,15 @@ func TestSDCppLaunch(t *testing.T) {
 			t.Errorf("%s was not set and is passed: %s", unset, line)
 		}
 	}
-	// Link stored LoRAs by group name.
-	if target, err := os.Readlink(filepath.Join(prepared, "loras", "lightx2v_4steps.safetensors")); err != nil || target != lora.Artifacts[0].Path {
-		t.Fatalf("lora link %q %v", target, err)
-	}
-	if target, err := os.Readlink(filepath.Join(prepared, "loras", "TaoMate-H3.safetensors")); err != nil || target != adapter.Artifacts[0].Path {
-		t.Fatalf("adapter link %q %v", target, err)
+	// Link stored LoRAs by group name, each the stored file itself
+	for name, stored := range map[string]string{"lightx2v_4steps.safetensors": lora.Artifacts[0].Path, "TaoMate-H3.safetensors": adapter.Artifacts[0].Path} {
+		linked, err := os.Stat(filepath.Join(prepared, "loras", name))
+		if err != nil {
+			t.Fatalf("%s link %v", name, err)
+		}
+		if want, err := os.Stat(stored); err != nil || !os.SameFile(linked, want) {
+			t.Fatalf("%s links to another file than %s: %v", name, stored, err)
+		}
 	}
 	// Every part counted on device passes no offload, and unresolved file parameters emit no flag
 	if _, recorded := cmd.Params["offload"]; recorded || strings.Contains(line, "--offload-to-cpu") || strings.Contains(line, "--clip_l") || strings.Contains(line, "--offload ") {
@@ -536,6 +539,57 @@ func TestSDCppShardedCompanions(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("every file links: %v", err)
 		}
+	}
+}
+
+// A stored adapter, a symlink into the blobs as the store lays it out, lands in the adapter directory as a hard
+// link, since sd-server skips one whose resolved path lies outside the directory
+func TestSDCppLinkDirHardLinks(t *testing.T) {
+	root := t.TempDir()
+	blob := filepath.Join(root, "blobs", "sha256-abc")
+	stored := filepath.Join(root, "models", "x", "style", "style.safetensors")
+	for _, d := range []string{filepath.Dir(blob), filepath.Dir(stored)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(blob, []byte("weights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(blob, stored); err != nil {
+		t.Fatal(err)
+	}
+	lora := &v1.StoredModel{Repo: "x/style", Group: "style", Descriptor_: &v1.Descriptor{Architecture: "lora", Kind: v1.ModelKind_MODEL_KIND_COMPONENT}, Artifacts: []*v1.StoredArtifact{
+		{Artifact: &v1.Artifact{Path: "style.safetensors", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, SizeBytes: 7}, Path: stored},
+	}}
+	dir, err := linkDir(filepath.Join(root, "prepared"), "loras", []*v1.StoredModel{lora}, "lora")
+	if err != nil {
+		t.Fatalf("link %v", err)
+	}
+	link := filepath.Join(dir, "style.safetensors")
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("the adapter links: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("the adapter is a symlink, which sd-server skips")
+	}
+	if resolved, err := filepath.EvalSymlinks(link); err != nil || filepath.Dir(resolved) != dir {
+		t.Fatalf("the adapter resolves to %q outside %q: %v", resolved, dir, err)
+	}
+	blobInfo, err := os.Stat(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(info, blobInfo) {
+		t.Fatalf("the adapter is a copy, not a link to the stored blob")
+	}
+}
+
+// The gateway's probe reads the path the launch waits on, a pool naming none never counting its endpoint healthy
+func TestSDCppMetricsHealthPath(t *testing.T) {
+	if got, want := (SDCpp{}).Metrics().GetHealthPath(), (SDCpp{}).Health().Path; got == "" || got != want {
+		t.Fatalf("health path %q, want %q", got, want)
 	}
 }
 

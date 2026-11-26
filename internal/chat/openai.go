@@ -13,12 +13,15 @@ import (
 
 // OpenAI endpoints, the media ones served by the gateway itself
 const (
-	OpenAIChat        = "/v1/chat/completions"
-	OpenAICompletions = "/v1/completions"
-	OpenAIEmbeddings  = "/v1/embeddings"
-	OpenAIImages      = "/v1/images/generations"
-	OpenAIEdits       = "/v1/images/edits"
-	OpenAIVideos      = "/v1/videos"
+	OpenAIChat           = "/v1/chat/completions"
+	OpenAICompletions    = "/v1/completions"
+	OpenAIEmbeddings     = "/v1/embeddings"
+	OpenAIImages         = "/v1/images/generations"
+	OpenAIEdits          = "/v1/images/edits"
+	OpenAIVideos         = "/v1/videos"
+	OpenAISpeech         = "/v1/audio/speech"
+	OpenAITranscriptions = "/v1/audio/transcriptions"
+	OpenAITranslations   = "/v1/audio/translations"
 	// The tokenizer endpoint llama.cpp and vLLM share
 	openaiTokenize = "/tokenize"
 )
@@ -38,6 +41,10 @@ func (openai) Endpoint(path string) Kind {
 		return Image
 	case OpenAIVideos:
 		return Video
+	case OpenAISpeech:
+		return Speech
+	case OpenAITranscriptions, OpenAITranslations:
+		return Transcription
 	case OpenAIResponses:
 		return Chat
 	}
@@ -114,6 +121,8 @@ func oaiParts(content *oaiContent) ([]Part, error) {
 				part.MediaType, part.Data, part.URL = mt, data, ""
 			}
 			out = append(out, part)
+		case "input_audio":
+			out = append(out, Part{Type: "audio", Data: p.Data, MediaType: p.Format, URL: p.URL, Extra: p.Extra})
 		default:
 			return nil, bad("%s parts are not content the gateway can pass to a model", p.Type)
 		}
@@ -134,6 +143,8 @@ func oaiContentOf(parts []Part) *oaiContent {
 				url = "data:" + p.MediaType + ";base64," + p.Data
 			}
 			list = append(list, oaiPart{Type: "image_url", URL: url, Detail: p.Detail, Extra: p.Extra})
+		case "audio":
+			list = append(list, oaiPart{Type: "input_audio", Data: p.Data, Format: p.MediaType, URL: p.URL, Extra: p.Extra})
 		}
 	}
 	if len(list) == 0 {
@@ -222,7 +233,7 @@ func (openai) Render(c *Request) (string, []byte, error) {
 	}
 	req.IncludeUsage = c.Stream && !c.NoStreamOptions
 	req.Messages = make([]oaiMessage, 0, len(c.Messages))
-	// Tool turns carry text only, their images following the run of tool turns as a user turn
+	// Tool turns carry text only, their images and audio following the run of tool turns as a user turn
 	var held []Part
 	for i, m := range c.Messages {
 		if hasTokens(m.Parts) {
@@ -233,7 +244,7 @@ func (openai) Render(c *Request) (string, []byte, error) {
 			msg.Content = &oaiContent{Text: TextOf(m.Parts)}
 			req.Messages = append(req.Messages, msg)
 			for _, p := range m.Parts {
-				if p.Type == "image" {
+				if p.Type == "image" || p.Type == "audio" {
 					held = append(held, p)
 				}
 			}

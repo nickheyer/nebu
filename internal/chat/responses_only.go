@@ -78,6 +78,9 @@ func (r responsesOnly) Render(c *Request) (string, []byte, error) {
 	if err := translatable(c); err != nil {
 		return "", nil, err
 	}
+	if err := noAudio(c, "the Responses API"); err != nil {
+		return "", nil, err
+	}
 	switch {
 	case c.Kind == Embed:
 		return "", nil, bad("this sign-in is served chats alone, over the Responses API, so embeddings take a key for the provider")

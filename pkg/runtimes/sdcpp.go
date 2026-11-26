@@ -614,12 +614,21 @@ func linkDir(prepared, sub string, stored []*v1.StoredModel, picks string) (stri
 			if len(files) > 1 {
 				name += "-" + strconv.Itoa(i+1)
 			}
-			if err := os.Symlink(file, filepath.Join(dir, name+filepath.Ext(file))); err != nil {
+			if err := placeLink(file, filepath.Join(dir, name+filepath.Ext(file))); err != nil {
 				return "", err
 			}
 		}
 	}
 	return dir, nil
+}
+
+func placeLink(file, link string) error {
+	if target, err := filepath.EvalSymlinks(file); err == nil {
+		if err := os.Link(target, link); err == nil {
+			return nil
+		}
+	}
+	return os.Symlink(file, link)
 }
 
 // Returns the file sd-server loads for a group of weights: the single file, or the index naming

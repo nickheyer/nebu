@@ -35,6 +35,7 @@ class Prefs {
 	morpheusModel = $state(read('morpheus.model', ''));
 	// Whether Morpheus waits for the person before a call that changes something
 	morpheusAsks = $state(read('morpheus.asks', true));
+	morpheusWidth = $state(read('morpheus.width', 0));
 	// The reasoning effort level the person chose for a model, by model name, a model absent here asked for its own default
 	efforts = $state<Record<string, string>>(read('chat.efforts', {}));
 
@@ -52,6 +53,7 @@ class Prefs {
 			$effect(() => write('morpheus.open', this.morpheusOpen));
 			$effect(() => write('morpheus.model', this.morpheusModel));
 			$effect(() => write('morpheus.asks', this.morpheusAsks));
+			$effect(() => write('morpheus.width', this.morpheusWidth));
 			$effect(() => write('chat.efforts', this.efforts));
 		});
 	}

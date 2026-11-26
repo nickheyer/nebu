@@ -51,7 +51,7 @@ func TestRuntimeNamesMatchScrapeTable(t *testing.T) {
 		{runtimes.VLLM{}, true, false},
 		{runtimes.SGLang{}, true, false},
 		{runtimes.NeMo{}, true, false},
-		{runtimes.SDCpp{}, false, false},
+		{runtimes.SDCpp{}, false, true},
 		{runtimes.Relay{Speaks: v1.ApiFlavor_API_FLAVOR_OPENAI}, false, true},
 		{runtimes.Relay{Speaks: v1.ApiFlavor_API_FLAVOR_ANTHROPIC}, false, true},
 	}

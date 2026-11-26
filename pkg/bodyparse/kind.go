@@ -14,6 +14,9 @@ var suffixes = [...]struct {
 	{"/api/chat", KindOllamaChat},
 	{"/api/generate", KindOllamaGenerate},
 	{"/api/embed", KindEmbeddings},
+	{"/v1/audio/speech", KindSpeech},
+	{"/v1/audio/transcriptions", KindTranscription},
+	{"/v1/audio/translations", KindTranscription},
 }
 
 // The body shape a request path carries, any prefix before the API root allowed
@@ -39,6 +42,8 @@ var kindNames = [...]string{
 	KindAnthropicMessages: "anthropic_messages",
 	KindOllamaChat:        "ollama_chat",
 	KindOllamaGenerate:    "ollama_generate",
+	KindSpeech:            "speech",
+	KindTranscription:     "transcription",
 }
 
 func (k Kind) String() string {

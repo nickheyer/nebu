@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/db"
@@ -336,12 +338,16 @@ func summary(t *v1.Trace) *v1.Trace {
 	return out
 }
 
-// A body as a trace keeps it, cut to the trace cap at a character boundary
+// A body as a trace keeps it, cut to the trace cap at a character boundary, and one that is not text by its size alone
 func capped(b []byte) string {
 	if len(b) <= traceBodyCap {
-		return string(b)
+		if utf8.Valid(b) {
+			return string(b)
+		}
+	} else if s := strings.ToValidUTF8(string(b[:traceBodyCap]), ""); traceBodyCap-len(s) < utf8.UTFMax {
+		return s
 	}
-	return strings.ToValidUTF8(string(b[:traceBodyCap]), "")
+	return fmt.Sprintf("(%d bytes, not text)", len(b))
 }
 
 // Text as a trace keeps it, cut to the trace cap at a character boundary without a byte copy

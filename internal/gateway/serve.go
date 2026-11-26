@@ -277,8 +277,8 @@ func (x *exchange) readRequest() error {
 	if doc, err := parseDoc(x.r.URL.Path, body); err == nil {
 		x.doc = doc
 	}
-	if x.doc == nil && x.kind == chat.Image {
-		if f, err := parseForm(x.r, body); err == nil {
+	if x.doc == nil && (x.kind == chat.Image || x.kind == chat.Transcription) {
+		if f, err := parseForm(x.r.Header.Get("Content-Type"), body); err == nil {
 			x.form = f
 		}
 	}
@@ -622,6 +622,10 @@ func (g *Gateway) fetchImage(ctx context.Context, url string) ([]byte, string, e
 // Proxies the body as the stages left it, the target model written in, parsing the answer for the trace
 func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 	body, doc := x.body, x.document()
+	ct := x.r.Header.Get("Content-Type")
+	if doc == nil && x.form != nil && x.form.value("model") != x.dec.TargetModel {
+		body, ct = x.form.with("model", x.dec.TargetModel)
+	}
 	x.asked = false
 	if doc != nil && x.streamOptionsRefused() {
 		// What the client set of an option the provider takes no body with is left out, the stream naming its usage as the provider does
@@ -644,7 +648,7 @@ func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 	stream := doc != nil && doc.Stream()
 	x.t.Stream = stream
 	out := &upstream{method: x.r.Method, path: x.r.URL.Path, query: x.r.URL.RawQuery, body: body, doc: doc, stream: stream, header: x.runtimeHeaders()}
-	if ct := x.r.Header.Get("Content-Type"); ct != "" {
+	if ct != "" {
 		out.header.Set("Content-Type", ct)
 	}
 	if len(body) == 0 && x.r.Method == http.MethodGet {

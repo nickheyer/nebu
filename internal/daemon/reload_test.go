@@ -48,6 +48,7 @@ func (plainInstances) ToolSupport(string) v1.ToolSupport {
 }
 func (plainInstances) StripsBillingHeader(string) bool { return true }
 func (plainInstances) Modes(string) []string           { return nil }
+func (plainInstances) Audio(string) ([]string, bool)   { return nil, true }
 func (plainInstances) Efforts(string) ([]string, map[string]string, string) {
 	return nil, nil, ""
 }

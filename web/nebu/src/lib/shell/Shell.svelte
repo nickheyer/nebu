@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { innerWidth } from 'svelte/reactivity/window';
 	import { session } from '#lib/auth/session.svelte.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
@@ -7,19 +8,19 @@
 	import BottomBar from '#lib/shell/BottomBar.svelte';
 	import { immersion } from '#lib/shell/chrome.svelte.js';
 	import Morpheus from '#lib/shell/Morpheus.svelte';
-	import { morpheus } from '#lib/shell/morpheus.svelte.js';
+	import { morpheus, span } from '#lib/shell/morpheus.svelte.js';
 	import Rail from '#lib/shell/Rail.svelte';
 	import TopBar from '#lib/shell/TopBar.svelte';
 
 	let { children }: { children: Snippet } = $props();
 
-	// The shell width from which Morpheus takes a column of its own and the page narrows beside it, a sheet over the page below it
-	const roomy = 1360;
-	let width = $state(0);
+	const rail = $derived(viewport.mobile || immersion.on ? 0 : prefs.railCollapsed ? 68 : 232);
+	const room = $derived((innerWidth.current ?? 0) - rail - span.page);
+	const docked = $derived(!viewport.mobile && span.min <= room);
 </script>
 
 <!-- A page that takes the whole window keeps the shell mounted and out of view, so leaving it changes nothing else -->
-<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} class:immersive={immersion.on} data-motion={motion.enabled ? 'on' : 'off'} bind:clientWidth={width}>
+<div class="shell" class:mobile={viewport.mobile} class:collapsed={prefs.railCollapsed} class:immersive={immersion.on} data-motion={motion.enabled ? 'on' : 'off'} style:--nebu-rail-width="{rail}px">
 	{#if !viewport.mobile}
 		<div class="chrome"><Rail /></div>
 	{/if}
@@ -35,7 +36,7 @@
 		{/if}
 	</div>
 	{#if session.reads && morpheus.here}
-		<div class="chrome"><Morpheus docked={width >= roomy} /></div>
+		<div class="chrome"><Morpheus {docked} {room} /></div>
 	{/if}
 </div>
 
@@ -44,14 +45,10 @@
 		--nebu-gutter: var(--nebu-space-6);
 		--nebu-pad-top: var(--nebu-space-5);
 		--nebu-pad-bottom: var(--nebu-space-6);
-		--nebu-rail-width: 232px;
 		--nebu-bottom: 0px;
 
 		display: flex;
 		min-height: 100dvh;
-	}
-	.shell.collapsed {
-		--nebu-rail-width: 68px;
 	}
 	/* The wrappers of the rail and the bars take no box of their own */
 	.chrome {
@@ -64,7 +61,6 @@
 		max-width: none;
 	}
 	.shell.mobile {
-		--nebu-rail-width: 0px;
 		--nebu-bottom: 56px;
 		--nebu-card-pad-base: var(--nebu-space-4);
 		--nebu-gutter: var(--nebu-space-4);
@@ -73,7 +69,6 @@
 	}
 	/* A page holding the whole window sets every measure of the shell around it to nothing, on any width */
 	.shell.immersive {
-		--nebu-rail-width: 0px;
 		--nebu-bottom: 0px;
 		--nebu-top: 0px;
 		--nebu-gutter: 0px;

@@ -49,13 +49,13 @@ func Conversation(t *v1.Trace) *v1.TraceConversation {
 	return out
 }
 
-// Parts as a trace shows them, an inline image by its size and a token prompt by its count
+// Parts as a trace shows them, inline images and audio by their size and a token prompt by its count
 func traceParts(parts []chat.Part) []*v1.TracePart {
 	out := make([]*v1.TracePart, 0, len(parts))
 	for _, p := range parts {
 		part := &v1.TracePart{Type: p.Type, Text: p.Text, MediaType: p.MediaType, Url: p.URL}
 		switch p.Type {
-		case "image":
+		case "image", "audio":
 			part.Size = uint64(base64.StdEncoding.DecodedLen(len(p.Data)))
 		case "tokens":
 			part.Size = uint64(len(p.Tokens))

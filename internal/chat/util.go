@@ -172,6 +172,15 @@ func hasTokens(parts []Part) bool {
 	return slices.ContainsFunc(parts, func(p Part) bool { return p.Type == "tokens" })
 }
 
+func noAudio(c *Request, takes string) error {
+	for _, m := range c.Messages {
+		if slices.ContainsFunc(m.Parts, func(p Part) bool { return p.Type == "audio" }) {
+			return bad("%s takes no audio, so input_audio parts reach only a runtime serving OpenAI chat completions", takes)
+		}
+	}
+	return nil
+}
+
 // The id an answer carries, a fresh one under the prefix when the runtime gave none
 func resultID(r *Result, prefix string) string {
 	if r.ID != "" {

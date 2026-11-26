@@ -7,8 +7,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/triage"
 )
 
-// None, sd-server serves no Prometheus endpoint
-func (SDCpp) Metrics() *v1.MetricNames { return nil }
+func (SDCpp) Metrics() *v1.MetricNames { return &v1.MetricNames{HealthPath: SDCpp{}.Health().Path} }
 
 func (SDCpp) MetricsPort(_ map[string]string, port int) int { return port }
 

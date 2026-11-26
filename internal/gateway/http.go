@@ -82,8 +82,9 @@ func (g *Gateway) Mount(mux *http.ServeMux) {
 	for _, p := range []string{chat.OpenAIChat, chat.OpenAICompletions, chat.OpenAIEmbeddings, chat.OpenAIResponses, chat.AnthropicMessages, chat.AnthropicCount, chat.OllamaChat, chat.OllamaGenerate, chat.OllamaEmbed, chat.OllamaEmbeddings, tokenizePath, detokenizePath} {
 		mux.Handle(p, traced(g.cors(g.auth(g.serve))))
 	}
-	mux.Handle(chat.OpenAIImages, traced(g.cors(g.auth(g.serve))))
-	mux.Handle(chat.OpenAIEdits, traced(g.cors(g.auth(g.serve))))
+	for _, p := range []string{chat.OpenAIImages, chat.OpenAIEdits, chat.OpenAISpeech, chat.OpenAITranscriptions, chat.OpenAITranslations} {
+		mux.Handle(p, traced(g.cors(g.auth(g.serve))))
+	}
 	mux.Handle(chat.OpenAIVideos, traced(g.cors(g.auth(g.videoRoot))))
 	mux.Handle(chat.OpenAIVideos+"/", traced(g.cors(g.auth(g.video))))
 	mux.Handle(chat.SDCPPPrefix, traced(g.cors(g.auth(g.serve))))

@@ -153,8 +153,8 @@ func TestMetricNames(t *testing.T) {
 	if n := (NeMo{}).Metrics(); !n.GetStaticCache() {
 		t.Fatal("NeMo holds static caches")
 	}
-	if (SDCpp{}).Metrics() != nil {
-		t.Fatal("sd-server serves no metrics")
+	if m := (SDCpp{}).Metrics(); m.GetMetricsPath() != "" || m.GetHealthPath() != (SDCpp{}).Health().Path {
+		t.Fatalf("sd-server serves no metrics and answers health where the launch waits, got %v", m)
 	}
 	if (NeMo{}).MetricsPort(nil, 9000) != 9001 || (VLLM{}).MetricsPort(nil, 9000) != 9000 || (NeMo{}).PortSpan(Launch{}) != 2 {
 		t.Fatal("NeMo's metrics sit on the port after the served one")

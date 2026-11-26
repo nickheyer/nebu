@@ -62,7 +62,7 @@ func (x *exchange) forward(ctx context.Context, in *requestcontrol.Inbound) {
 		}
 	}
 	var creq *chat.Request
-	if x.kind != chat.None && x.kind != chat.Image && x.kind != chat.Video {
+	if x.kind != chat.None && !x.kind.Media() {
 		creq, _ = x.chatRequest()
 	}
 	x.relayAnswer(ctx, resp, chat.RuntimeOf(x.api), creq)

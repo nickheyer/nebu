@@ -122,10 +122,10 @@ func toolNext(msgs []Message, i int) bool {
 	return false
 }
 
-// Whether any part is an image or text that is not blank
+// Whether any part is an image, audio, or text that is not blank
 func hasContent(parts []Part) bool {
 	for _, p := range parts {
-		if p.Type == "image" || p.Type == "text" && strings.TrimSpace(p.Text) != "" {
+		if p.Type == "image" || p.Type == "audio" || p.Type == "text" && strings.TrimSpace(p.Text) != "" {
 			return true
 		}
 	}

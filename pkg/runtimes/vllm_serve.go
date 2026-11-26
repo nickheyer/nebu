@@ -216,6 +216,18 @@ func VLLMModalities(d *v1.Descriptor, params map[string]string) ([]string, error
 	return generating, nil
 }
 
+func (VLLM) Audio(params map[string]string, _ *v1.RuntimeInventory) ([]string, bool) {
+	tasks := strings.Split(params[VLLMSupportedTasks], ",")
+	if !slices.Contains(tasks, "transcription") {
+		return nil, true
+	}
+	chats := slices.Contains(tasks, "generate")
+	if paramOn(params, "grpc") {
+		return nil, chats
+	}
+	return []string{CapabilityTranscription}, chats
+}
+
 // Modalities a media limit sets to zero items, by count alone or by a count field
 func vllmModalitiesOff(limit string) (map[string]bool, error) {
 	off := map[string]bool{}

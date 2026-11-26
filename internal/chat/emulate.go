@@ -158,7 +158,7 @@ func callText(call ToolCall) string {
 	return CallOpen + "\n" + string(body) + "\n" + CallClose
 }
 
-// A tool turn as a user turn, the text in a response block with images beside it
+// A tool turn as a user turn, the text in a response block with images and audio beside it
 func responseParts(m Message) []Part {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s id=%q>\n", ResponseOpen, m.ToolID)
@@ -166,7 +166,7 @@ func responseParts(m Message) []Part {
 	b.WriteString("\n" + ResponseClose)
 	out := []Part{{Type: "text", Text: b.String()}}
 	for _, p := range m.Parts {
-		if p.Type == "image" {
+		if p.Type == "image" || p.Type == "audio" {
 			out = append(out, p)
 		}
 	}

@@ -2,6 +2,7 @@ package runtimes
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -105,6 +106,13 @@ func (LlamaCpp) Inventory(in Launch, params map[string]string) (*v1.RuntimeInven
 		inv.Modalities = append(inv.Modalities, more...)
 	}
 	return inv, nil
+}
+
+func (LlamaCpp) Audio(_ map[string]string, inv *v1.RuntimeInventory) ([]string, bool) {
+	if slices.Contains(inv.GetModalities(), "audio") {
+		return []string{CapabilityTranscription}, true
+	}
+	return nil, true
 }
 
 // Tokens one slot holds, the trained length per slot until llama.cpp's own context is recorded

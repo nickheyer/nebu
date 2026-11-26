@@ -440,6 +440,9 @@ func (anthropic) Render(c *Request) (string, []byte, error) {
 	if err := translatable(c); err != nil {
 		return "", nil, err
 	}
+	if err := noAudio(c, "the anthropic protocol"); err != nil {
+		return "", nil, err
+	}
 	if c.Kind == Embed {
 		return "", nil, bad("the anthropic protocol has no embeddings endpoint")
 	}

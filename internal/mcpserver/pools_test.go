@@ -37,6 +37,7 @@ type noInstances struct{}
 func (noInstances) ToolSupport(string) v1.ToolSupport { return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED }
 func (noInstances) StripsBillingHeader(string) bool   { return true }
 func (noInstances) Modes(string) []string             { return nil }
+func (noInstances) Audio(string) ([]string, bool)     { return nil, true }
 func (noInstances) Efforts(string) ([]string, map[string]string, string) {
 	return nil, nil, ""
 }

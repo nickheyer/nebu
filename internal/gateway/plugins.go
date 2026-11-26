@@ -276,7 +276,7 @@ func (*toolsPlanner) TypedName() framework.TypedName {
 
 func (t *toolsPlanner) PreRequestBody(ctx context.Context, in *requestcontrol.Inbound, _ *framework.Request) (bodyparse.Document, error) {
 	x := exchangeOf(ctx)
-	if x.forwarding() || x.kind == chat.Image || x.kind == chat.Video {
+	if x.forwarding() || x.kind.Media() {
 		return nil, nil
 	}
 	asked := x.modes.system != "" || in.Headers.Get(ToolsHeader) != ""

@@ -127,6 +127,9 @@ func (ollama) Render(c *Request) (string, []byte, error) {
 	if err := translatable(c); err != nil {
 		return "", nil, err
 	}
+	if err := noAudio(c, "the ollama protocol"); err != nil {
+		return "", nil, err
+	}
 	if c.Kind == Count {
 		return "", nil, bad("the ollama protocol has no token count endpoint")
 	}

@@ -8,6 +8,7 @@
 	import type { TraceToolCall } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import type { ChatSession, PendingCall } from '#lib/pages/chat/chat.svelte.js';
 	import TurnAction from '#lib/pages/chat/TurnAction.svelte';
+	import { voice } from '#lib/pages/chat/voice.svelte.js';
 	import CopyButton from '#lib/ui/CopyButton.svelte';
 	import KeyRows, { type KeyRow } from '#lib/ui/KeyRows.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -21,6 +22,8 @@
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import SparkleIcon from 'phosphor-svelte/lib/SparkleIcon';
+	import SpeakerHighIcon from 'phosphor-svelte/lib/SpeakerHighIcon';
+	import StopIcon from 'phosphor-svelte/lib/StopIcon';
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 
 	// One message of the thread, what the person typed pressed into the surface and what the model wrote raised from it, with the ways to change it under it
@@ -79,6 +82,8 @@
 	const reading = $derived(tps !== undefined ? tokensPerSecond(tps) : turn.completionTokens ? plural(turn.completionTokens, 'token') : '');
 	const initial = $derived((name.trim()[0] ?? '?').toUpperCase());
 	const editable = $derived(onedit !== undefined && turn.media.length === 0);
+	const aloud = $derived(turn.role === 'assistant' && turn.text !== '' && voice.can);
+	const speaking = $derived(aloud && voice.playing === turn.id);
 	// Messages asking again from this one removes beyond the one answer it writes anew
 	const beyond = $derived(Math.max(0, user ? later - 1 : later));
 
@@ -142,15 +147,18 @@
 		<Row gap={8} justify={user ? 'flex-end' : 'flex-start'}>
 			{#each turn.images as f, i (i)}
 				{@const url = session.fileUrl(f)}
-				{#if url}
+				{@const audio = f.mediaType.startsWith('audio/')}
+				{#if url && audio}
+					<audio class="clip" src={url} controls title={f.name}></audio>
+				{:else if url}
 					<img class="thumb" src={url} alt={f.name} />
 				{:else}
-					<NeoSkeletonText lines={1} width="160px" height="160px" />
+					<NeoSkeletonText lines={1} width={audio ? '280px' : '160px'} height={audio ? '40px' : '160px'} />
 				{/if}
 			{/each}
 		</Row>
 	{/if}
-	<div class="body" class:editing>
+	<div class="body" class:editing class:bare={user && !editing && !turn.text && !turn.error}>
 		{#if !user}<span class="lamp" aria-hidden="true"></span>{/if}
 		{#if editing}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -177,9 +185,11 @@
 						{#if f.error}
 							<Str value={f.error} kind="message" color="error" />
 						{:else if !url}
-							<NeoSkeletonText lines={1} width="256px" height="256px" />
+							<NeoSkeletonText lines={1} width={f.mediaType.startsWith('audio/') ? '280px' : '256px'} height={f.mediaType.startsWith('audio/') ? '40px' : '256px'} />
 						{:else if f.mediaType.startsWith('video/')}
 							<video class="video" src={url} controls><track kind="captions" /></video>
+						{:else if f.mediaType.startsWith('audio/')}
+							<audio class="clip" src={url} controls title={f.name}></audio>
 						{:else}
 							<img class="made" src={url} alt={f.name} />
 						{/if}
@@ -229,6 +239,7 @@
 	{#if !streaming && !editing && (onedit || onretry || ondelete)}
 		<footer class="acts">
 			{#if turn.text}<CopyButton text={turn.text} label="Copy the text" />{/if}
+			{#if aloud}<TurnAction label={speaking ? 'Stop reading aloud' : 'Read aloud'} icon={speaking ? StopIcon : SpeakerHighIcon} onact={() => voice.toggle(turn)} />{/if}
 			{#if editable}<TurnAction label="Edit" icon={PencilSimpleIcon} onact={startEdit} />{/if}
 			{#if onretry}
 				<TurnAction
@@ -310,6 +321,9 @@
 		max-width: min(100%, 38rem);
 		padding: 10px 16px;
 		box-shadow: var(--neo-box-shadow-inset-2);
+	}
+	.user .body.bare {
+		display: none;
 	}
 	.user .body.editing {
 		width: 100%;
@@ -454,6 +468,10 @@
 	.video {
 		max-width: min(100%, 512px);
 		border-radius: var(--neo-border-radius);
+	}
+	.clip {
+		width: min(100%, 320px);
+		height: 40px;
 	}
 	.lines {
 		white-space: pre-wrap;

@@ -757,7 +757,7 @@ func TestMultipartParsedOnce(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, chat.OpenAIEdits, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	body, _ := io.ReadAll(req.Body)
-	f, err := parseForm(req, body)
+	f, err := parseForm(req.Header.Get("Content-Type"), body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,7 +790,7 @@ func FuzzParseForm(f *testing.F) {
 	f.Fuzz(func(t *testing.T, boundary string, body []byte) {
 		req := httptest.NewRequest(http.MethodPost, chat.OpenAIEdits, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
-		got, err := parseForm(req, body)
+		got, err := parseForm(req.Header.Get("Content-Type"), body)
 		ref := httptest.NewRequest(http.MethodPost, chat.OpenAIEdits, bytes.NewReader(body))
 		ref.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 		refErr := ref.ParseMultipartForm(int64(maxBody))

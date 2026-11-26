@@ -315,12 +315,14 @@ func (m *oaiMessage) appendTo(b *[]byte) {
 	o.close(m.Extra)
 }
 
-// A content part, text or an image URL with its detail
+// A content part, text, an image URL with its detail, or audio
 type oaiPart struct {
 	Type   string
 	Text   string
 	URL    string
 	Detail string
+	Data   string
+	Format string
 	Extra  map[string]json.RawMessage
 }
 
@@ -349,6 +351,21 @@ func (p *oaiPart) read(s *scan) error {
 				}
 				return err
 			})
+		case "input_audio":
+			err = s.object(func(k []byte) error {
+				var err error
+				switch string(k) {
+				case "data":
+					p.Data, err = s.str()
+				case "format":
+					p.Format, err = s.str()
+				case "url":
+					p.URL, err = s.str()
+				default:
+					err = s.skip()
+				}
+				return err
+			})
 		default:
 			err = s.extra(&p.Extra, k)
 		}
@@ -369,6 +386,13 @@ func (p *oaiPart) appendTo(b *[]byte) {
 		img.str("url", p.URL)
 		img.strIf("detail", p.Detail)
 		img.close(nil)
+	case "input_audio":
+		o.key("input_audio")
+		audio := begin(b)
+		audio.strIf("data", p.Data)
+		audio.strIf("format", p.Format)
+		audio.strIf("url", p.URL)
+		audio.close(nil)
 	}
 	o.close(p.Extra)
 }

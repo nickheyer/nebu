@@ -36,14 +36,22 @@ func (g *Gateway) routePool(rt *v1.Route) (datalayer.Pool, bool) {
 	return datalayer.Pool{}, false
 }
 
-// What a route serves, images and video for media pools by their instances' modes, a pooled output alone for those launches, chat otherwise
+// What a route serves, images and video for media pools by their instances' modes, a pooled output alone for those launches, chat otherwise with the audio endpoints its instances serve
 func (g *Gateway) capabilities(rt *v1.Route) []string {
 	pool, ok := g.routePool(rt)
 	if !ok || g.runtimes.API(pool.Runtime) != v1.ApiFlavor_API_FLAVOR_SDCPP {
 		if only := poolingOnly(rt.GetStatus().GetInventory()); only != "" {
 			return []string{only}
 		}
-		return []string{"completion", "tools"}
+		var audio []string
+		chats := true
+		if ok {
+			audio, chats = g.audio(pool)
+		}
+		if chats {
+			return append([]string{"completion", "tools"}, audio...)
+		}
+		return audio
 	}
 	out := []string{}
 	for _, ep := range g.store.Endpoints(pool.ID, nil) {
@@ -56,6 +64,21 @@ func (g *Gateway) capabilities(rt *v1.Route) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+func (g *Gateway) audio(pool datalayer.Pool) ([]string, bool) {
+	out, chats := []string{}, true
+	for _, ep := range g.store.Endpoints(pool.ID, nil) {
+		caps, ok := g.instances.Audio(ep.Labels()[datalayer.LabelInstance])
+		chats = chats && ok
+		for _, c := range caps {
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, chats
 }
 
 // Reasoning notes: https://openrouter.ai/docs/api/api-reference/models/get-models

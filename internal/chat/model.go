@@ -21,7 +21,17 @@ const (
 	Count
 	Image
 	Video
+	Speech
+	Transcription
 )
+
+func (k Kind) Media() bool {
+	switch k {
+	case Image, Video, Speech, Transcription:
+		return true
+	}
+	return false
+}
 
 // Stop reasons as a result carries them
 const (

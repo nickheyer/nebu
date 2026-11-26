@@ -28,6 +28,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/health"
 	"github.com/nickheyer/nebu/pkg/metrics"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/stub"
 	"github.com/nickheyer/nebu/pkg/telemetry"
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,6 +66,7 @@ type fakeInstances struct {
 	keepBilling map[string]bool
 	// The reasoning effort levels of each instance, instances absent here taking none
 	efforts map[string]fakeEfforts
+	vllm    map[string]map[string]string
 }
 
 // The reasoning effort levels of a model, lowest first, the provider's word on some, and its default
@@ -116,6 +118,12 @@ func (f *fakeInstances) Modes(id string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.modes[id]
+}
+
+func (f *fakeInstances) Audio(id string) ([]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return runtimes.VLLM{}.Audio(f.vllm[id], nil)
 }
 
 func (f *fakeInstances) Template(id string) (*chattemplate.Template, error) {

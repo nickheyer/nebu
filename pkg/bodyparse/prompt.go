@@ -22,6 +22,9 @@ func (d *document) promptText() string {
 		d.writeLines(&sb, "prompt")
 	case KindEmbeddings:
 		d.writeLines(&sb, "input")
+	case KindSpeech:
+		d.writeText(&sb, "instructions")
+		d.writeText(&sb, "input")
 	case KindUnknown:
 		d.writeText(&sb, "system")
 		d.writeText(&sb, "instructions")

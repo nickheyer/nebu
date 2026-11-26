@@ -10,6 +10,7 @@ export type ChatMessage = {
 	text: string;
 	// Data URLs of images attached to a user turn
 	images?: string[];
+	audio?: string[];
 	toolCalls?: { id: string; name: string; arguments: string }[];
 	toolCallId?: string;
 };
@@ -128,8 +129,21 @@ function dataUrlParts(url: string): { mediaType: string; data: string } {
 	return { mediaType: m?.[1] ?? 'image/png', data: m?.[2] ?? '' };
 }
 
+export function audioFormat(mediaType: string): 'wav' | 'mp3' | undefined {
+	const t = mediaType.toLowerCase().split(';')[0]?.trim() ?? '';
+	if (t === 'audio/mpeg' || t === 'audio/mp3') return 'mp3';
+	if (/^audio\/(x-)?wave?$|^audio\/vnd\.wave$/.test(t)) return 'wav';
+	return undefined;
+}
+
+function inputAudio(url: string): { type: 'input_audio'; input_audio: { data: string; format: 'wav' | 'mp3' } } {
+	const { mediaType, data } = dataUrlParts(url);
+	return { type: 'input_audio', input_audio: { data, format: audioFormat(mediaType) ?? 'wav' } };
+}
+
 // The request body one dialect takes for the conversation so far
 function body(p: ChatParams, messages: ChatMessage[]): { path: string; body: Record<string, unknown> } {
+	if (p.dialect !== 'openai' && messages.some((m) => m.audio?.length)) throw new GatewayError(400, `The ${p.dialect === 'anthropic' ? 'Anthropic' : 'Ollama'} API carries no audio, only the OpenAI API does`);
 	switch (p.dialect) {
 		case 'anthropic': {
 			const msgs = messages
@@ -142,7 +156,7 @@ function body(p: ChatParams, messages: ChatMessage[]): { path: string; body: Rec
 						return { role: 'assistant', content };
 					}
 					if (m.images?.length) {
-						return { role: m.role, content: [...m.images.map((u) => ({ type: 'image', source: { type: 'base64', ...dataUrlParts(u) } })), { type: 'text', text: m.text }] };
+						return { role: m.role, content: [...m.images.map((u) => ({ type: 'image', source: { type: 'base64', ...dataUrlParts(u) } })), ...(m.text ? [{ type: 'text', text: m.text }] : [])] };
 					}
 					return { role: m.role, content: m.text };
 				});
@@ -180,7 +194,7 @@ function body(p: ChatParams, messages: ChatMessage[]): { path: string; body: Rec
 			const msgs = [...(p.system ? [{ role: 'system', content: p.system }] : []), ...messages.map((m) => {
 				if (m.role === 'tool') return { role: 'tool', tool_call_id: m.toolCallId, content: m.text };
 				if (m.role === 'assistant' && m.toolCalls?.length) return { role: 'assistant', content: m.text || null, tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })) };
-				if (m.images?.length) return { role: m.role, content: [{ type: 'text', text: m.text }, ...m.images.map((u) => ({ type: 'image_url', image_url: { url: u } }))] };
+				if (m.images?.length || m.audio?.length) return { role: m.role, content: [...(m.text ? [{ type: 'text', text: m.text }] : []), ...(m.images ?? []).map((u) => ({ type: 'image_url', image_url: { url: u } })), ...(m.audio ?? []).map(inputAudio)] };
 				return { role: m.role, content: m.text };
 			})];
 			return {
@@ -439,4 +453,27 @@ export async function videoContent(id: string, signal: AbortSignal): Promise<Blo
 	const res = await fetch(`/v1/videos/${encodeURIComponent(id)}/content`, { signal, credentials: 'same-origin' });
 	if (!res.ok) throw await failure(res);
 	return res.blob();
+}
+
+export type SpeechRequest = { model: string; input: string; voice?: string };
+
+export async function speech(req: SpeechRequest, signal?: AbortSignal): Promise<Blob> {
+	const res = await fetch('/v1/audio/speech', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ model: req.model, input: req.input, voice: req.voice || undefined, response_format: 'mp3' }),
+		signal,
+		credentials: 'same-origin'
+	});
+	if (!res.ok) throw await failure(res);
+	return res.blob();
+}
+
+export async function transcribe(model: string, audio: Blob, name: string, signal?: AbortSignal): Promise<string> {
+	const form = new FormData();
+	form.append('file', audio, name);
+	form.append('model', model);
+	const res = await fetch('/v1/audio/transcriptions', { method: 'POST', body: form, signal, credentials: 'same-origin' });
+	if (!res.ok) throw await failure(res);
+	return ((await res.json()) as { text?: string }).text?.trim() ?? '';
 }

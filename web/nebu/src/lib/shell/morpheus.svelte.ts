@@ -44,6 +44,8 @@ const asks: Record<string, string[]> = {
 	'/runtimes/[[id]]/[[tab]]': ['Install the right build for this host']
 };
 
+export const span = { min: 320, base: 400, page: 640 };
+
 // The tools /mcp lists and what it tells its clients at initialize
 let tools = $state<McpTool[]>([]);
 let instructions = $state('');
@@ -277,6 +279,12 @@ export const morpheus = {
 	},
 	set open(on: boolean) {
 		prefs.morpheusOpen = on;
+	},
+	get width(): number {
+		return prefs.morpheusWidth || span.base;
+	},
+	set width(px: number) {
+		prefs.morpheusWidth = Math.round(px);
 	},
 	get text(): string {
 		return text;

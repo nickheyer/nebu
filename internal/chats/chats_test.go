@@ -66,7 +66,48 @@ func TestFilesLiveInTheContentStore(t *testing.T) {
 		t.Fatalf("the last image takes the blob with it: %v", err)
 	}
 	if _, err := m.PutFile(ctx, owner, &v1.ChatFile{Id: "doc", MediaType: "text/plain"}, png); err == nil {
-		t.Fatal("only images and video are stored")
+		t.Fatal("only images, video and audio are stored")
+	}
+}
+
+func TestAudioIsStoredAndTitlesAnAttachmentOnlyTurn(t *testing.T) {
+	m := manager(t)
+	ctx := context.Background()
+	owner := db.ChatOwner{Provider: "local", Subject: "ann"}
+	wav := append([]byte("RIFF....WAVE"), bytes.Repeat([]byte{1}, 64)...)
+	saved, err := m.PutFile(ctx, owner, &v1.ChatFile{Id: "clip1", MediaType: "audio/wav", Name: "Recording 0:03.wav"}, wav)
+	if err != nil || saved.GetMediaType() != "audio/wav" || saved.GetSizeBytes() != uint64(len(wav)) {
+		t.Fatalf("put %v %v", saved, err)
+	}
+	if f, data, err := m.GetFile(ctx, owner, "clip1"); err != nil || !bytes.Equal(data, wav) || f.GetMediaType() != "audio/wav" {
+		t.Fatalf("get %v %d bytes %v", f, len(data), err)
+	}
+	if _, err := m.PutFile(ctx, owner, &v1.ChatFile{Id: "doc", MediaType: "audiofile"}, wav); err == nil {
+		t.Fatal("a media type without a kind is refused")
+	}
+	clip := &v1.ChatFile{Id: "clip1", MediaType: "audio/wav"}
+	img := &v1.ChatFile{Id: "img1", MediaType: "image/png"}
+	for _, c := range []struct {
+		files []*v1.ChatFile
+		want  string
+	}{
+		{nil, "Image"},
+		{[]*v1.ChatFile{img}, "Image"},
+		{[]*v1.ChatFile{img, img}, "2 images"},
+		{[]*v1.ChatFile{clip}, "Audio"},
+		{[]*v1.ChatFile{clip, clip}, "2 audio clips"},
+		{[]*v1.ChatFile{img, clip}, "2 attachments"},
+	} {
+		if got := Title([]*v1.ChatTurn{{Role: "user", Images: c.files}}); got != c.want {
+			t.Errorf("title of %d files is %q, want %q", len(c.files), got, c.want)
+		}
+	}
+	c, err := m.Put(ctx, owner, &v1.Conversation{Id: "voice", Turns: []*v1.ChatTurn{{Role: "user", Images: []*v1.ChatFile{clip}}, {Role: "assistant", Text: "heard"}}})
+	if err != nil || c.GetTitle() != "Audio" {
+		t.Fatalf("put %v %v", c, err)
+	}
+	if ids := FileIDs(c); len(ids) != 1 || ids[0] != "clip1" {
+		t.Fatalf("the clip is one of the conversation's files: %v", ids)
 	}
 }
 

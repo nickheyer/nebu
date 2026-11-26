@@ -21,6 +21,8 @@ const (
 	KindAnthropicMessages
 	KindOllamaChat
 	KindOllamaGenerate
+	KindSpeech
+	KindTranscription
 )
 
 // Names a typed value derived from a body once and shared by every stage that reads it

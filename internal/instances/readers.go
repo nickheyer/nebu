@@ -37,6 +37,19 @@ func (m *Manager) Modes(id string) []string {
 	return in.modesOf()
 }
 
+func (m *Manager) Audio(id string) ([]string, bool) {
+	in, err := m.find(id)
+	if err != nil {
+		return nil, true
+	}
+	a, ok := in.rt.(runtimes.AudioServer)
+	if !ok {
+		return nil, true
+	}
+	rec := in.snapshot()
+	return a.Audio(rec.GetParams(), rec.GetInventory())
+}
+
 // Reasoning effort levels
 func (m *Manager) Efforts(id string) (levels []string, about map[string]string, standard string) {
 	in, err := m.find(id)

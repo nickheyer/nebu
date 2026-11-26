@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { shortId } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
+	import { browserVoice, defaultVoice, voice } from '#lib/pages/chat/voice.svelte.js';
 	import type { ChatSettings } from '#lib/proto/nebu/v1/chat_pb.js';
 	import { ToolServerState, type ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
@@ -52,6 +53,16 @@
 		for (const ref of settings.toolServers) if (!options.some((o) => o.value === ref)) options.push({ value: ref, label: ref, description: 'missing' });
 		return options;
 	});
+
+	const sourceOptions = $derived.by((): Option<string>[] => {
+		const routes = voice.routes ?? [];
+		const options = routes.map((r): Option<string> => ({ value: r, label: r, description: 'Speech route' }));
+		if (voice.source && voice.source !== browserVoice && !routes.includes(voice.source)) options.push({ value: voice.source, label: voice.source, description: 'not running' });
+		options.push({ value: browserVoice, label: 'Browser voice', description: "This device's own voices" });
+		return options;
+	});
+
+	const voiceOptions = $derived(voice.voices.map((v): Option<string> => ({ value: v.voiceURI, label: v.name, description: v.lang })));
 </script>
 
 <div class="sections">
@@ -83,8 +94,17 @@
 			{/if}
 		</FormSection>
 	{/if}
+	<FormSection title="Voice" info="How answers are read aloud, kept by this browser for every conversation">
+		<Select value={voice.chosen} options={sourceOptions} label="Reads aloud with" onchange={(v) => v && (voice.source = v)} />
+		{#if voice.chosen === browserVoice}
+			<Select bind:value={() => voice.browser || undefined, (v) => (voice.browser = v ?? '')} options={voiceOptions} label="Voice" unset="the device's default" message={voiceOptions.length ? undefined : 'This browser lists no voices'} search clearable />
+		{:else}
+			<Text bind:value={voice.voice} label="Voice" info="The voice the speech route speaks in, by its OpenAI style name" unset={defaultVoice} max={64} />
+		{/if}
+		<Switch bind:checked={voice.auto} label="Read each answer aloud when it ends" />
+	</FormSection>
 	<FormSection title="Request">
-		<Select bind:value={settings.dialect} options={apis} label="API" info="The wire format the request is sent in" />
+		<Select bind:value={settings.dialect} options={apis} label="API" info="The wire format the request is sent in. A conversation carrying audio goes over OpenAI, the only one of the three that carries it" />
 		<Switch bind:checked={settings.stream} label="Stream the answer as it is written" />
 	</FormSection>
 </div>
